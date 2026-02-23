@@ -82,4 +82,4 @@ lib/
 
 ## License
 
-This project is provided as-is for educational and entertainment purposes.
+This project is licensed under the [MIT License](LICENSE).
