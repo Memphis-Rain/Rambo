@@ -25,9 +25,9 @@ const pixiSpritePool = {
   envObjects: new Map(), // Map for persistent env objects
 };
 
-// ParticleContainer for high-performance bullet/particle rendering
-let bulletParticleContainer = null;
-let particleContainer = null;
+// Tracking arrays for frame-temporary sprites (bullets/particles added directly to worldContainer for depth sorting)
+let _frameBulletSprites = [];
+let _frameParticleSprites = [];
 
 // Container for temporary text objects (boss names, damage numbers)
 let textContainer = null;
@@ -36,20 +36,13 @@ let textContainer = null;
  * Initialize PixiJS sprite pools and containers
  */
 function initPixiSprites() {
-  // Use regular Container for bullets (ParticleContainer has API restrictions in PixiJS v8)
-  bulletParticleContainer = new PIXI.Container();
-  bulletParticleContainer.zIndex = 500;
-  worldContainer.addChild(bulletParticleContainer);
-
-  // Use regular Container for particles
-  particleContainer = new PIXI.Container();
-  particleContainer.zIndex = 600;
-  worldContainer.addChild(particleContainer);
-
   // Container for temporary text objects (cleared each frame)
   textContainer = new PIXI.Container();
   textContainer.zIndex = 900; // Render above everything else
   worldContainer.addChild(textContainer);
+
+  // Bullets and particles are added directly to worldContainer with depth-based zIndex
+  // so they correctly render behind/in front of 3D trees and other env objects
 
   console.log('[PIXI-SPRITES] Sprite pools and containers initialized');
 }
@@ -133,9 +126,13 @@ function renderPixiSprites() {
  * Clear sprite pools from previous frame
  */
 function clearSpritePool() {
-  // Remove all children from bullet/particle containers (now regular containers)
-  bulletParticleContainer.removeChildren();
-  particleContainer.removeChildren();
+  // Remove frame-temporary bullet sprites from worldContainer
+  for (const s of _frameBulletSprites) worldContainer.removeChild(s);
+  _frameBulletSprites.length = 0;
+
+  // Remove frame-temporary particle sprites from worldContainer
+  for (const s of _frameParticleSprites) worldContainer.removeChild(s);
+  _frameParticleSprites.length = 0;
 
   // Remove all text objects (boss names, damage numbers) - they're recreated each frame
   textContainer.removeChildren();
@@ -945,7 +942,7 @@ function renderPixiShells() {
     graphics.x = screenX;
     graphics.y = screenY;
     graphics.rotation = s.rotation;
-    graphics.zIndex = 400;
+    graphics.zIndex = depthKey(s.x, s.y);
 
     graphics.beginFill(0xddaa44);
     graphics.drawRect(-s.size, -s.size * 0.4, s.size * 2, s.size * 0.8);
@@ -986,10 +983,12 @@ function renderPixiBullets() {
     const bulletColor = cssColorToHex(b.color);
     sprite.tint = bulletColor;
 
-    // ParticleContainer uses addChild, not addParticle
-    bulletParticleContainer.addChild(sprite);
+    // Add bullet sprite directly to worldContainer with depth-based zIndex
+    sprite.zIndex = depthKey(b.x, b.y);
+    worldContainer.addChild(sprite);
+    _frameBulletSprites.push(sprite);
 
-    // Bullet trail (add to effects container with glow)
+    // Bullet trail (depth-sorted with bullet position)
     if (b.glow || b.beam) {
       const tailX = b.x - b.vx * 0.02;
       const tailY = b.y - b.vy * 0.02;
@@ -999,12 +998,11 @@ function renderPixiBullets() {
 
       const trailGraphics = getPooledGraphics('enemies');
       trailGraphics.alpha = 0.6;
-      trailGraphics.zIndex = 450;
+      trailGraphics.zIndex = depthKey(b.x, b.y);
       trailGraphics.lineStyle(b.beam ? b.size * 1.2 : b.size * 0.7, bulletColor);
       trailGraphics.moveTo(tScreenX, tScreenY);
       trailGraphics.lineTo(screenX, screenY);
       trailGraphics.alpha = 1;
-      // Note: Already in worldContainer from getPooledGraphics, don't move to effectsContainer
     }
   }
 }
@@ -1060,8 +1058,10 @@ function renderPixiParticles() {
       sprite.scale.set(p.size * lifeRatio / 4);
     }
 
-    // ParticleContainer uses addChild, not addParticle
-    particleContainer.addChild(sprite);
+    // Add particle sprite directly to worldContainer with depth-based zIndex
+    sprite.zIndex = depthKey(p.x, p.y);
+    worldContainer.addChild(sprite);
+    _frameParticleSprites.push(sprite);
   }
 }
 
