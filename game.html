@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>RAMBO: Endless Assault</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;overflow:hidden;cursor:crosshair;user-select:none;-webkit-user-select:none}
+canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh;image-rendering:auto;transform:translateZ(0);will-change:transform}
+#ui{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10}
+#start-screen{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,0.85);z-index:100;pointer-events:all}
+#start-screen h1{font-family:'Impact',sans-serif;font-size:72px;color:#e22;text-shadow:0 0 30px #f00,0 0 60px #a00,3px 3px 0 #000;letter-spacing:8px;margin-bottom:10px}
+#start-screen h2{font-family:'Arial',sans-serif;font-size:22px;color:#fa0;text-shadow:0 0 10px #f80;margin-bottom:40px;letter-spacing:4px}
+#start-screen .controls{color:#aaa;font-family:'Courier New',monospace;font-size:14px;line-height:2;text-align:center;margin-bottom:30px}
+#start-screen .controls span{color:#ff0}
+#start-btn{font-family:'Impact',sans-serif;font-size:28px;padding:15px 60px;background:linear-gradient(180deg,#c22,#800);color:#fff;border:2px solid #f44;cursor:pointer;letter-spacing:4px;text-shadow:1px 1px 2px #000;pointer-events:all;transition:all 0.2s}
+#start-btn:hover{background:linear-gradient(180deg,#e44,#a22);transform:scale(1.05);box-shadow:0 0 30px rgba(255,0,0,0.5)}
+.notification{position:absolute;top:30%;left:50%;transform:translateX(-50%);font-family:'Impact',sans-serif;font-size:36px;color:#ff0;text-shadow:0 0 20px #fa0,2px 2px 0 #000;opacity:0;transition:opacity 0.3s;pointer-events:none;white-space:nowrap}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="ui">
+  <div class="notification" id="notif"></div>
+</div>
+<div id="start-screen">
+  <h1>RAMBO</h1>
+  <h2>ENDLESS ASSAULT</h2>
+  <div class="controls">
+    <span>WASD</span> - Move &nbsp;|&nbsp; <span>MOUSE</span> - Aim &nbsp;|&nbsp; <span>LEFT CLICK</span> - Shoot<br>
+    <span>RIGHT CLICK</span> - Shockwave &nbsp;|&nbsp; <span>R</span> - Reload &nbsp;|&nbsp; <span>SPACE</span> - Dodge Roll<br>
+    <span>1-0</span> - Switch Weapon &nbsp;|&nbsp; <span>Q/E</span> - Prev/Next &nbsp;|&nbsp; <span>SHIFT</span> - Sprint<br>
+    <span>SHIELD</span> - Auto-recharges &nbsp;|&nbsp; <span>SHOCKWAVE</span> - Charges on kills
+  </div>
+  <button id="start-btn" onclick="startGame()">START MISSION</button>
+</div>
+
+<!-- PixiJS v8 - WebGL Rendering Engine (local) -->
+<script src="lib/pixi.min.js"></script>
+
+<!-- Game Engine Modules -->
+<script src="js/config.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/state.js"></script>
+<script src="js/particles.js"></script>
+<script src="js/world.js"></script>
+<script src="js/combat.js"></script>
+
+<!-- PixiJS Rendering Modules (replaces renderer.js) -->
+<script src="js/pixi-terrain.js"></script>
+<script src="js/procedural-tree3d.js"></script>
+<script src="js/pixi-sprites.js"></script>
+<script src="js/pixi-hud.js"></script>
+
+<script src="js/main.js"></script>
+</body>
+</html>
