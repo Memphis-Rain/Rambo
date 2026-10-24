@@ -84,6 +84,7 @@ const hudElements = {
   minimap: null,
   minimapGraphics: null,
   crosshair: null,
+  reticle: null,         // M10 C3: pad aim reticle (drawn on state change, moved)
   debugOverlay: null,
   fpsText: null,
   bossNameText: null,
@@ -114,7 +115,7 @@ const _hudCache = {
   statsKey: new Float64Array(6),
   bossKey: new Float64Array(6),
   grenadeKey: new Float64Array(4),
-  crossColor: -1
+  crossColor: -1, reticleState: -1
 };
 
 // Store v in key[i]; returns 1 when it changed (use with | so all run)
@@ -210,6 +211,9 @@ function initPixiHUD() {
   hudElements.grenadeBar = new PIXI.Graphics();
   hudElements.minimapGraphics.zIndex = 2000;
   hudElements.crosshair.zIndex = 8500; // above panels and minimap, below pause
+  hudElements.reticle = new PIXI.Graphics();
+  hudElements.reticle.zIndex = 8500;
+  hudElements.reticle.visible = false;
 
   // Bottom-left panel
   hudElements.weaponText = hudText(16, 0xffdd44);
@@ -278,6 +282,7 @@ function initPixiHUD() {
   uiContainer.addChild(hudElements.grenadeKeyText);
   uiContainer.addChild(hudElements.minimapGraphics);
   uiContainer.addChild(hudElements.crosshair);
+  uiContainer.addChild(hudElements.reticle);
   uiContainer.addChild(hudElements.weaponText);
   uiContainer.addChild(hudElements.ammoText);
   uiContainer.addChild(hudElements.scoreText);
@@ -963,11 +968,18 @@ function renderPixiMinimap() {
 }
 
 /**
- * Render crosshair: a pixel cross drawn once around (0,0), moved to the mouse
+ * Render crosshair: a pixel cross drawn once around (0,0), moved to the mouse.
+ * While pad-aiming (M10 C3) the pad reticle replaces it: mouseX/Y is then the
+ * shot's screen target, which the aim assist may have moved onto an enemy.
  */
 function renderPixiCrosshair() {
-  const g = hudElements.crosshair;
+  const padAiming = hudPadAiming();
+  hudElements.crosshair.visible = !padAiming;
+  hudElements.reticle.visible = padAiming;
   const spReady = player && player.specialCharge >= CFG.SPECIAL_MAX_CHARGE;
+  if (padAiming) { renderPadReticle(spReady); return; }
+
+  const g = hudElements.crosshair;
   const color = spReady ? 0xffff00 : 0xffffff;
   if (_hudCache.crossColor !== color) {
     _hudCache.crossColor = color;
@@ -986,6 +998,56 @@ function renderPixiCrosshair() {
   // Exactly at the mouse (the arms are centred on the point)
   g.x = mouseX;
   g.y = mouseY;
+}
+
+// M10 C3: the pad reticle shows while the pad aims a running game (not the demo)
+function hudPadAiming() {
+  return typeof inputDevice !== 'undefined' && inputDevice === 'pad' &&
+    typeof padAim !== 'undefined' && gameStarted && !(typeof demoActive !== 'undefined' && demoActive);
+}
+
+// Pad reticle: four pixel corner brackets + centre dot around (0,0), redrawn
+// only when its state changes (0 white, 1 shockwave ready, 2 assist lock);
+// the lock pulls the brackets in and adds inner ticks.
+const HUD_RETICLE_COLORS = [0xffffff, 0xffff00, 0xff4030];
+const HUD_RETICLE_OUTLINE = { color: 0x000000, alpha: 0.7 };
+const HUD_RETICLE_FILL = [
+  { color: HUD_RETICLE_COLORS[0], alpha: 0.95 },
+  { color: HUD_RETICLE_COLORS[1], alpha: 0.95 },
+  { color: HUD_RETICLE_COLORS[2], alpha: 0.95 },
+];
+function renderPadReticle(spReady) {
+  const g = hudElements.reticle;
+  const locked = CFG.PAD_AIM_ASSIST && player && typeof padAssistTarget === 'function' &&
+    padAssistTarget(player.x, player.y, padAim.dirX, padAim.dirY, CFG.PAD_ASSIST_RANGE, CFG.PAD_ASSIST_DEG) !== null;
+  const state = locked ? 2 : spReady ? 1 : 0;
+  if (_hudCache.reticleState !== state) {
+    _hudCache.reticleState = state;
+    g.clear();
+    const r = locked ? 10 : 14, L = 6; // half-size of the bracket box, arm length
+    for (let pass = 0; pass < 2; pass++) {
+      const o = pass === 0 ? 1 : 0, o2 = 2 * o;
+      for (let sx = -1; sx <= 1; sx += 2) {
+        for (let sy = -1; sy <= 1; sy += 2) {
+          const cx = sx < 0 ? -r : r - 2, cy = sy < 0 ? -r : r - 2;   // 2x2 corner pixel
+          const hx = sx < 0 ? cx : cx - L + 2, vy = sy < 0 ? cy : cy - L + 2;
+          g.rect(hx - o, cy - o, L + o2, 2 + o2)   // horizontal arm
+            .rect(cx - o, vy - o, 2 + o2, L + o2); // vertical arm
+        }
+      }
+      g.rect(-1 - o, -1 - o, 2 + o2, 2 + o2);      // centre dot
+      if (locked) {                                // inner ticks
+        g.rect(-6 - o, -1 - o, 3 + o2, 2 + o2).rect(3 - o, -1 - o, 3 + o2, 2 + o2)
+          .rect(-1 - o, -6 - o, 2 + o2, 3 + o2).rect(-1 - o, 3 - o, 2 + o2, 3 + o2);
+      }
+      g.fill(pass === 0 ? HUD_RETICLE_OUTLINE : HUD_RETICLE_FILL[state]);
+    }
+  }
+  // At the aim point (world -> screen with this frame's camera offset)
+  const ox = worldOffsetX !== null ? worldOffsetX : W / 2 - cam.x;
+  const oy = worldOffsetY !== null ? worldOffsetY : H / 2 - cam.y;
+  g.x = Math.round((padAim.x - padAim.y) + ox);
+  g.y = Math.round((padAim.x + padAim.y) * CFG.ISO_SCALE + oy);
 }
 
 /**
@@ -1036,59 +1098,78 @@ function drawEdgeVignette(g, color, strength) {
 }
 
 /**
- * Pause overlay - shown when game is paused with P key
+ * Pause overlay - shown when game is paused with P key / Start (M10), or
+ * auto-paused by a pad disconnect (C6). Called on every pause / resume, so
+ * the texts are re-evaluated on each call (and only re-set on change).
  */
 function renderPauseOverlay() {
-  if (!renderPauseOverlay._bg) {
-    renderPauseOverlay._bg = new PIXI.Graphics();
-    renderPauseOverlay._bg.zIndex = 9000;
-    uiContainer.addChild(renderPauseOverlay._bg);
+  const o = renderPauseOverlay;
+  if (!o._bg) {
+    o._bg = new PIXI.Graphics();
+    o._bg.zIndex = 9000;
+    uiContainer.addChild(o._bg);
 
     const title = hudText(48, 0xffe040);
     title.text = 'PAUSED';
+    const dcTitle = hudText(24, 0xff5040); // C6: 'CONTROLLER DISCONNECTED' won't fit at 48 px
+    dcTitle.text = 'CONTROLLER DISCONNECTED';
     const hint = hudText(16, 0xffffff);
     hint.text = 'PRESS P TO RESUME';
     const keys = hudText(8, HUD_PAL.label);
     keys.text = 'F6 PIXEL   F7 DITHER   F8 CRT';
-    for (const t of [title, hint, keys]) {
+    for (const t of [title, dcTitle, hint, keys]) {
       t.anchor.set(0.5, 0);
       t.zIndex = 9001;
       uiContainer.addChild(t);
     }
-    renderPauseOverlay._title = title;
-    renderPauseOverlay._hint = hint;
-    renderPauseOverlay._keys = keys;
-    renderPauseOverlay._w = -1;
-    renderPauseOverlay._h = -1;
+    o._title = title;
+    o._dcTitle = dcTitle;
+    o._hint = hint;
+    o._keys = keys;
+    o._w = -1;
+    o._h = -1;
+    o._mode = -1;
     // The game loop does not run while paused; keep the overlay laid out on resize
     window.addEventListener('resize', () => { if (paused) renderPauseOverlay(); });
   }
 
   const visible = (typeof paused !== 'undefined') && paused;
-  renderPauseOverlay._bg.visible = visible;
-  renderPauseOverlay._title.visible = visible;
-  renderPauseOverlay._hint.visible = visible;
-  renderPauseOverlay._keys.visible = visible;
+  const ps = visible && typeof padState === 'function' ? padState() : null;
+  const dc = !!(ps && ps.disconnectPaused);
+  const hintText = dc ? 'PRESS START OR ANY KEY'
+    : ps && ps.connected ? 'PRESS P / START TO RESUME' : 'PRESS P TO RESUME';
+  if (o._hint.text !== hintText) o._hint.text = hintText;
+  o._bg.visible = visible;
+  o._title.visible = visible && !dc;
+  o._dcTitle.visible = visible && dc;
+  o._hint.visible = visible;
+  o._keys.visible = visible;
 
   const Wi = Math.floor(W), Hi = Math.floor(H);
-  if (visible && (renderPauseOverlay._w !== Wi || renderPauseOverlay._h !== Hi)) {
-    renderPauseOverlay._w = Wi;
-    renderPauseOverlay._h = Hi;
-    const pw = 432, ph = 168;
+  const mode = dc ? 1 : 0;
+  if (visible && (o._w !== Wi || o._h !== Hi || o._mode !== mode)) {
+    o._w = Wi;
+    o._h = Hi;
+    o._mode = mode;
+    const pw = Math.min(Wi - 16, dc ? 600 : 432), ph = 168;
     const px = (Wi - pw) >> 1, py = (Hi - ph) >> 1;
-    const g = renderPauseOverlay._bg;
+    const g = o._bg;
     g.clear();
     g.rect(0, 0, Wi, Hi).fill({ color: 0x000000, alpha: 0.55 });
     hudPanel(g, px, py, pw, ph);
     hudDivider(g, px + 8, py + 88, pw - 16);
 
-    renderPauseOverlay._title.x = Wi >> 1;
-    renderPauseOverlay._title.y = py + 24;
-    renderPauseOverlay._hint.x = Wi >> 1;
-    renderPauseOverlay._hint.y = py + 106;
-    renderPauseOverlay._keys.x = Wi >> 1;
-    renderPauseOverlay._keys.y = py + 140;
+    o._title.x = o._dcTitle.x = Wi >> 1;
+    o._title.y = py + 24;
+    o._dcTitle.y = py + 36;
+    o._hint.x = Wi >> 1;
+    o._hint.y = py + 106;
+    o._keys.x = Wi >> 1;
+    o._keys.y = py + 140;
   }
+  // The HUD frame doesn't run while paused: keep crosshair vs pad reticle in
+  // step with the device (a pad disconnect switches back to the mouse)
+  if (visible && hudElements.crosshair && player) renderPixiCrosshair();
 }
 
 /**

@@ -33,6 +33,17 @@ const CFG = {
   MAX_GIBS: 160,
   MAX_DMG_NUMBERS: 60,
   SHAKE_MAX: 20, // J5a: screen px; addShake clamps to this
+  // M10: Xbox / standard gamepad
+  PAD_DEADZONE: 0.20,          // radial, both sticks; rescaled to 0..1 beyond it
+  PAD_TRIGGER: 0.3,            // RT fires / LT shockwave past this
+  PAD_AIM_MIN: 180,            // aim point = player + dir x (MIN + stick x RANGE)
+  PAD_AIM_RANGE: 240,
+  PAD_AIM_SETTLE: 0.04,        // right stick: a magnitude falling by more than this per poll is a release (keep the aim)
+  PAD_AIM_ASSIST: true,        // C3: pad-only assist (not the demo bot)
+  PAD_ASSIST_DEG: 5,
+  PAD_ASSIST_RANGE: 420,
+  PAD_RUMBLE: true,
+  PAD_RUMBLE_GAP_MS: 50,       // at most one new effect per 50 ms
   // M9 W2: wading
   WADE_RAMP: 0.25,             // s for the waterline to rise/fall fully
   // M9 N1: grenades (F)
