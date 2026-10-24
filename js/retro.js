@@ -4,7 +4,8 @@
 // with nearest-neighbour filtering; the HUD stays at full resolution.
 // =====================================================================
 
-const RETRO = { PIXEL_SCALE: 3, DITHER: true, CRT: true, LEVELS: 6 };
+// DITHER_STRENGTH (R4a): 0 = plain posterize, 1 = full Bayer offset
+const RETRO = { PIXEL_SCALE: 3, DITHER: true, CRT: true, LEVELS: 6, DITHER_STRENGTH: 0.5 };
 window.RETRO = RETRO;
 
 // R2: snap a screen-space offset to whole low-res pixels (pure; unit-tested)
@@ -56,13 +57,14 @@ uniform sampler2D uTexture;
 uniform float uLevels;
 uniform float uContrast;
 uniform float uSaturation;
+uniform float uStrength;
 // Recursive Bayer matrix without arrays (portable across GLSL versions)
 float bayer2(vec2 a) {
   a = floor(a);
   return fract(dot(a, vec2(0.5, a.y * 0.75)));
 }
 float bayer4(vec2 p) {
-  return bayer2(0.5 * p) * 0.25 + bayer2(p) + 0.5 / 16.0;
+  return bayer2(0.5 * p) * 0.25 + bayer2(p);
 }
 void main(void) {
   vec4 c = texture(uTexture, vTextureCoord);
@@ -72,7 +74,10 @@ void main(void) {
   col = (col - 0.5) * uContrast + 0.5;
   col = clamp(col, 0.0, 1.0);
   float steps = uLevels - 1.0;
-  col = floor(col * steps + bayer4(gl_FragCoord.xy)) / steps;
+  // Centred Bayer offset scaled by strength: flat areas round to one level,
+  // only gradients near a level boundary pick up the pattern
+  float offset = 0.5 + (bayer4(gl_FragCoord.xy) + 0.5 / 16.0 - 0.5) * uStrength;
+  col = floor(col * steps + offset) / steps;
   finalColor = vec4(clamp(col, 0.0, 1.0) * c.a, c.a);
 }`;
 
@@ -84,6 +89,7 @@ function _createDitherFilter() {
         uLevels: { value: RETRO.LEVELS, type: 'f32' },
         uContrast: { value: 1.08, type: 'f32' },
         uSaturation: { value: 1.18, type: 'f32' },
+        uStrength: { value: RETRO.DITHER_STRENGTH, type: 'f32' },
       },
     },
     padding: 0,
@@ -174,7 +180,9 @@ function rebuildRetroTargets() {
 function _applyRetroToggles() {
   if (!_retro.ready) return;
   _retro.display.texture = RETRO.DITHER ? _retro.ditherRT : _retro.worldRT;
-  _retro.ditherFilter.resources.retroUniforms.uniforms.uLevels = RETRO.LEVELS;
+  const u = _retro.ditherFilter.resources.retroUniforms.uniforms;
+  u.uLevels = RETRO.LEVELS;
+  u.uStrength = clamp(RETRO.DITHER_STRENGTH, 0, 1);
   _retro.crt.visible = RETRO.CRT;
 }
 
@@ -189,6 +197,10 @@ function updateRetroCamera() {
 
 function renderRetro() {
   if (!_retro.ready) return;
+  // Live-tunable from the console (RETRO.DITHER_STRENGTH / RETRO.LEVELS)
+  const u = _retro.ditherFilter.resources.retroUniforms.uniforms;
+  u.uStrength = clamp(RETRO.DITHER_STRENGTH, 0, 1);
+  u.uLevels = RETRO.LEVELS;
   renderer.render({ container: _retro.root, target: _retro.worldRT, clear: true, clearColor: [0.16, 0.23, 0.16, 1] });
   if (RETRO.DITHER) {
     renderer.render({ container: _retro.ditherSprite, target: _retro.ditherRT, clear: true, clearColor: [0, 0, 0, 1] });
