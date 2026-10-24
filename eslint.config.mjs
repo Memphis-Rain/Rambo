@@ -101,7 +101,7 @@ export default [
           'decalVersion', 'DECAL_POOL', 'DECAL_SPLAT', 'DECAL_SCORCH', 'DECAL_FOOT', 'DECAL_SMEAR', 'DECAL_GIB', 'DECAL_ASH',
           'dmgNumbers', 'DMG_NORMAL', 'DMG_CRIT', 'DMG_SHIELD',
           'hitStopTimer', 'addHitStop',
-          'startDemo', 'stopDemo', 'demoState',
+          'startDemo', 'stopDemo', 'demoState', 'demoAimLead',
         ].map((name) => [name, 'readonly'])),
       },
     },
