@@ -1,12 +1,13 @@
 import { test, expect } from './fixtures.js';
+import { LANDED } from '../milestones.js';
 
-// T11 / M6 attract mode. Every test needs js/demo.js (D8 hooks) and skips until it exists.
+// T11 / M6 attract mode (D8 hooks). Skipped until M6 is marked landed in tests/milestones.js.
 // The Q1 console guard from fixtures.js applies throughout.
+
+test.skip(!LANDED.M6, 'M6 not landed (tests/milestones.js)');
 
 async function bootTitle(game, idleSeconds) {
   await game.boot();
-  const hasDemo = await game.eval(() => typeof startDemo === 'function' && typeof demoState === 'function');
-  test.skip(!hasDemo, 'needs startDemo()/stopDemo()/demoState() from M6 (D8)');
   await game.eval((s) => { CFG.DEMO_IDLE_SECONDS = s; }, idleSeconds);
 }
 

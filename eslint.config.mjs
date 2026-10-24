@@ -60,7 +60,7 @@ const bugRules = {
 // ESLint runs from elsewhere with -c.
 export default [
   {
-    ignores: ['worktrees/**', 'node_modules/', 'lib/', 'test-results/', 'playwright-report/', 'dist/', ...UNLOADED],
+    ignores: ['worktrees/**', '.scratch/**', 'node_modules/', 'lib/', 'test-results/', 'playwright-report/', 'dist/', ...UNLOADED],
   },
   js.configs.recommended,
   ...gameFiles.map((file) => ({

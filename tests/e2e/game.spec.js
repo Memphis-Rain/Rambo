@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures.js';
+import { LANDED } from '../milestones.js';
 
 test.describe('T4 boot & loop', () => {
   test('T4: boots with no console errors', async ({ game, page }, testInfo) => {
@@ -103,8 +104,8 @@ test.describe('T4 gore', () => {
   });
 
   test('G5: an explosive kill bursts into gibs that settle as decals', async ({ game }, testInfo) => {
+    test.skip(!LANDED.M3, 'M3 not landed (tests/milestones.js)');
     await game.boot();
-    test.skip(!(await game.eval(() => typeof gibs !== 'undefined' && typeof SRC_EXPLOSIVE !== 'undefined')), 'needs gibs[] and SRC_* from M3 (G5)');
     await game.start();
     await game.freezeWaves();
     const burst = await game.eval(() => {
@@ -126,9 +127,8 @@ test.describe('T4 gore', () => {
 
 test.describe('T4 retro toggles (M1)', () => {
   test('R6/R7: F6/F7/F8 change retroState()', async ({ game, page }, testInfo) => {
+    test.skip(!LANDED.M1, 'M1 not landed (tests/milestones.js)');
     await game.boot();
-    const hasHook = await game.eval(() => typeof retroState === 'function' && typeof window.RETRO === 'object');
-    test.skip(!hasHook, 'needs retroState() and window.RETRO from M1 (R7)');
     await game.start();
 
     const s0 = await game.eval(() => retroState());
@@ -162,12 +162,11 @@ async function setPixelScale(game, target) {
 test.describe('T5 aim', () => {
   for (const scale of [1, 3]) {
     test(`T5: cursor maps to the correct world point at PIXEL_SCALE ${scale}`, async ({ game, page }) => {
+      test.skip(scale !== 1 && !LANDED.M1, 'M1 not landed (tests/milestones.js)');
       await game.boot();
-      const hasRetro = await game.eval(() => typeof retroState === 'function');
-      test.skip(scale !== 1 && !hasRetro, 'needs retroState() from M1 (R7)');
       await game.start();
       await game.freezeWaves();
-      if (hasRetro) await setPixelScale(game, scale);
+      if (LANDED.M1) await setPixelScale(game, scale);
       const { W: w, H: h } = await game.eval(() => ({ W, H }));
       for (const target of [
         { x: Math.round(w / 2 + 150), y: Math.round(h / 2 - 80) },
@@ -192,8 +191,8 @@ test.describe('T5 aim', () => {
 
 test.describe('R2 pixel-grid camera', () => {
   test('R2: world offset sits on whole low-res pixels while moving', async ({ game, page }) => {
+    test.skip(!LANDED.M1, 'M1 not landed (tests/milestones.js)');
     await game.boot();
-    test.skip(!(await game.eval(() => typeof retroState === 'function' && typeof snapToPixel === 'function')), 'needs retroState() and snapToPixel() from M1');
     await game.start();
     await game.freezeWaves();
     await setPixelScale(game, 3);
