@@ -1965,7 +1965,8 @@ function _spRenderEnv() {
     // after its chunk regenerated) never shows a ghost standing sprite.
     // A splintered log (E11 logGone) leaves only its stump (layer).
     if (rec !== null && ((rec.state === 'destroyed' && obj.type !== 'barrel') ||
-        (rec.baked && rec._drawnInLayer === true) || rec.logGone === true)) continue;
+        (rec.baked && rec._drawnInLayer === true) ||
+        (rec.logGone === true && rec._drawnInLayer === true))) continue; // keep the sprite until the stump is baked
     let g = _sp.env.get(obj);
     const st = _spEnvState(obj);
     if (g === undefined) {
@@ -2983,10 +2984,11 @@ function _spEnvLayerIngest(L) {
     const cs = CFG.CHUNK_SIZE * CFG.TILE_SIZE;
     for (let i = L.count; i < n; i++) _spEnvLayerAdd(L, envRemains[i], cs);
     L.count = n; L.first = envRemains[0]; L.last = envRemains[n - 1];
-    return;
+    // no early return: an existing remain may have changed in the SAME frame
+    // (e.g. a log splintered while another tree baked), so re-sign as well
   }
-  // version bump without new entries: an existing remain changed (rare).
-  // Re-sign the buckets (numeric pass, no allocs) and dirty what differs.
+  // An existing remain changed (e.g. logGone): re-sign the buckets (numeric
+  // pass, no allocs) and dirty what differs.
   for (let i = 0; i < L.list.length; i++) {
     const c = L.list[i];
     let sig = 0;
