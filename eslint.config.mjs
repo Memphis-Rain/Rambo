@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import js from '@eslint/js';
 import globals from 'globals';
 import * as espree from 'espree';
@@ -6,17 +7,19 @@ import * as espree from 'espree';
 // The game is classic <script> files sharing one global scope. Each file's
 // top-level declarations are globals for every *other* file. They're derived
 // from the source, so new globals need no config change.
+// Resolved from this file so lint works from any working directory.
+const ROOT = import.meta.dirname;
 const GAME_DIR = 'js';
 // Legacy Canvas2D renderer: game.html doesn't load it.
 const UNLOADED = ['js/renderer.js'];
 
-const gameFiles = fs.readdirSync(GAME_DIR)
+const gameFiles = fs.readdirSync(path.join(ROOT, GAME_DIR))
   .filter((f) => f.endsWith('.js'))
   .map((f) => `${GAME_DIR}/${f}`)
   .filter((f) => !UNLOADED.includes(f));
 
 function topLevelDeclarations(file) {
-  const ast = espree.parse(fs.readFileSync(file, 'utf8'), {
+  const ast = espree.parse(fs.readFileSync(path.join(ROOT, file), 'utf8'), {
     ecmaVersion: 'latest',
     sourceType: 'script',
   });
@@ -53,6 +56,8 @@ const bugRules = {
   'no-empty': ['error', { allowEmptyCatch: true }],
 };
 
+// basePath anchors every files/ignores pattern to this directory, even when
+// ESLint runs from elsewhere with -c.
 export default [
   {
     ignores: ['worktrees/**', 'node_modules/', 'lib/', 'test-results/', 'playwright-report/', 'dist/', ...UNLOADED],
@@ -88,10 +93,16 @@ export default [
         ...globals.browser,
         PIXI: 'readonly',
         ...Object.assign({}, ...Object.values(declsByFile)),
-        // Test hooks the spec promises (R7, G9); tests skip until they exist.
-        RETRO: 'readonly',
-        retroState: 'readonly',
-        hitStopTimer: 'readonly',
+        // Test hooks promised by the spec and Josh (R2, R7, G4, G5, G8, G9, D8).
+        // Tests skip until they exist; drop entries once the game defines them.
+        ...Object.fromEntries([
+          'RETRO', 'retroState', 'snapToPixel',
+          'gibs', 'SRC_EXPLOSIVE', 'SRC_BFG', 'SRC_RAIL',
+          'decalVersion', 'DECAL_POOL', 'DECAL_SPLAT', 'DECAL_SCORCH', 'DECAL_FOOT', 'DECAL_SMEAR', 'DECAL_GIB', 'DECAL_ASH',
+          'dmgNumbers', 'DMG_NORMAL', 'DMG_CRIT', 'DMG_SHIELD',
+          'hitStopTimer', 'addHitStop',
+          'startDemo', 'stopDemo', 'demoState',
+        ].map((name) => [name, 'readonly'])),
       },
     },
     rules: {
@@ -99,4 +110,4 @@ export default [
       'no-empty-pattern': 'off',
     },
   },
-];
+].map((config) => ({ basePath: ROOT, ...config }));

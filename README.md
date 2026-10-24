@@ -86,7 +86,7 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## Development
 
-Requires Node.js 20+ (CI uses 24). The game itself stays plain `<script>` files with no build step; npm is only for tooling.
+Requires Node.js 22.13+ or 24+ (CI uses 24); Vitest 5 and ESLint 10 set that floor, and odd-numbered Node releases (23, 25) are not supported. The game itself stays plain `<script>` files with no build step; npm is only for tooling.
 
 ```bash
 npm install                      # dev tooling: Vite, Vitest, Playwright, ESLint

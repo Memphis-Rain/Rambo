@@ -238,11 +238,27 @@ describe('T3 combat: area damage', () => {
     expect(far.hp).toBe(farHp);
   });
 
-  test('T3: chained bomber explosions terminate', () => {
-    for (let i = 0; i < 30; i++) g.spawnEnemy(type(g, 'Bomber'), i * 10, 0);
+  test('T3: chained bomber explosions terminate and kill the whole chain', () => {
+    // Spaced 30 apart: each bomber is inside its neighbour's blast radius, and
+    // 80 * (1 - 30/100) = 56 damage exceeds a Bomber's 40 HP.
+    const chain = [];
+    for (let i = 0; i < 3; i++) chain.push(g.spawnEnemy(type(g, 'Bomber'), i * 30, 0));
     g.player.x = 5000;
+    g.killEnemy(chain[0], 0);
+    expect(() => g.processPendingDamage()).not.toThrow();
+    for (const b of chain) expect(b.dead, `bomber at x=${b.x}`).toBe(true);
+    expect(g.enemies.filter((e) => !e.dead)).toHaveLength(0);
+    expect(g.kills).toBe(chain.length);
+  });
+
+  test('T3: a long bomber chain terminates', () => {
+    // processPendingDamage caps chains at 3 rounds and drops what's still queued,
+    // so long chains stop part-way (reported to Ralph/Josh; not locked in either way).
+    for (let i = 0; i < 30; i++) g.spawnEnemy(type(g, 'Bomber'), i * 30, 0);
+    g.player.x = 50000;
     g.killEnemy(g.enemies[0], 0);
     expect(() => g.processPendingDamage()).not.toThrow();
+    expect(g.kills).toBeGreaterThanOrEqual(3);
   });
 });
 
