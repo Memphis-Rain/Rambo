@@ -80,6 +80,7 @@ const _sp = {
   treeCtx: new Map(),
   // player gun tip (screen) for muzzle-flash alignment
   pTipX: 0, pTipY: 0, pTipValid: false,
+  wadeSeq: 0, // W2 ripple phase per wading entity
   // hurt overlay
   hurtPrev: 0,
   hurtDrops: new Float32Array(24 * 5), // x, y, len, speed, life
@@ -513,33 +514,74 @@ function _pline(x0, y0, x1, y1, t, c, ol) {
   if (rw > 0) _pr(rx - o, ry - o, rw + t - 1, t, c, ol);
 }
 
+// W2 wading: a one-shot clip for the next _pflush, in buffer art px. axis 0
+// clips rows, 1 columns; lt keeps coord < c, else coord >= c. Clipped rects
+// are trimmed (outline included), so the waterline costs no mask or filter.
+let _pcAx = -1, _pcLt = true, _pcC = 0;
+let _pcX0 = 0, _pcY0 = 0, _pcX1 = 0, _pcY1 = 0;
+// art px bounds of what the last _pflush drew (outline included; empty: x1 < x0)
+let _pbBX0 = 0, _pbBY0 = 0, _pbBX1 = 0, _pbBY1 = 0;
+
+function _spClip(axis, lt, c) { _pcAx = axis; _pcLt = lt; _pcC = c; }
+
+function _pcut(x0, y0, x1, y1) {
+  if (_pcAx === 0) { if (_pcLt) { if (y1 > _pcC) y1 = _pcC; } else if (y0 < _pcC) y0 = _pcC; }
+  else if (_pcAx === 1) { if (_pcLt) { if (x1 > _pcC) x1 = _pcC; } else if (x0 < _pcC) x0 = _pcC; }
+  _pcX0 = x0; _pcY0 = y0; _pcX1 = x1; _pcY1 = y1;
+  return x1 > x0 && y1 > y0;
+}
+
 // Flush buffer into Graphics g (local coords). mode: 0 normal, 1 white flash, 2 mono
 function _pflush(g, olColor, mode, skipOutline, monoColor) {
   const A = ART, n = _pbN;
-  if (mode === 2) {
-    for (let i = 0; i < n; i++) {
-      if (!_pbO[i]) continue;
-      g.rect((_pbX[i] - 1) * A, (_pbY[i] - 1) * A, (_pbW[i] + 2) * A, (_pbH[i] + 2) * A);
-    }
-    g.fill(monoColor);
-    return;
-  }
-  if (!skipOutline) {
+  let bx0 = 32767, by0 = 32767, bx1 = -32767, by1 = -32767;
+  if (mode === 2 || !skipOutline) {
     let any = false;
     for (let i = 0; i < n; i++) {
       if (!_pbO[i]) continue;
-      g.rect((_pbX[i] - 1) * A, (_pbY[i] - 1) * A, (_pbW[i] + 2) * A, (_pbH[i] + 2) * A);
+      if (!_pcut(_pbX[i] - 1, _pbY[i] - 1, _pbX[i] + _pbW[i] + 1, _pbY[i] + _pbH[i] + 1)) continue;
+      g.rect(_pcX0 * A, _pcY0 * A, (_pcX1 - _pcX0) * A, (_pcY1 - _pcY0) * A);
+      if (_pcX0 < bx0) bx0 = _pcX0;
+      if (_pcY0 < by0) by0 = _pcY0;
+      if (_pcX1 > bx1) bx1 = _pcX1;
+      if (_pcY1 > by1) by1 = _pcY1;
       any = true;
     }
-    if (any) g.fill(olColor);
+    if (any) g.fill(mode === 2 ? monoColor : olColor);
   }
-  let cur = -1;
-  for (let i = 0; i < n; i++) {
-    const c = mode === 1 ? 0xffffff : _pbC[i];
-    if (c !== cur) { if (cur !== -1) g.fill(cur); cur = c; }
-    g.rect(_pbX[i] * A, _pbY[i] * A, _pbW[i] * A, _pbH[i] * A);
+  if (mode !== 2) {
+    let cur = -1;
+    for (let i = 0; i < n; i++) {
+      if (!_pcut(_pbX[i], _pbY[i], _pbX[i] + _pbW[i], _pbY[i] + _pbH[i])) continue;
+      const c = mode === 1 ? 0xffffff : _pbC[i];
+      if (c !== cur) { if (cur !== -1) g.fill(cur); cur = c; }
+      g.rect(_pcX0 * A, _pcY0 * A, (_pcX1 - _pcX0) * A, (_pcY1 - _pcY0) * A);
+      if (_pcX0 < bx0) bx0 = _pcX0;
+      if (_pcY0 < by0) by0 = _pcY0;
+      if (_pcX1 > bx1) bx1 = _pcX1;
+      if (_pcY1 > by1) by1 = _pcY1;
+    }
+    if (cur !== -1) g.fill(cur);
   }
-  if (cur !== -1) g.fill(cur);
+  _pbBX0 = bx0; _pbBY0 = by0; _pbBX1 = bx1; _pbBY1 = by1;
+  _pcAx = -1; // one-shot
+}
+
+// Keep what the flush draws above screen row wy (world-screen) for a
+// Graphics with position / pivot / quarter-turn rotation already set.
+function _spClipFor(g, wy) {
+  const r = g.rotation, c = Math.round(Math.cos(r)), sn = Math.round(Math.sin(r));
+  const T = (wy - g.y) / ART, px = g.pivot.x / ART, py = g.pivot.y / ART;
+  if (c === 1) _spClip(0, true, Math.round(T + py));
+  else if (c === -1) _spClip(0, false, Math.round(py - T));
+  else if (sn === 1) _spClip(1, true, Math.round(T + px));
+  else _spClip(1, false, Math.round(px - T));
+}
+
+// Store the last flush's bounds on g (spDrawnBounds)
+function _spKeepBounds(g, waterY) {
+  g._bx0 = _pbBX0; g._by0 = _pbBY0; g._bx1 = _pbBX1; g._by1 = _pbBY1;
+  g._waterY = waterY;
 }
 
 // =====================================================================
@@ -969,6 +1011,109 @@ function renderPixiSprites() {
 }
 
 // =====================================================================
+// WADING (M9 W2): crop below the waterline, ripple ring, V wake
+// =====================================================================
+// Top of each kind's hat / hair at size 1 (unscaled art px, before the
+// outline); the drawn dry body spans round(top x s) - 1 .. +1 rows.
+const _spHatTop = new Int8Array([-16, -15, -16, -17, -15, -15, -16, -16, -17, -16, -16, -16, -16]);
+
+// Wading crop: 0 when dry, else cut >= 1 and the puppet keeps the art rows
+// above row 1 - cut (feet line = row 0; cut 1 hides only the outline under
+// the boots, so the waterline steps one art px at a time from the first
+// frame). Hidden rows = the logic waterline (entityWaterlineH, shared with
+// G13 picking) rounded up to whole art px, and never less than the same
+// fraction of the actually drawn dry body (hats / big sizes run a row or
+// two over ENEMY_PICK_H x size).
+function _spWadeCut(ent, k, s) {
+  const sub = ent.submerge || 0;
+  if (!(sub > 0) || typeof entityWaterlineH !== 'function') return 0;
+  const wl = entityWaterlineH(ent), dh = entityDrawnH(ent);
+  if (wl < ART * 0.5) return 1;
+  const rows = 2 - Math.round(_spHatTop[k] * s);
+  const a = Math.ceil(wl / ART - 1e-6);
+  const b = dh > 0 ? Math.ceil(wl / dh * rows - 1 - 1e-6) : 0;
+  return 1 + Math.max(1, a, b);
+}
+
+// Ring rows: 1-art-px ellipse outline (connected), cx/cy screen, rx/ry art px
+function _spRingRows(g, cx, cy, rx, ry) {
+  const A = ART, inv = 1 / (ry + 0.5);
+  for (let j = -ry; j <= ry; j++) {
+    const t = j * inv;
+    const w = Math.round(rx * Math.sqrt(Math.max(0, 1 - t * t)));
+    if (j === -ry || j === ry) { g.rect(cx - w * A, cy + j * A, (2 * w + 1) * A, A); continue; }
+    const tn = (j + (j < 0 ? -1 : 1)) * inv; // neighbour row toward the nearer pole
+    const wn = Math.round(rx * Math.sqrt(Math.max(0, 1 - tn * tn)));
+    const inner = Math.min(w, wn + 1), len = w - inner + 1;
+    g.rect(cx - w * A, cy + j * A, len * A, A);
+    g.rect(cx + inner * A, cy + j * A, len * A, A);
+  }
+}
+
+const SP_WAKE_N = 6;
+const _spWakeA = [1, 0.7, 0.45]; // stepped alpha bands (near -> far)
+
+// Ripple ring at the waterline + V wake behind movers, into the ground layer
+// (flat on the water, under every body, so the body hides the ring's back arc)
+function _spWade(ent, X, waterY, cut, s, hw) {
+  const g = _sp.groundG, A = ART;
+  if (ent._spWph === undefined) ent._spWph = (_sp.wadeSeq++ * 7) % 3;
+  // ripple: 3 frames expanding outward, stepped alpha
+  const f = (((gameTime * 6) | 0) + ent._spWph) % 3;
+  const rx = Math.round((hw + 2) * s) + f;
+  const ry = Math.max(1, Math.round(rx * 0.42));
+  _spRingRows(g, X, waterY, rx, ry);
+  g.fill({ color: 0xd8f0ff, alpha: f === 0 ? 0.9 : f === 1 ? 0.65 : 0.4 });
+  // wake: pixels fixed on the water (phase from walkDist), fading with distance
+  const vx = ent.vx || 0, vy = ent.vy || 0, v2 = vx * vx + vy * vy;
+  if (!ent.walking || v2 < 64 || ent.dodging) return;
+  const inv = 1 / Math.sqrt(v2), ux = vx * inv, uy = vy * inv;
+  const step = 6 * Math.max(1, s), d0 = rx * A * 0.45;
+  const ph = (ent.walkDist || 0) % step, iso = CFG.ISO_SCALE, lift = (cut - 1) * A;
+  for (let band = 0; band < 3; band++) {
+    let any = false;
+    for (let i = 0; i < SP_WAKE_N; i++) {
+      if ((i < 2 ? 0 : i < 4 ? 1 : 2) !== band) continue;
+      const d = d0 + i * step + ph, lat = d * 0.5;
+      for (let side = -1; side <= 1; side += 2) {
+        const wx = ent.x - ux * d - uy * lat * side, wy = ent.y - uy * d + ux * lat * side;
+        if (typeof waterTileAt === 'function' && !waterTileAt(wx, wy)) continue;
+        const px = _spSnap(wx - wy), py = _spSnap((wx + wy) * iso) - lift;
+        g.rect(px, py, (i < 2 ? 2 : 1) * A, A);
+        any = true;
+      }
+    }
+    if (any) g.fill({ color: 0xe8f8ff, alpha: _spWakeA[band] });
+  }
+}
+
+/**
+ * Test hook (W2): what is drawn for ent (player or enemy) this frame, in
+ * world-screen units (worldContainer space, as toScreen): the visible
+ * puppet's top-left x / y, w, h (outline included; ground shadow, shield
+ * bubble and ripples excluded), and waterY = the drawn waterline's screen y
+ * while ent.submerge > 0, else null. null when ent is not drawn.
+ */
+function spDrawnBounds(ent) {
+  if (!ent) return null;
+  const g = ent === player ? _sp.playerG : ent._spG;
+  if (!g || !g.visible || g.destroyed || !(g._bx1 > g._bx0)) return null;
+  if (ent !== player && g._owner !== ent) return null;
+  const A = ART, r = g.rotation, c = Math.round(Math.cos(r)), sn = Math.round(Math.sin(r));
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < 4; i++) {
+    const qx = ((i & 1) ? g._bx1 : g._bx0) * A - g.pivot.x;
+    const qy = ((i & 2) ? g._by1 : g._by0) * A - g.pivot.y;
+    const X = g.x + c * qx - sn * qy, Y = g.y + sn * qx + c * qy;
+    if (X < x0) x0 = X;
+    if (X > x1) x1 = X;
+    if (Y < y0) y0 = Y;
+    if (Y > y1) y1 = Y;
+  }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0, waterY: (ent.submerge || 0) > 0 ? g._waterY : null };
+}
+
+// =====================================================================
 // PLAYER
 // =====================================================================
 function _spRenderPlayer() {
@@ -992,10 +1137,15 @@ function _spRenderPlayer() {
   const wep = WEAPONS[P.weapon] || WEAPONS[0];
   if (wep.spinUp && p.spinUp > 0) P.spin = (gameTime * (8 + p.spinUp * 30)) | 0;
 
-  // ground shadow
-  const sg = _sp.groundG;
-  _spEllRows(sg, X, Y, 4, 1, 0, false);
-  sg.fill({ color: 0x000000, alpha: 0.3 });
+  // W2: wading crop (art px rows hidden above the feet); no shadow in water
+  const cut = _spWadeCut(p, SP_K_PLAYER, 1);
+  const waterY = Y - (cut - 1) * ART;
+  if (cut) _spWade(p, X, waterY, cut, 1, _spTW[SP_K_PLAYER] >> 1);
+  else {
+    const sg = _sp.groundG;
+    _spEllRows(sg, X, Y, 4, 1, 0, false);
+    sg.fill({ color: 0x000000, alpha: 0.3 });
+  }
 
   if (p.dodging) {
     // A4: tumble through 4 quarter-turn frames with a small hop
@@ -1014,7 +1164,9 @@ function _spRenderPlayer() {
     g.pivot.set(0, piv);
     g.position.set(X, Y + piv - hop * ART);
     g.rotation = f * (Math.PI / 2) * dir;
+    if (cut) _spClipFor(g, waterY);
     _pflush(g, SP_OUTLINE, 0, false, 0);
+    _spKeepBounds(g, waterY);
     // after-image one frame behind
     const dl = Math.sqrt(dsx * dsx + dsy * dsy) || 1;
     gh.visible = true;
@@ -1023,6 +1175,7 @@ function _spRenderPlayer() {
     gh.position.set(X - _spSnap(dsx / dl * 15), Y + piv - _spSnap(dsy / dl * 15) - ART);
     gh.rotation = (f - 1) * (Math.PI / 2) * dir;
     gh.alpha = 0.35;
+    if (cut) _spClipFor(gh, waterY - _spSnap(dsy / dl * 15));
     _pflush(gh, 0, 2, true, 0x9ad0ff);
     return;
   }
@@ -1046,10 +1199,13 @@ function _spRenderPlayer() {
   } else if (p.reloading) {
     P.gunOverride = true; P.gunAng = 1.0;
   }
+  if (cut) P.bob = 0; // wading: the body holds still, the ripples move
   _spBuildPuppet();
   g.position.set(X, Y);
   const flash = p.hitFlash > 0 && (((p.hitFlash * 30) | 0) & 1);
+  if (cut) _spClip(0, true, 1 - cut);
   _pflush(g, SP_OUTLINE, flash ? 1 : 0, false, 0);
+  _spKeepBounds(g, waterY);
   if (_PO.hasMuz) {
     _sp.pTipX = g.x + _PO.muzX * ART;
     _sp.pTipY = g.y + _PO.muzY * ART;
@@ -1085,6 +1241,9 @@ function _spRenderEnemies() {
     } else {
       bob = (((gameTime * 1.4 + (e.walkDist || 0) * 0.05) | 0) & 1);
     }
+    // W2: wading crop; the body holds still in water (no bob)
+    const cut = _spWadeCut(e, k, s);
+    if (cut) bob = 0;
     const flash = e.hitFlash > 0 ? 1 : 0;
     const recoil = e.recoilT > 0 ? 1 : 0;
     const attack = e.attackT > 0 ? (e.attackT > 0.15 ? 1 : 2) : 0;
@@ -1100,7 +1259,8 @@ function _spRenderEnemies() {
     const spin = k === SP_K_JUGG ? (((gameTime * (e.fireTimer < 0.6 ? 20 : 4)) | 0) & 1) : 0;
     const visor = k === SP_K_JUGG ? (((gameTime * 4) | 0) & 1) : 0;
     const tail = (k === SP_K_BERSERKER) ? (((gameTime * 8) | 0) & 1) : 0;
-    const key = (walkF + 1) + 5 * (bob + 2 * (aq + 16 * (flash + 2 * (recoil + 2 * (attack + 3 * (blink + 3 * (glow + 2 * (shield + 3 * (spin + 2 * (visor + 2 * tail))))))))));
+    const key = (walkF + 1) + 5 * (bob + 2 * (aq + 16 * (flash + 2 * (recoil + 2 * (attack + 3 * (blink + 3 * (glow + 2 * (shield + 3 * (spin + 2 * (visor + 2 * tail)))))))))) +
+      276480 * cut;
 
     if (g._key !== key) {
       g._key = key;
@@ -1112,30 +1272,39 @@ function _spRenderEnemies() {
       P.gunOverride = false; P.spin = k === SP_K_JUGG ? spin : -1;
       P.blink = blink; P.visor = visor; P.tail = tail; P.glowTip = 0;
       _spBuildPuppet();
-      // shadow inside the cached graphics
-      _spEllRows(g, 0, 0, Math.round(4 * s), Math.max(1, Math.round(1.3 * s)), 0, false);
-      g.fill({ color: 0x000000, alpha: 0.28 });
+      // shadow inside the cached graphics (hidden while wading)
+      if (!cut) {
+        _spEllRows(g, 0, 0, Math.round(4 * s), Math.max(1, Math.round(1.3 * s)), 0, false);
+        g.fill({ color: 0x000000, alpha: 0.28 });
+      }
       const ol = glow ? SP_OUTLINE_HEAL : e.isBoss ? SP_OUTLINE_BOSS : SP_OUTLINE;
+      if (cut) _spClip(0, true, 1 - cut);
       _pflush(g, ol, flash ? 1 : 0, false, 0);
-      if (shield) _spShieldBubble(g, s, shield);
+      _spKeepBounds(g, 0);
+      if (shield) _spShieldBubble(g, s, shield, cut);
       g._muzX = _PO.muzX; g._muzY = _PO.muzY; g._hasMuz = _PO.hasMuz;
       g._scopeX = _PO.scopeX; g._scopeY = _PO.scopeY; g._top = _PO.top;
     }
     // A5 berserker shakes while charging the player
     let jit = 0;
     if (k === SP_K_BERSERKER && e.walking && d < 250) jit = (((gameTime * 30) | 0) & 1) ? ART : -ART;
-    g.position.set(_spSnap(sx) + jit, _spSnap(sy));
+    const X = _spSnap(sx), Y = _spSnap(sy);
+    g.position.set(X + jit, Y);
     g.zIndex = depthKey(e.x, e.y);
+    g._waterY = Y - (cut - 1) * ART;
+    if (cut) _spWade(e, X, g._waterY, cut, s, _spTW[k] >> 1);
   }
 }
 
-function _spShieldBubble(g, s, step) {
+function _spShieldBubble(g, s, step, cut) {
   const A = ART;
   const rx = Math.round(6 * s) + 1, ry = Math.round(9 * s) + 1;
   const cy = Math.round(-7.5 * s) * A;
   const inv = 1 / (ry + 0.5);
+  const lim = cut ? (1 - cut) * A : 1e9; // W2: nothing below the waterline
   // interior (stepped low alpha)
   for (let j = -ry + 1; j <= ry - 1; j++) {
+    if (cy + (j + 1) * A > lim) break;
     const t = j * inv;
     const w = Math.round(rx * Math.sqrt(Math.max(0, 1 - t * t)));
     if (w > 1) g.rect((-w + 1) * A, cy + j * A, (2 * w - 1) * A, A);
@@ -1143,6 +1312,7 @@ function _spShieldBubble(g, s, step) {
   g.fill({ color: 0x5090ff, alpha: step === 1 ? 0.16 : 0.24 });
   // rim pixels
   for (let j = -ry; j <= ry; j++) {
+    if (cy + (j + 1) * A > lim) break;
     const t = j * inv;
     const w = Math.round(rx * Math.sqrt(Math.max(0, 1 - t * t)));
     if (j === -ry || j === ry || w <= 1) g.rect(-w * A, cy + j * A, (2 * w + 1) * A, A);

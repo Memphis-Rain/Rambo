@@ -260,6 +260,7 @@ function _demoAimAt(wx, wy) {
 // Per-frame scratch storage (the bot allocates nothing per frame)
 const _demoNearE = [], _demoNearD = [], _demoObs = [], _demoLogs = [];
 const _demoAim = { x: 0, y: 0 };
+const _demoWadeAim = { x: 0, y: 0 };
 const _demoPhys = new Float32Array(8);   // per-move water/obstacle penalty (D3a)
 const _demoScores = new Float32Array(8); // per-move total score this frame
 
@@ -664,7 +665,9 @@ function _demoBot(dt) {
   if (tgt) {
     const tvx = tgt.stunTimer > 0 ? (tgt.knockbackX || 0) : (tgt.vx || 0);
     const tvy = tgt.stunTimer > 0 ? (tgt.knockbackY || 0) : (tgt.vy || 0);
-    const aim = demoAimLead(p.x, p.y, tgt.x, tgt.y, tvx, tvy, wep.speed, _demoAim);
+    // W2: a wading target is hit on its visible column, not at its feet
+    const ap = aimPointOf(tgt, _demoWadeAim);
+    const aim = demoAimLead(p.x, p.y, ap.x, ap.y, tvx, tvy, wep.speed, _demoAim);
     _demoAimAt(aim.x + _demo.jx, aim.y + _demo.jy);
   } else {
     // Look where we're going
