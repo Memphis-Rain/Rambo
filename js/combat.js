@@ -182,7 +182,7 @@ function updatePlayer(dt) {
   // already aims at led ground points.
   if (!(typeof demoActive !== 'undefined' && demoActive)) {
     const picked = pickEnemyAtScreen(mouseX - ox, mouseY - oy);
-    if (picked) { mouseWorldX = picked.x; mouseWorldY = picked.y; }
+    if (picked) { aimPointOf(picked, _aimPt); mouseWorldX = _aimPt.x; mouseWorldY = _aimPt.y; } // W2: visible column when wading
     _aimPicked = picked;
   } else _aimPicked = null;
   p.aimAngle = Math.atan2(mouseWorldY - p.y, mouseWorldX - p.x);
@@ -193,7 +193,8 @@ function updatePlayer(dt) {
     // measured from the gun hand's height (8 art px up), not the feet
     const e = _aimPicked;
     smx = (e.x - e.y) - sp.x;
-    smy = (e.x + e.y) * CFG.ISO_SCALE - ENEMY_PICK_H * 0.45 * e.size - (sp.y - PLAYER_HAND_H);
+    const th = e.submerge > 0 ? (entityWaterlineH(e) + ENEMY_BODY_H * e.size) * 0.5 : ENEMY_PICK_H * 0.45 * e.size;
+    smy = (e.x + e.y) * CFG.ISO_SCALE - th - (sp.y - PLAYER_HAND_H);
   }
   p.angle = Math.atan2(smy, smx);
 
@@ -452,7 +453,9 @@ function updateEnemies(dt) {
       if (e.fireTimer <= 0 && d < t.range) {
         e.fireTimer = t.fireRate * randRange(0.8, 1.2);
         const spread = 0.15;
-        const a = e.angle + randRange(-spread, spread);
+        // W2: at a wading player, aim at the visible body column
+        const aim = player.submerge > 0 ? Math.atan2(aimPointOf(player, _aimPt).y - e.y, _aimPt.x - e.x) : e.angle;
+        const a = aim + randRange(-spread, spread);
         const bs = t.bulletSpeed || 400;
         if (bullets.length < CFG.MAX_BULLETS) {
           bullets.push({
@@ -923,7 +926,7 @@ function updateBullets(dt) {
     const minY = Math.min(py, b.y), maxY = Math.max(py, b.y);
     const step60 = Math.sqrt(b.vx * b.vx + b.vy * b.vy) / 60; // path per 60 Hz frame
     const fresh = b.fresh; b.fresh = false;
-    let nearT = 2, nearE = null, nearB = null, nearO = null;
+    let nearT = 2, nearE = null, nearB = null, nearO = null, nearW = false;
     const byPlayer = b.owner === 'player';
 
     // Explosive barrels (G12b) and env blockers (E3/E4: tree trunks, stumps,
@@ -939,7 +942,7 @@ function updateBullets(dt) {
             hitBarrel(obj, b.dmg * pierceHits(px, py, sdx, sdy, len2, obj.x, obj.y, 14, step60), byPlayer);
         } else {
           const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, 14);
-          if(t >= 0 && t < nearT){ nearT = t; nearB = obj; nearO = null; }
+          if(t >= 0 && t < nearT){ nearT = t; nearB = obj; nearO = null; nearW = false; }
         }
         continue;
       }
@@ -955,7 +958,7 @@ function updateBullets(dt) {
           b.dmg * pierceHits(px, py, sdx, sdy, len2, obj.x, obj.y, hr, step60), byPlayer, true);
       } else {
         const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, hr);
-        if(t >= 0 && t < nearT){ nearT = t; nearO = obj; nearB = null; }
+        if(t >= 0 && t < nearT){ nearT = t; nearO = obj; nearB = null; nearW = false; }
       }
     }
 
@@ -967,21 +970,45 @@ function updateBullets(dt) {
         // G13: body column from the feet up along iso screen-up (head height)
         const k = bodyColumnK(ENEMY_BODY_H * e.size);
         if(e.x + r < minX || e.x - k - r > maxX || e.y + r < minY || e.y - k - r > maxY) continue;
-        const t = segCapsuleT(px, py, sdx, sdy, len2, e.x, e.y, e.x - k, e.y - k, r);
+        // W2: wading, only the column above the waterline is hittable
+        // (contact explosives still go off on the whole body region, G13c)
+        const kw = e.submerge > 0 && !b.explosive ? bodyColumnK(entityWaterlineH(e)) : 0;
+        const rv = e.submerge > 0 ? wadeRadius(e, r) : r;
+        const t = segCapsuleT(px, py, sdx, sdy, len2, e.x - kw, e.y - kw, e.x - k, e.y - k, rv);
         if(b.pierce){
           // G12a: one hit per pass, worth as many hits as the old per-60Hz-frame
           // overlap gave (chord / step, through a circle at the column point
           // the path passes closest to), so balance holds at any frame rate
           if(t >= 0 && (_capStartOutside || fresh)) {
-            capsuleLinePoint(px, py, sdx, sdy, e.x, e.y, e.x - k, e.y - k);
-            bulletHitEnemy(b, e, pierceHits(px, py, sdx, sdy, len2, _capCx, _capCy, r, step60));
+            capsuleLinePoint(px, py, sdx, sdy, e.x - kw, e.y - kw, e.x - k, e.y - k);
+            bulletHitEnemy(b, e, pierceHits(px, py, sdx, sdy, len2, _capCx, _capCy, rv, step60));
+          } else if(t < 0 && kw > 0) {
+            const tw = segCapsuleT(px, py, sdx, sdy, len2, e.x, e.y, e.x - kw, e.y - kw, r);
+            if(tw >= 0 && (_capStartOutside || fresh) && !wadeVisibleAhead(px, py, sdx, sdy, tw, e.x - kw, e.y - kw, e.x - k, e.y - k, rv, 1.5 * k + 2 * r))
+              spawnWaterSplash(px + sdx * tw, py + sdy * tw);
           }
-        } else if(t >= 0 && t < nearT){ nearT = t; nearE = e; nearB = null; nearO = null; }
+        } else if(t >= 0) {
+          if(t < nearT){ nearT = t; nearE = e; nearW = false; nearB = null; nearO = null; }
+        } else if(kw > 0) {
+          // only the submerged part is on the path: the round goes into the water
+          const tw = segCapsuleT(px, py, sdx, sdy, len2, e.x, e.y, e.x - kw, e.y - kw, r);
+          if(tw >= 0 && tw < nearT && !wadeVisibleAhead(px, py, sdx, sdy, tw, e.x - kw, e.y - kw, e.x - k, e.y - k, rv, 1.5 * k + 2 * r)){
+            nearT = tw; nearE = null; nearW = true; nearB = null; nearO = null;
+          }
+        }
       }
     } else {
       // Enemy bullet -> player (unless a barrel or trunk is nearer on its path)
       const kp = bodyColumnK(PLAYER_BODY_H);
-      const t = segCapsuleT(px, py, sdx, sdy, len2, player.x, player.y, player.x - kp, player.y - kp, 16);
+      const kw = player.submerge > 0 && !b.explosive ? bodyColumnK(entityWaterlineH(player)) : 0; // W2
+      const rpv = kw > 0 ? wadeRadius(player, 16) : 16;
+      const t = segCapsuleT(px, py, sdx, sdy, len2, player.x - kw, player.y - kw, player.x - kp, player.y - kp, rpv);
+      if(t < 0 && kw > 0){
+        const tw = segCapsuleT(px, py, sdx, sdy, len2, player.x, player.y, player.x - kw, player.y - kw, 16);
+        if(tw >= 0 && tw < nearT && !wadeVisibleAhead(px, py, sdx, sdy, tw, player.x - kw, player.y - kw, player.x - kp, player.y - kp, rpv, 1.5 * kp + 32)){
+          nearT = tw; nearW = true; nearB = null; nearO = null;
+        }
+      }
       if(t >= 0 && t < nearT){
         b.x = px + sdx * t; b.y = py + sdy * t;
         damagePlayer(b.dmg);
@@ -992,9 +1019,14 @@ function updateBullets(dt) {
     }
 
     // Non-piercing: the nearest enemy, barrel or env blocker on the path takes the hit
-    if(nearE || nearB || nearO){
+    if(nearE || nearB || nearO || nearW){
       b.x = px + sdx * nearT; b.y = py + sdy * nearT; // impact point
       if(nearE) bulletHitEnemy(b, nearE, 1);
+      else if(nearW){
+        // W2: below a wader's waterline: splash, no hit (explosives still go off)
+        spawnWaterSplash(b.x, b.y);
+        if(b.explosive) _bulletExplode(b);
+      }
       else if(nearB) hitBarrel(nearB, b.dmg, byPlayer);
       else {
         envBulletHit(nearO, b.x, b.y, b.vx, b.vy, b.dmg, byPlayer);
@@ -1090,6 +1122,7 @@ function enemyBobUp(e) { const s = e.size || 1; return 3 * (s > 1.6 ? Math.round
 // G13: front-most enemy whose drawn body contains screen point (sx, sy)
 // (world-screen coordinates, i.e. toScreen space), or null
 let _aimPicked = null; // enemy the cursor picked this frame (G13)
+const _aimPt = { x: 0, y: 0 };
 let _grenadeKeyHeld = false, _grenadeWant = false; // N1: F edge latch / pending throw
 function pickEnemyAtScreen(sx, sy) {
   let best = null, bestDepth = -Infinity;
@@ -1099,11 +1132,22 @@ function pickEnemyAtScreen(sx, sy) {
     if (e.dead) continue;
     const ex = e.x - e.y, ey = (e.x + e.y) * iso;
     const hw = 10 * e.size + 3;
-    if (sx < ex - hw || sx > ex + hw || sy > ey + 6 || sy < ey - ENEMY_PICK_H * e.size - 3 - enemyBobUp(e)) continue;
+    const bot = e.submerge > 0 ? ey - entityWaterlineH(e) + 2 : ey + 6; // W2: not below the waterline
+    if (sx < ex - hw || sx > ex + hw || sy > bot || sy < ey - ENEMY_PICK_H * e.size - 3 - enemyBobUp(e)) continue;
     const depth = e.x + e.y; // larger depth draws on top
     if (depth > bestDepth) { bestDepth = depth; best = e; }
   }
   return best;
+}
+
+// W2: from the wet-zone entry (segment param tw), does the round's onward
+// path cross the visible (above-waterline) capsule within L? Then it hits
+// that in a later frame rather than going into the water now.
+function wadeVisibleAhead(x0, y0, dx, dy, tw, ax, ay, bx, by, r, L) {
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 1e-9) return false;
+  const ux = dx / len * L, uy = dy / len * L;
+  return segCapsuleT(x0 + dx * tw, y0 + dy * tw, ux, uy, L * L, ax, ay, bx, by, r) >= 0;
 }
 
 // G13: earliest t in [0,1] where segment (x0,y0)+t*(dx,dy) comes within r of

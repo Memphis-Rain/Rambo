@@ -33,6 +33,8 @@ const CFG = {
   MAX_GIBS: 160,
   MAX_DMG_NUMBERS: 60,
   SHAKE_MAX: 20, // J5a: screen px; addShake clamps to this
+  // M9 W2: wading
+  WADE_RAMP: 0.25,             // s for the waterline to rise/fall fully
   // M9 N1: grenades (F)
   GRENADE_DMG: 200,            // RPG path: splash 0.7 x dmg x (1 - d/R), no direct hit
   GRENADE_RADIUS: 140,
