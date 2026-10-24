@@ -147,4 +147,51 @@ test.describe('T11 attract mode', () => {
     await waitForDemo(game, false, 2_000);
     await expect(page.locator('#start-screen')).toBeVisible();
   });
+
+  test('D4: the demo starts at wave 10', async ({ game }) => {
+    test.skip(!LANDED.FU1, 'follow-up FU1 not landed (tests/milestones.js)');
+    await bootTitle(game, 1);
+    await waitForDemo(game, true, 10_000);
+    await game.page.waitForFunction(() => wave > 0, null, { timeout: 10_000 });
+    expect(await game.eval(() => wave)).toBeGreaterThanOrEqual(10);
+    // Wave-10 enemy types are in the spawn pool.
+    const types = await game.eval(() => ENEMY_TYPES.filter((t) => t.wave <= wave).map((t) => t.name));
+    expect(types).toEqual(expect.arrayContaining(['Berserker', 'Bomber', 'Commando']));
+  });
+
+  test('D5: the title overlay does not hide the demo; DEMO banner and prompt are on screen', async ({ game, page }, testInfo) => {
+    test.skip(!LANDED.FU1, 'follow-up FU1 not landed (tests/milestones.js)');
+    await bootTitle(game, 1);
+    await waitForDemo(game, true, 10_000);
+    await game.page.waitForFunction(() => demoState().elapsed > 2, null, { timeout: 15_000 });
+    // Score/HUD must be visible "as normal", so the full-screen title DOM must not cover the canvas.
+    const cover = await game.eval(() => {
+      const el = document.getElementById('start-screen');
+      const cs = getComputedStyle(el);
+      const hidden = cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0;
+      return { hidden, top: document.elementFromPoint(W / 2, 40)?.id || '', bottom: document.elementFromPoint(W / 2, H - 30)?.id || '' };
+    });
+    expect(cover.hidden, 'D5: #start-screen hidden during the demo').toBe(true);
+    // Sample over > 1 blink period so a blinking banner is caught in its "on" phase.
+    const texts = new Set();
+    for (let i = 0; i < 8; i++) {
+      for (const t of await game.eval(() => {
+        const out = [];
+        const walk = (n) => {
+          if (!n || n.visible === false || n.worldAlpha === 0) return;
+          if (typeof n.text === 'string' && n.text) out.push(n.text);
+          (n.children || []).forEach(walk);
+        };
+        walk(app.stage);
+        // The overlay may also be DOM; innerText skips hidden elements.
+        out.push(document.body.innerText);
+        return out;
+      })) texts.add(t.toUpperCase());
+      await page.waitForTimeout(250);
+    }
+    await game.snap(testInfo, 'D5-demo-overlay.png');
+    const all = [...texts].join(' | ');
+    expect(all, 'D5: DEMO banner').toMatch(/\bDEMO\b/);
+    expect(all, 'D5: bottom prompt').toMatch(/PRESS ANY KEY OR CLICK TO PLAY/);
+  });
 });
