@@ -230,6 +230,9 @@ Classic 90s arcade behaviour: if nobody touches the game on the title screen for
     - ≤ **0.8 reversals/s** on average.
     - ≤ **3** jitter-in-place windows per 90 s (≥ 3 reversals within 1 s, with net/path displacement < 0.3 and no dodge in the window).
     - Kills stay ≥ 90% of the current rate (58–73 per 60 s).
+    - **Kill-rate check (decision, Ralph):** kills are Poisson-noisy (~±10% per 90 s sample).
+      - CI fails only when the rate is *significantly* low: `killRate + 2·sqrt(kills)/gameSecs < 0.9·baseline`.
+      - The manual demo/perf script runs 5 × 60 s and applies the plain ≥ 90% bar.
   - Priority: after M7 P1. It doesn't block a push.
 - **D4. Showcase script.**
   - The demo starts with all weapons unlocked and cycles to the next weapon every ~8 s, so viewers see the whole arsenal: explosions, Tesla chains, railgun beams, gore.
