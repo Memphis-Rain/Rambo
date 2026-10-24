@@ -335,10 +335,8 @@ function sortTriangles(projected, positions3D) {
 // =====================================================================
 
 function buildTreeGeometry(radius, height) {
-  const parts = [];
 
   // Shadow disc (flat ellipse at ground level)
-  const shadow = generateCylinder(0, 0, 0, 8);
   // Build shadow as a simple flat disc manually
   const shadowVerts = { positions: [0, 0.1, 0], normals: [0, -1, 0], indices: [] };
   const shadowSegs = 10;

@@ -871,17 +871,10 @@ function renderPixiVignettes(hpRatio) {
     hudElements.invincGraphics.visible = false;
   }
 
-  // Low health red vignette
+  // Low health red vignette (stepped edge rings; strength 0..1)
   hudElements.vignetteGraphics.clear();
   if (hpRatio < 0.3) {
-    for (let i = 0; i < 10; i++) {
-      const radius = H * 0.3 + (H * 0.4) * (i / 10);
-      const alpha = (i / 10) * (1 - hpRatio / 0.3) * 0.4;
-      hudElements.vignetteGraphics.alpha = alpha;
-      hudElements.vignetteGraphics.beginFill(0xb40000);
-      hudElements.vignetteGraphics.drawCircle(W / 2, H / 2, radius);
-      hudElements.vignetteGraphics.endFill();
-    }
+    drawEdgeVignette(hudElements.vignetteGraphics, 0xb40000, 1 - hpRatio / 0.3);
     hudElements.vignetteGraphics.visible = true;
   } else {
     hudElements.vignetteGraphics.visible = false;
@@ -890,17 +883,22 @@ function renderPixiVignettes(hpRatio) {
   // Shield break blue vignette
   hudElements.shieldVignetteGraphics.clear();
   if (player && player.shield <= 0 && shieldRegenTimer < 0.5) {
-    for (let i = 0; i < 10; i++) {
-      const radius = H * 0.35 + (H * 0.35) * (i / 10);
-      const alpha = (i / 10) * (1 - shieldRegenTimer / 0.5) * 0.2;
-      hudElements.shieldVignetteGraphics.alpha = alpha;
-      hudElements.shieldVignetteGraphics.beginFill(0x3250c8);
-      hudElements.shieldVignetteGraphics.drawCircle(W / 2, H / 2, radius);
-      hudElements.shieldVignetteGraphics.endFill();
-    }
+    drawEdgeVignette(hudElements.shieldVignetteGraphics, 0x3250c8, (1 - shieldRegenTimer / 0.5) * 0.6);
     hudElements.shieldVignetteGraphics.visible = true;
   } else {
     hudElements.shieldVignetteGraphics.visible = false;
+  }
+}
+
+// Screen-edge vignette as 4 hard-edged rings (full-screen rect with an
+// elliptical hole), so the centre of the screen stays clear
+function drawEdgeVignette(g, color, strength) {
+  g.alpha = 1;
+  const steps = 4;
+  for (let i = 0; i < steps; i++) {
+    const t = (i + 1) / steps;
+    g.rect(0, 0, W, H).fill({ color, alpha: 0.09 * strength });
+    g.ellipse(W / 2, H / 2, W * (0.62 - 0.07 * t), H * (0.62 - 0.07 * t)).cut();
   }
 }
 

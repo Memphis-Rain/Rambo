@@ -19,12 +19,51 @@ function createPlayer() {
     invincible: 0, spinUp: 0, hitFlash: 0,
     damageNumbers: [],
     specialCharge: 0, specialCooldown: 0,
+    // Animation state (render-only)
+    walkDist: 0, recoilT: 0, recoilMag: 0,
+    idleT: 0, fidgetT: 0,
+    bloodyFeet: 0, footStep: 0, hurtFlash: 0,
   };
+}
+
+// Hit-stop (G9): the main loop skips update() while this is above 0
+let hitStopTimer = 0;
+function addHitStop(sec) {
+  hitStopTimer = Math.min(0.1, Math.max(hitStopTimer, sec));
+}
+
+// Damage sources (decide death style: corpse, gibs, disintegration)
+const SRC_BULLET = 0, SRC_EXPLOSIVE = 1, SRC_BFG = 2, SRC_RAIL = 3, SRC_DISINT = 4, SRC_SHOCK = 5;
+
+// Render-only animation timers shared by player and enemies
+function _tickAnimTimers(o, dt) {
+  if (o.recoilT > 0) o.recoilT -= dt;
+  if (o.attackT > 0) o.attackT -= dt;
+  if (o.healPulse > 0) o.healPulse -= dt;
+  if (o.healGlow > 0) o.healGlow -= dt;
+}
+
+// Bloody footprints (G7) after walking through a pool
+function _updateFootprints(p, dt) {
+  if (isBloodAt(p.x, p.y)) p.bloodyFeet = 3;
+  if (p.bloodyFeet <= 0) return;
+  p.bloodyFeet -= dt;
+  const step = Math.floor(p.walkDist / 15);
+  if (step === p.footStep) return;
+  p.footStep = step;
+  if (!p.walking) return;
+  const a = Math.atan2(p.vy, p.vx);
+  const side = (step & 1) ? 3 : -3;
+  const d = addDecal(DECAL_FOOT, p.x - Math.sin(a) * side, p.y + Math.cos(a) * side, 2, BLOOD_COLORS[3], a);
+  d.alpha = p.bloodyFeet > 2 ? 0.9 : p.bloodyFeet > 1 ? 0.6 : 0.35;
 }
 
 function updatePlayer(dt) {
   const p = player;
   if (!p) return;
+  const px0 = p.x, py0 = p.y;
+  _tickAnimTimers(p, dt);
+  if (p.hurtFlash > 0) p.hurtFlash = Math.max(0, p.hurtFlash - dt * 2.5);
 
   // Regen
   p.hp = Math.min(p.hp + CFG.PLAYER_REGEN * dt, p.maxHp);
@@ -101,14 +140,29 @@ function updatePlayer(dt) {
   // Collision with trees, rocks, boulders
   resolveEnvCollision(p, 10);
 
+  // Walk cycle phase follows distance actually travelled (A1)
+  if (p.walking) p.walkDist += dist(px0, py0, p.x, p.y);
+  _updateFootprints(p, dt);
+
+  // Idle fidget (A2)
+  if (p.walking || mouseDown) { p.idleT = 0; p.fidgetT = 0; }
+  else {
+    p.idleT += dt;
+    if (p.fidgetT > 0) p.fidgetT -= dt;
+    else if (p.idleT > 3 && Math.random() < dt * 0.6) p.fidgetT = 0.7;
+  }
+
   // Mouse aiming
-  const worldMouse = toWorld(mouseX - W/2 + cam.x, mouseY - H/2 + cam.y);
+  // Map through the offset the world was actually drawn at (Q5: exact with pixel snapping)
+  const ox = worldOffsetX !== null ? worldOffsetX : W/2 - cam.x;
+  const oy = worldOffsetY !== null ? worldOffsetY : H/2 - cam.y;
+  const worldMouse = toWorld(mouseX - ox, mouseY - oy);
   mouseWorldX = worldMouse.x;
   mouseWorldY = worldMouse.y;
   p.aimAngle = Math.atan2(mouseWorldY - p.y, mouseWorldX - p.x);
   const sp = toScreen(p.x, p.y);
-  const smx = mouseX - W/2 + cam.x - sp.x;
-  const smy = mouseY - H/2 + cam.y - sp.y;
+  const smx = mouseX - ox - sp.x;
+  const smy = mouseY - oy - sp.y;
   p.angle = Math.atan2(smy, smx);
 
   // Weapon switching (1-9, 0 for 10th, - for 11th)
@@ -150,6 +204,7 @@ function updatePlayer(dt) {
     p.dodging = true; p.dodgeTimer = CFG.DODGE_DURATION;
     p.dodgeCooldown = CFG.DODGE_COOLDOWN;
     p.dodgeAngle = len > 0 ? Math.atan2(p.vy, p.vx) : p.angle;
+    spawnSmoke(p.x, p.y, 4);
   }
 
   // === RIGHT-CLICK SPECIAL: SHOCKWAVE ===
@@ -171,7 +226,7 @@ function updatePlayer(dt) {
         e.stunTimer = 0.4;
         e.knockbackX = (e.x-p.x)/d * kb;
         e.knockbackY = (e.y-p.y)/d * kb;
-        _pendingDamage.push({ target: e, dmg: CFG.SPECIAL_DAMAGE * (1 - d/CFG.SPECIAL_RADIUS), angle: Math.atan2(e.y-p.y, e.x-p.x) });
+        _pendingDamage.push({ target: e, dmg: CFG.SPECIAL_DAMAGE * (1 - d/CFG.SPECIAL_RADIUS), angle: Math.atan2(e.y-p.y, e.x-p.x), src: SRC_SHOCK });
       }
     }
   }
@@ -215,12 +270,17 @@ function updatePlayer(dt) {
               explosive: wep.explosive, radius: wep.radius||0,
               glow: wep.glow, chain: wep.chain||0, chainRange: wep.chainRange||0,
               beam: wep.beam, disintegrate: wep.disintegrate,
+              bfg: wep.name === 'BFG',
             });
           }
         }
 
-        spawnMuzzleFlash(muzzleX, muzzleY, aim);
-        if (wep.shellSize > 0) spawnShellCasing(p.x, p.y, aim);
+        // Recoil pose (A3): ~2 frames, size from weapon kickback
+        p.recoilT = 0.04;
+        p.recoilMag = Math.min(4, 1 + Math.round(wep.kickback / 5));
+        p.idleT = 0; p.fidgetT = 0;
+        spawnMuzzleFlash(muzzleX, muzzleY, aim, 0.7 + wep.kickback * 0.06);
+        if (wep.shellSize > 0) spawnShellCasing(p.x, p.y, aim, wep.shellSize);
 
         const soundMap = {0:'pistol',1:'smg',2:'shotgun',3:'rifle',4:'minigun',5:'rocket',6:'plasma',7:'tesla',8:'railgun',9:'bfg',10:'disintegrator'};
         playSound(soundMap[p.weapon] || 'pistol', 0.8);
@@ -258,6 +318,7 @@ function spawnEnemy(type, x, y, bossData) {
     hitFlash: 0, size: t.size,
     stunTimer: 0, knockbackX:0, knockbackY:0,
     walking: false,
+    walkDist: Math.random() * 40, recoilT: 0, attackT: 0, healPulse: 0, healGlow: 0, distToPlayer: 9999,
     shieldHp: t.hasShield ? t.shieldHp * (1 + wave*0.04) : 0,
     maxShieldHp: t.hasShield ? t.shieldHp * (1 + wave*0.04) : 0,
   };
@@ -284,6 +345,13 @@ function updateEnemies(dt) {
     const e = enemies[i];
     if (e.dead) { enemies.splice(i, 1); continue; } // cleanup strays
     const t = ENEMY_TYPES[e.type];
+    _tickAnimTimers(e, dt);
+    if (e.hitFlash > 0) e.hitFlash -= dt;
+
+    // Wound drips (G7): below 50% HP, faster when nearly dead
+    if (e.hp < e.maxHp * 0.5 && Math.random() < dt * (e.hp < e.maxHp * 0.25 ? 10 : 5)) {
+      spawnBloodDrip(e.x, e.y, 14 * e.size);
+    }
 
     if (e.stunTimer > 0) {
       e.stunTimer -= dt;
@@ -293,11 +361,12 @@ function updateEnemies(dt) {
       e.knockbackY *= 0.9;
       continue;
     }
-    if (e.hitFlash > 0) e.hitFlash -= dt;
+    const ex0 = e.x, ey0 = e.y;
 
     const dx = player.x - e.x, dy = player.y - e.y;
     const d = Math.sqrt(dx*dx+dy*dy);
     e.angle = Math.atan2(dy, dx);
+    e.distToPlayer = d; // render telegraphs (bomber blink, sniper laser)
 
     // === MEDIC behavior ===
     if (t.healer) {
@@ -310,9 +379,11 @@ function updateEnemies(dt) {
           if (d2 < 150) {
             e2.hp = Math.min(e2.hp + 25, e2.maxHp);
             e.fireTimer = t.fireRate;
-            // Heal visual
-            spawnParticle(e2.x, e2.y, 0, -30, 0.4, 4, '#0f0', 'flash', {fadeStart:0});
-            spawnParticle(e2.x, e2.y, 0, -20, 0.3, 3, '#8f8', 'flash', {fadeStart:0});
+            // Heal visual (A5): pulse on the medic, glow on the patient
+            e.healPulse = 0.45;
+            e2.healGlow = 0.3;
+            spawnParticle(e2.x, e2.y, 0, 0, 0.4, 4, 0x40ff40, 'flash', OPT_FLASH, 20, 40);
+            spawnParticle(e2.x, e2.y, 0, 0, 0.3, 3, 0xa0ffa0, 'flash', OPT_FLASH, 28, 30);
             break;
           }
         }
@@ -356,7 +427,8 @@ function updateEnemies(dt) {
             explosive: t.explosive, radius: t.explosive?60:0,
           });
         }
-        spawnMuzzleFlash(e.x + Math.cos(a)*10, e.y + Math.sin(a)*10, a);
+        e.recoilT = 0.06;
+        spawnMuzzleFlash(e.x + Math.cos(a)*10, e.y + Math.sin(a)*10, a, t.explosive ? 1.6 : 0.8, 14 * e.size);
       }
     } else {
       // Melee enemy
@@ -370,6 +442,7 @@ function updateEnemies(dt) {
         e.fireTimer -= dt;
         if (e.fireTimer <= 0) {
           e.fireTimer = 0.8;
+          e.attackT = 0.25; // melee swing pose
           damagePlayer(e.dmg);
         }
       }
@@ -406,6 +479,8 @@ function updateEnemies(dt) {
 
     // Collision with trees, rocks, boulders
     resolveEnvCollision(e, 8 * e.size);
+
+    if (e.walking) e.walkDist = (e.walkDist || 0) + dist(ex0, ey0, e.x, e.y);
   }
 }
 
@@ -429,50 +504,60 @@ function resolveEnvCollision(entity, entityRadius) {
   }
 }
 
-function damageEnemy(e, dmg, bulletAngle) {
+const HIT_FLASH_TIME = 2 / 60; // G1: two 60 Hz frames of solid white
+
+function damageEnemy(e, dmg, bulletAngle, src=SRC_BULLET) {
   if (e.dead) return; // already killed - prevent double processing
   const t = ENEMY_TYPES[e.type];
+  const numZ = 22 * e.size + 16;
 
   // Shield absorbs damage first
   if (t.hasShield && e.shieldHp > 0) {
     e.shieldHp -= dmg;
-    e.hitFlash = 0.08;
+    e.hitFlash = HIT_FLASH_TIME;
     playSound('shield_hit', 0.25);
+    spawnDamageNumber(e, e.x, e.y, Math.round(dmg), DMG_SHIELD, numZ);
     if (e.shieldHp <= 0) {
       const overflow = -e.shieldHp;
       e.shieldHp = 0;
       playSound('shield_break', 0.4);
-      // Shield break particles
+      // Shield break shards
       for(let i=0;i<15;i++){
         const a = Math.random()*Math.PI*2;
         spawnParticle(e.x, e.y, Math.cos(a)*100, Math.sin(a)*100,
-          0.3, 3, '#48f', 'fire', {gravity:0, friction:0.9, shrink:true});
+          0.3, 2, i & 1 ? 0x4080ff : 0xa0c8ff, 'spark', OPT_SPARK, 12 * e.size, randRange(20, 120));
       }
       if (overflow > 0) {
         e.hp -= overflow;
-        if (e.hp <= 0) killEnemy(e, bulletAngle);
+        if (e.hp <= 0) killEnemy(e, bulletAngle, src, false, overflow);
       }
     }
     return;
   }
 
+  const hpBefore = e.hp;
+  const overkill = dmg >= hpBefore * 2;
   e.hp -= dmg;
-  e.hitFlash = 0.1;
+  e.hitFlash = HIT_FLASH_TIME;
   e.stunTimer = 0.05;
-  const kb = 150 / (t.size);
+  // G2: knockback scales with damage; heavies and bosses resist
+  const heavy = t.name === 'Heavy' || t.name === 'Tank' || t.name === 'Juggernaut';
+  const resist = e.isBoss ? 0.2 : heavy ? 0.4 : 1;
+  const kb = clamp(50 + dmg * 2.5, 60, 400) * resist / t.size;
   e.knockbackX = Math.cos(bulletAngle) * kb;
   e.knockbackY = Math.sin(bulletAngle) * kb;
 
-  spawnBloodSpray(e.x, e.y, bulletAngle, 0.8);
+  spawnBloodSpray(e.x, e.y, bulletAngle, 0.6 + Math.min(1.2, dmg / 60), 12 * e.size);
+  spawnDamageNumber(e, e.x, e.y, Math.round(dmg), (overkill && e.hp <= 0) || dmg >= 150 ? DMG_CRIT : DMG_NORMAL, numZ);
   playSound('hit', 0.3);
 
-  if (e.hp <= 0) killEnemy(e, bulletAngle);
+  if (e.hp <= 0) killEnemy(e, bulletAngle, src, overkill, dmg);
 }
 
 // Deferred damage queue - prevents recursive bomber chain explosions from causing stack overflow
 let _pendingDamage = [];
 
-function killEnemy(e, bulletAngle) {
+function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
   if (e.dead) return; // already dead - prevent double processing
   e.dead = true; // mark immediately to prevent re-entry
 
@@ -511,34 +596,49 @@ function killEnemy(e, bulletAngle) {
       if (e2 === e || e2.dead) continue;
       const d2 = dist(e.x, e.y, e2.x, e2.y);
       if (d2 < r) {
-        _pendingDamage.push({ target: e2, dmg: 80*(1-d2/r), angle: Math.atan2(e2.y-e.y, e2.x-e.x) });
+        _pendingDamage.push({ target: e2, dmg: 80*(1-d2/r), angle: Math.atan2(e2.y-e.y, e2.x-e.x), src: SRC_EXPLOSIVE });
       }
     }
     const pd = dist(e.x, e.y, player.x, player.y);
     if (pd < r) damagePlayer(50*(1-pd/r));
-  } else {
-    // Normal blood death
-    spawnBloodSpray(e.x, e.y, Math.random()*Math.PI*2, 2.0);
-    spawnBloodSpray(e.x, e.y, Math.random()*Math.PI*2, 1.2);
-    for(let i=0;i<5;i++){
-      if (bloodPools.length < CFG.MAX_BLOOD_POOLS) {
-        bloodPools.push({
-          x: e.x + randRange(-18,18), y: e.y + randRange(-12,12),
-          radius: 3, maxRadius: randRange(14, 30),
-          color: `rgba(${90+randInt(0,40)},${randInt(0,8)},${randInt(0,8)},`,
-          alpha: 0.7, growing: true, createdAt: gameTime,
-        });
-      }
-    }
   }
 
-  // Dead body
-  if (bodies.length >= CFG.MAX_BODIES) bodies.shift();
-  bodies.push({
-    x: e.x, y: e.y, angle: e.angle + Math.PI,
-    type: e.type, size: t.size * (isBoss ? 2 : 1), alpha: 1,
-    color: t.color, createdAt: gameTime,
-  });
+  // === Death style (G5): disintegrate, gib, or fall and leave a corpse ===
+  const gib = src === SRC_EXPLOSIVE || src === SRC_BFG || src === SRC_RAIL || overkill || t.explodeOnDeath;
+  const torsoZ = 12 * e.size;
+  if (src === SRC_DISINT) {
+    spawnDisintegration(e.x, e.y);
+  } else if (gib) {
+    spawnGibs(e.x, e.y, bulletAngle, e.type, src === SRC_BFG ? 1.8 : 1.25, e.size);
+    spawnBloodSpray(e.x, e.y, bulletAngle, 2.2, torsoZ);
+    spawnBloodSpray(e.x, e.y, bulletAngle + Math.PI, 1.4, torsoZ);
+    addDecal(DECAL_POOL, e.x, e.y, 4, BLOOD_COLORS[3], 0, randRange(16, 26) * e.size);
+    addShake(4);
+    addHitStop(isBoss ? 0.08 : 0.04);
+  } else {
+    spawnBloodSpray(e.x, e.y, bulletAngle, 2.0, torsoZ);
+    spawnBloodSpray(e.x, e.y, Math.random()*Math.PI*2, 1.0, torsoZ);
+    if (isBoss) addHitStop(0.08);
+
+    // Corpse: knocked back along the shot, hops, falls over, then bleeds out
+    if (bodies.length >= CFG.MAX_BODIES) bodies.shift();
+    const shock = src === SRC_SHOCK;
+    const kb = (shock ? 380 : 110 + Math.min(200, lastDmg * 1.2)) / Math.max(1, t.size);
+    const kc = Math.cos(bulletAngle), ks = Math.sin(bulletAngle);
+    const ac = Math.cos(e.angle), as = Math.sin(e.angle);
+    bodies.push({
+      x: e.x, y: e.y, z: 0,
+      vx: kc * kb, vy: ks * kb, vz: shock ? 220 : randRange(80, 150),
+      angle: e.angle + Math.PI,
+      type: e.type, size: e.size, alpha: 1,
+      color: t.color, createdAt: gameTime, isBoss: !!isBoss,
+      fall: 0, fallDir: (kc - ks) >= 0 ? 1 : -1,
+      flip: (ac - as) >= 0 ? 1 : -1,
+      spin: (shock || lastDmg > 120) ? randRange(9, 15) * ((kc - ks) >= 0 ? 1 : -1) : 0,
+      spinAngle: 0, settled: false, smear: 0,
+      spurts: 3 + randInt(0, 2), spurtT: 0.15,
+    });
+  }
 
   // Health pickup (higher chance)
   if (Math.random() < (isBoss ? 0.8 : 0.12)) {
@@ -580,15 +680,17 @@ function processPendingDamage() {
     const batch = _pendingDamage.splice(0, _pendingDamage.length);
     for (const pd of batch) {
       if (!pd.target.dead) {
-        damageEnemy(pd.target, pd.dmg, pd.angle);
+        damageEnemy(pd.target, pd.dmg, pd.angle, pd.src || SRC_BULLET);
       }
     }
   }
-  _pendingDamage.length = 0; // safety clear
+  // G11: anything still queued (long bomber chains) carries over to the next
+  // frame, so chains keep cascading as a ripple instead of being dropped
 }
 
 function damagePlayer(dmg) {
   if (player.invincible > 0 || player.dodging) return;
+  if (typeof demoActive !== 'undefined' && demoActive) dmg *= CFG.DEMO_DAMAGE_MULT; // D4
 
   shieldRegenTimer = 0; // reset shield regen delay
 
@@ -607,9 +709,13 @@ function damagePlayer(dmg) {
   }
 
   player.hitFlash = 0.15;
+  // G10: screen-edge red flash, intensity from damage taken
+  player.hurtFlash = Math.min(1, player.hurtFlash + 0.25 + dmg / 60);
+  if (player.shield <= 0) spawnBloodSpray(player.x, player.y, Math.random() * Math.PI * 2, 0.5, 14);
   addShake(3);
 
   if (player.hp <= 0) {
+    if (typeof demoActive !== 'undefined' && demoActive) demoOnPlayerDeath(); // D6: demo ends on death
     // Near-death recovery (Rambo style)
     player.hp = player.maxHp * 0.3;
     player.shield = player.maxShield * 0.2;
@@ -635,13 +741,13 @@ function updateBullets(dt) {
     if(b.trail && Math.random()<0.5){
       const trailColor = b.glow ? b.color : '#ff8';
       spawnParticle(b.x, b.y, randRange(-10,10), randRange(-10,10),
-        0.15, b.beam?3:1.5, trailColor, 'trail', {shrink:true, fadeStart:0});
+        0.15, b.beam?3:1.5, trailColor, 'trail', OPT_TRAIL, 18, 0);
     }
 
     // Beam weapons leave a stronger trail
     if(b.beam && Math.random()<0.8){
       spawnParticle(b.x, b.y, randRange(-5,5), randRange(-5,5),
-        0.1, 2, b.color, 'flash', {shrink:true, fadeStart:0});
+        0.1, 2, b.color, 'trail', OPT_TRAIL, 18, 0);
     }
 
     // Barrel collisions
@@ -658,7 +764,7 @@ function updateBullets(dt) {
               const e2 = enemies[ei];
               if(e2.dead) continue;
               const ed = dist(obj.x, obj.y, e2.x, e2.y);
-              if(ed < 220) _pendingDamage.push({ target: e2, dmg: 200*(1-ed/220), angle: Math.atan2(e2.y-obj.y, e2.x-obj.x) });
+              if(ed < 220) _pendingDamage.push({ target: e2, dmg: 200*(1-ed/220), angle: Math.atan2(e2.y-obj.y, e2.x-obj.x), src: SRC_EXPLOSIVE });
             }
             const pd = dist(obj.x, obj.y, player.x, player.y);
             if(pd < 220) damagePlayer(80*(1-pd/220));
@@ -677,6 +783,7 @@ function updateBullets(dt) {
         const d = dist(b.x, b.y, e.x, e.y);
         if(d < 15 * e.size) {
           const bAngle = Math.atan2(b.vy, b.vx);
+          const src = b.disintegrate ? SRC_DISINT : b.explosive ? (b.bfg ? SRC_BFG : SRC_EXPLOSIVE) : b.beam ? SRC_RAIL : SRC_BULLET;
 
           // === CHAIN LIGHTNING (Tesla) ===
           if(b.chain > 0) {
@@ -701,12 +808,8 @@ function updateBullets(dt) {
             bullets.splice(i,1); break;
           }
 
-          // === DISINTEGRATE ===
-          if(b.disintegrate && e.hp - b.dmg <= 0) {
-            spawnDisintegration(e.x, e.y);
-          }
-
-          damageEnemy(e, b.dmg, bAngle);
+          // Disintegrator kills are handled in killEnemy (SRC_DISINT)
+          damageEnemy(e, b.dmg, bAngle, src);
 
           if(b.explosive){
             spawnExplosion(b.x, b.y, b.radius);
@@ -715,7 +818,7 @@ function updateBullets(dt) {
               if(e2.dead) continue;
               const d2 = dist(b.x, b.y, e2.x, e2.y);
               if(d2 < b.radius){
-                _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: Math.atan2(e2.y-b.y, e2.x-b.x) });
+                _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: Math.atan2(e2.y-b.y, e2.x-b.x), src });
               }
             }
           }
@@ -748,7 +851,7 @@ function spawnBoss(weaponIndex) {
   const sx = player.x + Math.cos(a) * (CFG.VIEW_RANGE + 80);
   const sy = player.y + Math.sin(a) * (CFG.VIEW_RANGE + 80);
 
-  const e = spawnEnemy(baseIdx, sx, sy, { name, hp: bossHp });
+  spawnEnemy(baseIdx, sx, sy, { name, hp: bossHp });
   showNotification(`BOSS: ${name}!`, 3);
   playSound('boss_spawn', 1);
   addShake(10);
