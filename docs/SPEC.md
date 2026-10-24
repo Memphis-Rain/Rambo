@@ -151,6 +151,10 @@ Because of M1, art must read at 1/3 resolution:
 - **J3. Debris shower**: dirt chunks plus tumbling shrapnel that settles.
 - **J4. Muzzle flashes**: two or three pixel-sprite flash shapes, picked at random per shot, with a size that depends on the weapon.
 - **J5. Screen shake tuning**: shake proportional to the event, with a cap so it stays playable.
+- **J5a. Shake cap & decay (decision, Ralph, B7).**
+  - `CFG.SHAKE_MAX = 20` screen px. That's the shockwave value, the largest legitimate source today, and every `addShake` clamps to it.
+  - Decay is frame-rate independent: `shakeMag *= Math.pow(0.85, dt * 60)`, which matches today's feel at 60 fps.
+  - Acceptance: the remaining shake 0.3 s after a hit is within 20% at 30 fps and at 60 fps.
 - **J6. Shell casings**: they bounce once and settle on the ground. This already partly exists; make it read at pixel scale.
 
 ## M5: Retro HUD & title (Josh)
