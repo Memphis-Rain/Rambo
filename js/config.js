@@ -16,7 +16,7 @@ const CFG = {
   SPECIAL_DAMAGE: 150,
   CAMERA_SMOOTH: 0.07,
   MAX_PARTICLES: 3000,
-  MAX_BLOOD_POOLS: 800,
+  MAX_BLOOD_POOLS: 2000,
   MAX_BODIES: 200,
   MAX_BULLETS: 400,
   MAX_ENEMIES: 80,
@@ -29,7 +29,15 @@ const CFG = {
   COMBO_TIMEOUT: 2.0,
   BODY_FADE_START: 15,
   BODY_FADE_END: 25,
-  UNCAPPED_FPS: true, // Disable vsync for raw performance testing
+  MAX_SHELLS: 150,
+  MAX_GIBS: 160,
+  MAX_DMG_NUMBERS: 60,
+  // Attract-mode demo (M6)
+  DEMO_IDLE_SECONDS: 5,
+  DEMO_MAX_SECONDS: 60,
+  DEMO_WEAPON_CYCLE: 8,
+  DEMO_DAMAGE_MULT: 0.25,
+  UNCAPPED_FPS: false, // R3: one update + render per display frame
 };
 
 // =====================================================================

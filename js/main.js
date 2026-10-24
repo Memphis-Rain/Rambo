@@ -132,10 +132,18 @@ function updateCamera(dt) {
 // =====================================================================
 // NOTIFICATIONS
 // =====================================================================
+// H3: pixel-font banner with a bounce-in and a stepped colour cycle (CSS in
+// game.html); long messages use the smaller size so they fit the screen
 function showNotification(text, duration=2) {
   notifText = text;
   notifTimer = duration;
   notifEl.textContent = text;
+  // .show runs the bounce + colour cycle; removed again once faded out
+  notifEl.className = text.length > 18 ? 'notification small show' : 'notification show';
+  // Restart the bounce-in for every new message
+  notifEl.style.animation = 'none';
+  void notifEl.offsetWidth;
+  notifEl.style.animation = '';
   notifEl.style.opacity = 1;
 }
 
@@ -143,34 +151,71 @@ function updateNotification(dt) {
   if(notifTimer > 0) {
     notifTimer -= dt;
     if(notifTimer <= 0.5) notifEl.style.opacity = notifTimer / 0.5;
-    if(notifTimer <= 0) notifEl.style.opacity = 0;
+    if(notifTimer <= 0) { notifEl.style.opacity = 0; notifEl.classList.remove('show'); }
   }
 }
 
 // =====================================================================
 // INPUT HANDLING
 // =====================================================================
+// A real (human) input: ends the demo (swallowed) or resets the title idle timer.
+// Returns true when the event must not reach the game.
+let _swallowClicksUntil = 0;
+function _realInput(pointer) {
+  if (typeof demoActive !== 'undefined' && demoActive) {
+    stopDemo();
+    // D6: the click that ends the demo must not also hit START (key exits
+    // have no click to swallow, so a quick real click still starts a game)
+    if (pointer) _swallowClicksUntil = performance.now() + 400;
+    return true;
+  }
+  if (!gameStarted && typeof demoNoteInput === 'function') demoNoteInput();
+  return false;
+}
+
 function initInput() {
   window.addEventListener('keydown', e => {
+    if (_realInput()) { e.preventDefault(); return; }
     keys[e.key.toLowerCase()] = true;
     if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase())) e.preventDefault();
     // F3: toggle debug overlay, F4: dump perf to console
     if(e.key === 'F3') { e.preventDefault(); showDebugOverlay = !showDebugOverlay; }
     if(e.key === 'F4') { e.preventDefault(); perfLog.dump(); }
-    if(e.key === 'p' || e.key === 'P') { if(gameStarted) { paused = !paused; if(!paused) gameLoop(performance.now()); else renderPauseOverlay(); } }
+    // F6/F7/F8: retro showcase toggles (R6)
+    if(e.key === 'F6') { e.preventDefault(); cycleRetroScale(); }
+    if(e.key === 'F7') { e.preventDefault(); toggleRetroDither(); }
+    if(e.key === 'F8') { e.preventDefault(); toggleRetroCRT(); }
+    if(e.key === 'p' || e.key === 'P') {
+      if(gameStarted) {
+        paused = !paused;
+        lastTime = performance.now();
+        renderPauseOverlay();
+      }
+    }
   });
   window.addEventListener('keyup', e => {
     keys[e.key.toLowerCase()] = false;
   });
+  // Capture-phase listener so a click anywhere (title included) ends the demo
+  window.addEventListener('mousedown', e => {
+    if (_realInput(true)) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+  window.addEventListener('click', e => {
+    if (performance.now() < _swallowClicksUntil) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+  window.addEventListener('wheel', () => { _realInput(); }, { passive: true });
   canvas.addEventListener('mousedown', e => {
     if(e.button === 0) { mouseDown = true; mouseJustPressed = true; }
     if(e.button === 2) { mouseRightDown = true; mouseRightJustPressed = true; }
   });
   canvas.addEventListener('mouseup', e => {
+    if (typeof demoActive !== 'undefined' && demoActive) return;
     if(e.button === 0) { mouseDown = false; mouseJustPressed = false; }
     if(e.button === 2) { mouseRightDown = false; }
   });
-  canvas.addEventListener('mousemove', e => {
+  window.addEventListener('mousemove', e => {
+    if (typeof demoNoteMouseMove === 'function') demoNoteMouseMove(e.clientX, e.clientY);
+    if (typeof demoActive !== 'undefined' && demoActive) return; // the bot owns the cursor
     mouseX = e.clientX;
     mouseY = e.clientY;
   });
@@ -256,28 +301,36 @@ function update(dt) {
 }
 
 // =====================================================================
-// GAME LOOP
+// GAME LOOP - driven by the Pixi ticker (requestAnimationFrame), once per
+// display frame (R3): HIGH = update + build graphics, NORMAL = low-res
+// world pass (retro.js), LOW = Pixi renders the stage.
 // =====================================================================
-function gameLoop(timestamp) {
-  if(!gameStarted) return;
-  if(paused) return;
-
-  // Use high-resolution timer for uncapped FPS mode
-  if(!timestamp) timestamp = performance.now();
-
+function gameLoop() {
+  const timestamp = performance.now();
   const frameMs = timestamp - lastTime;
-  dt = Math.min(frameMs / 1000, 0.05);
   lastTime = timestamp;
 
+  if(!gameStarted) {
+    if (typeof updateDemoIdle === 'function') updateDemoIdle(Math.min(frameMs / 1000, 0.1));
+    return;
+  }
+  if(paused) return;
+
+  dt = Math.min(frameMs / 1000, 0.05);
   perfLog.tick(frameMs);
 
   const t0 = performance.now();
-  update(dt);
+  // Hit-stop (G9): freeze the simulation briefly but keep rendering
+  if (hitStopTimer > 0) hitStopTimer -= dt;
+  else {
+    if (typeof demoActive !== 'undefined' && demoActive) updateDemo(dt);
+    if (gameStarted) update(dt); // updateDemo may have ended the demo
+  }
   const t1 = performance.now();
+  if (!gameStarted) return;
 
-  // Apply camera transform to worldContainer
-  worldContainer.x = W / 2 - cam.x + shakeX;
-  worldContainer.y = H / 2 - cam.y + shakeY;
+  // Pixel-snapped camera offset (R2)
+  updateRetroCamera();
 
   // Render with PixiJS - detailed timing per layer
   const tTerrain0 = performance.now();
@@ -300,8 +353,8 @@ function gameLoop(timestamp) {
   perfLog.terrainMs = tTerrain1 - tTerrain0;
   perfLog.spritesMs = tSprites1 - tSprites0;
   perfLog.hudMs = tHUD1 - tHUD0;
-  perfLog.totalCpuMs = t2 - t0; // Total JavaScript execution time
-  perfLog.gpuMs = frameMs - perfLog.totalCpuMs; // Estimate GPU time
+  perfLog.totalCpuMs = t2 - t0; // JS time; the GPU passes run later in the same tick
+  perfLog.gpuMs = Math.max(0, frameMs - perfLog.totalCpuMs);
   perfLog.snapshot();
 
   // Warn on slow frames
@@ -313,27 +366,20 @@ function gameLoop(timestamp) {
     perfLog.lastLogTime = timestamp;
     perfLog.dump();
   }
-
-  // Use uncapped loop or vsync'd requestAnimationFrame
-  if(CFG.UNCAPPED_FPS) {
-    setTimeout(() => gameLoop(performance.now()), 0);
-  } else {
-    requestAnimationFrame(gameLoop);
-  }
 }
 
-async function startGame() {
-  document.getElementById('start-screen').style.display = 'none';
-  if(!audioCtx) initAudio();
+let _renderLayersReady = false;
 
-  // Initialize PixiJS renderers
-  // await initTerrain(); // Wait for terrain textures to generate (legacy)
-  initPixiTerrain();   // Initialize PixiJS terrain textures
-  // initTreeShader();    // Initialize 3D tree mesh shader (removed for v8 compatibility)
-  initPixiSprites();   // Initialize sprite pools and particle containers
-  initPixiHUD();       // Initialize HUD elements
+// Reset ALL round state to a fresh game (used by startGame and the demo, D6)
+function resetRound() {
+  if (!_renderLayersReady) {
+    initPixiTerrain();   // Initialize PixiJS terrain textures
+    initPixiHUD();       // Initialize HUD elements
+    _renderLayersReady = true;
+  }
+  initPixiSprites();     // (Re)initialize sprite pools and caches (incl. decal layers)
+  resetDecalState();     // blood map + growing decals (D6: no trace between rounds)
 
-  // Reset game state
   gameTime = 0;
   score = 0;
   kills = 0;
@@ -348,7 +394,13 @@ async function startGame() {
   unlockedWeapons = 1;
   bossActive = false;
   bossTarget = -1;
+  pendingBossSpawn = -1;
   shieldRegenTimer = 0;
+  shakeX = 0; shakeY = 0; shakeMag = 0;
+  notifTimer = 0; notifEl.style.opacity = 0;
+  paused = false;
+  resetHitStop();
+  _pendingDamage.length = 0;
   enemies.length = 0;
   bullets.length = 0;
   particles.length = 0;
@@ -356,31 +408,66 @@ async function startGame() {
   bodies.length = 0;
   shells.length = 0;
   pickups.length = 0;
+  for (const sprite of chunkCache.values()) {
+    terrainContainer.removeChild(sprite);
+    sprite.destroy(true);
+  }
   chunkCache.clear();
   envObjects.length = 0;
   envChunks.clear();
   floatingTexts.length = 0;
   shockwaveEffects.length = 0;
+  gibs.length = 0;
+  dmgNumbers.length = 0;
+  decalVersion++;
+
+  Object.keys(keys).forEach(k => keys[k] = false);
+  mouseDown = false; mouseJustPressed = false;
+  mouseRightDown = false; mouseRightJustPressed = false;
 
   player = createPlayer();
   cam.x = 0; cam.y = 0;
-
-  gameStarted = true;
+  worldOffsetX = null; worldOffsetY = null;
   lastTime = performance.now();
+}
 
-  // Start game loop (uncapped or vsync'd based on config)
-  if(CFG.UNCAPPED_FPS) {
-    console.log('[RAMBO] Starting UNCAPPED FPS mode (vsync disabled)');
-    setTimeout(() => gameLoop(performance.now()), 0);
-  } else {
-    console.log('[RAMBO] Starting vsync mode (60 FPS cap)');
-    requestAnimationFrame(gameLoop);
+function startGame() {
+  if (typeof demoActive !== 'undefined' && demoActive) stopDemo();
+  document.getElementById('start-screen').style.display = 'none';
+  if(!audioCtx) initAudio();
+  resetRound();
+  gameStarted = true;
+  console.log('[RAMBO] Mission started');
+}
+
+// Boot failure (no WebGL, blocked GPU...): say so on the title instead of
+// leaving a disabled START button with no explanation
+function showBootError(err) {
+  console.error('[RAMBO] Boot failed:', err);
+  const startBtn = document.getElementById('start-btn');
+  if (startBtn) { startBtn.disabled = true; startBtn.textContent = 'WEBGL UNAVAILABLE'; }
+  const hint = document.getElementById('boot-error');
+  if (hint) {
+    hint.textContent = 'THIS GAME NEEDS WEBGL. ENABLE HARDWARE ACCELERATION OR TRY ANOTHER BROWSER.';
+    hint.style.display = 'block';
   }
 }
 
 // Initialize (async for PixiJS)
 (async function init() {
-  await initPixiApp();
-  initInput();
-  console.log('Game ready. Click START MISSION to begin.');
+  try {
+    const fontReady = loadHudFont(); // H1: fetch the pixel font while PixiJS starts
+    await initPixiApp();
+    initRetro();
+    // The HUD creates its Text on the first START/demo; the font must be ready by then
+    await fontReady;
+    initInput();
+    lastTime = performance.now();
+    app.ticker.add(gameLoop, null, PIXI.UPDATE_PRIORITY.HIGH);
+    const startBtn = document.getElementById('start-btn');
+    if (startBtn) startBtn.disabled = false;
+    console.log('Game ready. Press START to begin.');
+  } catch (err) {
+    showBootError(err);
+  }
 })();
