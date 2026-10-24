@@ -520,6 +520,100 @@ User: "when enemy or player enters water, only half the body should be visible (
 
 ---
 
+## M10: Xbox controller support (Josh) *(user request 2026-10-25)*
+
+User: "you can also add xbox joystick controller support".
+
+- Uses the browser **Gamepad API**, `standard` mapping. Xbox One/Series pads are the target, and any pad that reports the standard mapping works the same way.
+- Keyboard and mouse stay fully supported. **The last-used device wins.** Moving the mouse past 8 px or pressing a key switches back to mouse aim; a stick or button switches to pad.
+- One controller only: the first one connected.
+- Gameplay values don't change (Q4), with one exception: the C3 aim assist, which applies only while using the pad.
+
+- **C1. Polling.**
+  - Poll `navigator.getGamepads()` once per display frame, before the game update, in the same place keyboard and mouse state is consumed.
+  - No per-frame allocations beyond what the browser returns.
+  - "Just pressed" is edge-detected per button, so it works the same as `mouseRightJustPressed` and key-down.
+- **C2. Mapping (Xbox labels).** All pad indices follow the standard mapping.
+
+  | Input | Action |
+  |---|---|
+  | Left stick | Move |
+  | Right stick | Aim (twin-stick) |
+  | RT (analog > 0.3) | Fire |
+  | LT (analog > 0.3) | Shockwave (= right click) |
+  | LB / RB | Previous / next weapon |
+  | D-pad left / right | Previous / next weapon |
+  | A | Dodge roll |
+  | B | Grenade |
+  | X | Reload |
+  | Y | Next weapon |
+  | L3 (left stick click) | Sprint (toggle while moving, cancelled on stop) |
+  | Menu / Start | Pause |
+
+  - Deadzones are radial, 0.20 on both sticks, rescaled to 0..1 beyond the deadzone, so the pad doesn't drift.
+  - Analog movement: speed scales with stick magnitude, at full speed from 0.9 upward.
+- **C3. Aim.**
+  - The right stick sets the aim direction relative to the player. The aim **point** = player + direction × (180u + magnitude × 240u), i.e. 180–420u. Grenades (N1) land there.
+  - Releasing the stick (under the deadzone) keeps the last aim direction.
+  - With no right-stick input yet, the aim follows the left-stick movement direction.
+  - A pixel-art **reticle** (the H-series look) is drawn at the aim point while pad-aiming. The OS cursor is hidden then, and both switch back on a mouse move.
+  - G13 picking uses the reticle's screen position the same way it uses the cursor's, so headshots work with a pad.
+  - **Aim assist (pad only):**
+    - If an enemy's body lies within **±5°** of the aim ray and within 420u, the shot goes at that enemy (G13 aim point).
+    - Nearest along the ray wins. Bosses are included.
+    - Switchable with `CFG.PAD_AIM_ASSIST` (default on). Off for the demo bot.
+- **C4. Rumble.**
+  - Uses `vibrationActuator.playEffect('dual-rumble')` where it's supported, and fails silently elsewhere.
+  - Effects:
+    - each shot: weak motor ∝ weapon kickback, ≤ 60 ms;
+    - explosions: strong motor ∝ f for a near blast (J5a-style cap);
+    - taking damage: a short strong pulse;
+    - a tree falling nearby: a soft rumble.
+  - At most one new effect per 50 ms, so it doesn't saturate.
+  - `CFG.PAD_RUMBLE` (default on).
+- **C5. Menus and attract mode.**
+  - Any pad button, or a stick past the deadzone, counts as input for D-series demo stop and idle reset (`demoNoteInput`).
+  - A or Start on the title starts the game. Start pauses and resumes.
+  - Every menu or overlay that takes a click (game over/restart, pause) is reachable with A, B and Start.
+- **C6. Hot-plug.**
+  - On connect, show a toast "CONTROLLER CONNECTED" in the H-series pixel font, 2 s.
+  - If the pad in use disconnects mid-game, **auto-pause**, showing "CONTROLLER DISCONNECTED – PRESS START OR ANY KEY".
+- **C7. Legend.** While a pad is connected, the title screen shows a pad legend using the C2 labels instead of, or next to, the keyboard legend. It must fit at 800×600, like the N1 legend.
+- **Acceptance (Anna).**
+  - Tests use a **mocked `navigator.getGamepads`** with standard-mapping fake pads: the unit tests drive the mapping, and the e2e tests inject one into the page.
+  - Unit:
+    - Deadzone and rescale: 0.19 → 0, 0.2 + ε → ~0, 1 → 1, radial not per-axis.
+    - Every C2 button produces its action exactly once per press (edge detection).
+    - Aim point distance is 180–420u.
+    - The aim assist picks the nearest enemy in the ±5° cone and none outside it, and is off for the demo.
+    - Device switching (last used wins).
+  - e2e:
+    - A mocked pad moves the player, aims, fires and kills.
+    - B throws a grenade at the reticle.
+    - A dodges. Start pauses.
+    - A pad button stops the demo.
+    - Disconnect auto-pauses.
+    - Rumble is called (spy) with capped values, and an absent `vibrationActuator` raises no error.
+  - Manual: the user tests with a real Xbox pad. Josh and Anna verify with a real pad if one is available, and say so if not.
+- **Order:** after W2. It's independent of W3–W5 and F1–F4, so Josh may interleave it.
+
+## B: Build hygiene
+
+- **B1. Cache busting** (found by Anna, 2026-10-25).
+  - game.html's script and style tags carry no version, so a browser can run a **stale mix** of JS files after an update.
+    - Python http.server and GitHub Pages (max-age=600) both send cacheable responses.
+    - Anna reproduced it: a stale `config.js` meant `CFG.DEMO_IDLE_SECONDS` was undefined, so the demo never started.
+  - Fix:
+    - Every local `<script src>` and `<link href>` in game.html gets `?v=<BUILD>`.
+    - `BUILD` is one constant, bumped by a tiny npm script (`npm run stamp`, which writes the short git SHA or a timestamp into game.html) that runs before a release.
+    - Anna's vm loader and the e2e tests must strip the query.
+  - Acceptance:
+    - After a stamp, every local asset URL in game.html carries the same `?v=`.
+    - The unit loader still loads all scripts.
+    - A CI check fails if any local script tag lacks `?v=`.
+
+---
+
 ## T: Dev environment & testing (Anna)
 
 - **T1.** `npm install` works on a clean clone. `node_modules/`, `test-results/` and `playwright-report/` are git-ignored.
