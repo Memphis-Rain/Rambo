@@ -487,6 +487,7 @@ function bakeChunkWater(cx, cy) {
   }
   if (any) {
     const entry = { camo: _bakeWaterLayer(camo, w, h), ripA: _bakeWaterLayer(ripA, w, h), ripB: _bakeWaterLayer(ripB, w, h), x: ox0, y: oy0 };
+    entry.camo.position.set(ox0, oy0); // drifted per frame by renderPixiWaterOverlay
     entry.ripA.position.set(ox0, oy0);
     entry.ripB.position.set(ox0, oy0);
     waterCache.set(key, entry);
