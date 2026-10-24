@@ -89,3 +89,35 @@ test.describe('M5 / D6 start after demo', () => {
     expect(s).toEqual({ demo: false, score: 0, kills: 0, unlockedWeapons: 1, hud: true });
   });
 });
+
+test.describe('M5 review fixes', () => {
+  test('H4: without WebGL the title says WEBGL UNAVAILABLE and shows #boot-error', async ({ page, consoleErrors, allowedErrors }) => {
+    allowedErrors.push(/\[RAMBO\] Boot failed/);
+    await page.addInitScript(() => {
+      const orig = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type, ...rest) {
+        if (/webgl/i.test(type)) return null;
+        return orig.call(this, type, ...rest);
+      };
+      try { Object.defineProperty(navigator, 'gpu', { get: () => undefined }); } catch { /* not configurable */ }
+    });
+    await page.goto('/game.html');
+    const btn = page.locator('#start-btn');
+    await expect(btn).toHaveText('WEBGL UNAVAILABLE', { timeout: 10_000 });
+    await expect(btn).toBeDisabled();
+    await expect(page.locator('#boot-error')).toBeVisible();
+    expect(await page.locator('#boot-error').innerText()).not.toBe('');
+    expect(consoleErrors.some((e) => /\[RAMBO\] Boot failed/.test(e)), 'expected boot error logged').toBe(true);
+  });
+
+  test('H3: .notification drops its .show class after the banner fades', async ({ game, page }) => {
+    await game.boot();
+    await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1e9; });
+    await game.start();
+    await game.freezeWaves();
+    await game.eval(() => showNotification('RAMPAGE!', 0.6));
+    await expect(page.locator('#notif')).toHaveClass(/\bshow\b/);
+    await expect(page.locator('#notif')).not.toHaveClass(/\bshow\b/, { timeout: 5_000 });
+    expect(Number(await page.evaluate(() => getComputedStyle(document.getElementById('notif')).opacity))).toBe(0);
+  });
+});

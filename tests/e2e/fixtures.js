@@ -14,7 +14,12 @@ export const test = base.extend({
     await use([]);
   },
 
-  page: async ({ page, consoleErrors }, use, testInfo) => {
+  // Per-test Q1 exceptions: push a RegExp for an error the test itself provokes.
+  allowedErrors: async ({}, use) => {
+    await use([]);
+  },
+
+  page: async ({ page, consoleErrors, allowedErrors }, use, testInfo) => {
     page.on('console', (msg) => {
       if (msg.type() !== 'error') return;
       const entry = { text: msg.text(), url: msg.location()?.url || '' };
@@ -30,7 +35,8 @@ export const test = base.extend({
     if (consoleErrors.length) {
       await testInfo.attach('console-errors.txt', { body: consoleErrors.join('\n'), contentType: 'text/plain' });
     }
-    expect(consoleErrors, 'Q1: no uncaught errors or console.error').toEqual([]);
+    const unexpected = consoleErrors.filter((e) => !allowedErrors.some((re) => re.test(e)));
+    expect(unexpected, 'Q1: no uncaught errors or console.error').toEqual([]);
   },
 
   game: async ({ page }, use) => {

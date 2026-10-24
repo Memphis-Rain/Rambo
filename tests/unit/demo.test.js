@@ -63,4 +63,20 @@ describe('T11 demo aim lead (D3/D8)', () => {
     expect(g.CFG.DEMO_IDLE_SECONDS).toBe(5);
     expect(g.CFG.DEMO_MAX_SECONDS).toBe(60);
   });
+
+  test.skipIf(todo)('D8: the optional 8th out arg is filled and returned; 7-arg calls return a fresh object', () => {
+    const args = [10, 20, 300, 400, -50, 30, 900];
+    const fresh1 = g.demoAimLead(...args);
+    const fresh2 = g.demoAimLead(...args);
+    expect(fresh1).not.toBe(fresh2);
+    const out = { x: -1, y: -1 };
+    const r = g.demoAimLead(...args, out);
+    expect(r).toBe(out);
+    expect(out.x).toBeCloseTo(fresh1.x, 9);
+    expect(out.y).toBeCloseTo(fresh1.y, 9);
+    // The no-solution path also writes into out.
+    const r2 = g.demoAimLead(0, 0, 100, 0, 500, 0, 300, out);
+    expect(r2).toBe(out);
+    expect(out).toEqual({ x: 100, y: 0 });
+  });
 });
