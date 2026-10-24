@@ -396,6 +396,12 @@ User: "when enemy or player enters water, only half the body should be visible (
     - G13 aim picking uses the **visible** bounds only.
     - The G13 body column is shortened to match: hits below the waterline go into the water and make a splash, not a hit.
     - The foot circle shrinks to keep things fair: hits register if the path crosses the visible column or the foot circle's waterline ring at r × 0.6. Josh proposes the exact geometry; Anna verifies "aim at the visible torso/head → hit".
+    - **W2 geometry, accepted (Josh 53d5967):**
+      - Visible body: the G13 capsule from the waterline to the head, radius r × (1 − 0.4·submerge). A path crossing it hits.
+      - Wet zone: the submerged column only. A path that only crosses it gives a splash, no damage, and flies on.
+      - Contact explosives keep the whole body region (G13c).
+      - Enemy rounds against a wading player follow the same rules.
+      - Picking uses the visible bounds only. Picks, enemy fire and the demo bot aim at `aimPointOf()` on the visible column.
 - **W3. Blood in water.**
   - Blood particles, drips and gibs that land on a water tile make **no ground decal**. Each one makes a **blood cloud** instead: a dithered red blob that expands to ~2× over 4 s and fades in steps over ~8 s, drifting slightly.
   - G7 bloody footprints are **kept unchanged on land** (the user likes them).
