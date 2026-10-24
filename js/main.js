@@ -260,6 +260,7 @@ function update(dt) {
   processPendingDamage();
   updateEnemies(dt);
   updateBullets(dt);
+  updateEnv(dt);         // M8: env reactions, falling trees, debris
   processPendingDamage();
   updateWaves(dt);
   updatePickups(dt);
@@ -399,6 +400,7 @@ function resetRound() {
   }
   initPixiSprites();     // (Re)initialize sprite pools and caches (incl. decal layers)
   resetDecalState();     // blood map + growing decals (D6: no trace between rounds)
+  resetEnvState();       // M8 E7: intact world for a new round / the demo
 
   gameTime = 0;
   score = 0;

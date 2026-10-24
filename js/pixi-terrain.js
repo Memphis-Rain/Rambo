@@ -249,15 +249,20 @@ function generatePixiChunk(cx, cy) {
   // Bake this chunk's water camo once (P1)
   bakeChunkWater(cx, cy);
 
-  // Spawn environmental objects (unchanged from original - handled by world.js)
+  // Spawn environmental objects
   if (!envChunks.has(key)) {
     envChunks.add(key);
     const rng2 = seededRand(cx * 12345 + cy * 67890);
+    // E7: stable per-chunk ids (same seed -> same objects in the same order)
+    let envN = 0;
+    const addEnv = (o) => { o.id = key + '#' + (envN++); envObjects.push(o); };
     const chunkWorldX = cx * sz * ts;
     const chunkWorldY = cy * sz * ts;
     const forestDensity = (fbm(chunkWorldX * 0.001, chunkWorldY * 0.001, 3) + 0.5);
     const isForest = forestDensity > 0.5;
-    const numTrees = isForest ? Math.floor(30 + rng2() * 20) : Math.floor(5 + rng2() * 12);
+    // E1: ~30% more placed trees than before (the original counts x density;
+    // the E0 rendered-tile check rejects slightly fewer, hence 1.26)
+    const numTrees = Math.floor((isForest ? 30 + rng2() * 20 : 5 + rng2() * 12) * CFG.ENV_TREE_DENSITY);
     const numRocks = Math.floor(3 + rng2() * 6);
     const numMilitary = Math.floor(rng2() * 3);
     const numFlowers = Math.floor(rng2() * 5);
@@ -267,20 +272,17 @@ function generatePixiChunk(cx, cy) {
       const ox = (cx * sz + rng2() * sz) * ts;
       const oy = (cy * sz + rng2() * sz) * ts;
       if (Math.abs(ox) < 150 && Math.abs(oy) < 150) continue;
-      if (getTerrainTypeAt(ox, oy) === 'water' ||
-        getTerrainTypeAt(ox + 30, oy) === 'water' ||
-        getTerrainTypeAt(ox - 30, oy) === 'water' ||
-        getTerrainTypeAt(ox, oy + 30) === 'water' ||
-        getTerrainTypeAt(ox, oy - 30) === 'water') continue;
+      // E0: trunk and base must stand on a RENDERED land tile (canopies may overhang)
+      if (baseOnWater(ox, oy, 12)) continue;
       const treeType = rng2();
       if (treeType < 0.5) {
-        envObjects.push({ x: ox, y: oy, type: 'tree', radius: 31 + rng2() * 29, height: 60 + rng2() * 55, collision: 8, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'tree', radius: 31 + rng2() * 29, height: 60 + rng2() * 55, collision: 8, createdAt: -1 });
       } else if (treeType < 0.75) {
-        envObjects.push({ x: ox, y: oy, type: 'pine', radius: 22 + rng2() * 20, height: 66 + rng2() * 44, collision: 7, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'pine', radius: 22 + rng2() * 20, height: 66 + rng2() * 44, collision: 7, createdAt: -1 });
       } else if (treeType < 0.9) {
-        envObjects.push({ x: ox, y: oy, type: 'bush', radius: 12 + rng2() * 14, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'bush', radius: 12 + rng2() * 14, createdAt: -1 });
       } else {
-        envObjects.push({ x: ox, y: oy, type: 'deadtree', height: 30 + rng2() * 25, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'deadtree', height: 30 + rng2() * 25, createdAt: -1 });
       }
     }
 
@@ -289,19 +291,15 @@ function generatePixiChunk(cx, cy) {
       const ox = (cx * sz + rng2() * sz) * ts;
       const oy = (cy * sz + rng2() * sz) * ts;
       if (Math.abs(ox) < 150 && Math.abs(oy) < 150) continue;
-      if (getTerrainTypeAt(ox, oy) === 'water' ||
-        getTerrainTypeAt(ox + 20, oy) === 'water' ||
-        getTerrainTypeAt(ox - 20, oy) === 'water' ||
-        getTerrainTypeAt(ox, oy + 20) === 'water' ||
-        getTerrainTypeAt(ox, oy - 20) === 'water') continue;
-      const isHill = getTerrainTypeAt(ox, oy) === 'hill';
+      if (baseOnWater(ox, oy, 20)) continue; // E0: rocks/boulders need a dry base too
+      const isHill = renderedTerrainAt(ox, oy) === 'hill';
       const rockSize = rng2();
       if (rockSize < 0.35) {
-        envObjects.push({ x: ox, y: oy, type: 'rock', radius: 6 + rng2() * 8, collision: 6, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'rock', radius: 6 + rng2() * 8, collision: 6, createdAt: -1 });
       } else if (rockSize < 0.7 || isHill) {
-        envObjects.push({ x: ox, y: oy, type: 'boulder', radius: 14 + rng2() * 16, collision: 14, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'boulder', radius: 14 + rng2() * 16, collision: 14, createdAt: -1 });
       } else {
-        envObjects.push({ x: ox, y: oy, type: 'rockcluster', radius: 10 + rng2() * 10, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'rockcluster', radius: 10 + rng2() * 10, createdAt: -1 });
       }
     }
 
@@ -309,9 +307,9 @@ function generatePixiChunk(cx, cy) {
     for (let i = 0; i < numFlowers; i++) {
       const ox = (cx * sz + rng2() * sz) * ts;
       const oy = (cy * sz + rng2() * sz) * ts;
-      const terrain = getTerrainTypeAt(ox, oy);
+      const terrain = renderedTerrainAt(ox, oy);
       if (terrain === 'water' || terrain === 'dark') continue;
-      envObjects.push({ x: ox, y: oy, type: 'flowers', radius: 4 + rng2() * 6, colorHue: rng2() * 360, createdAt: -1 });
+      addEnv({ x: ox, y: oy, type: 'flowers', radius: 4 + rng2() * 6, colorHue: rng2() * 360, createdAt: -1 });
     }
 
     // Military objects
@@ -319,16 +317,16 @@ function generatePixiChunk(cx, cy) {
       const ox = (cx * sz + rng2() * sz) * ts;
       const oy = (cy * sz + rng2() * sz) * ts;
       if (Math.abs(ox) < 200 && Math.abs(oy) < 200) continue;
-      if (getTerrainTypeAt(ox, oy) === 'water') continue;
+      if (baseOnWater(ox, oy, 10)) continue;
       const r = rng2();
       if (r < 0.35) {
-        envObjects.push({ x: ox, y: oy, type: 'barrel', hp: 30, maxHp: 30, exploded: false, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'barrel', hp: 30, maxHp: 30, exploded: false, createdAt: -1 });
       } else if (r < 0.6) {
-        envObjects.push({ x: ox, y: oy, type: 'sandbag', width: 30 + rng2() * 20, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'sandbag', width: 30 + rng2() * 20, createdAt: -1 });
       } else if (r < 0.85) {
-        envObjects.push({ x: ox, y: oy, type: 'crate', createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'crate', createdAt: -1 });
       } else {
-        envObjects.push({ x: ox, y: oy, type: 'ruins', width: 20 + rng2() * 30, height: 15 + rng2() * 20, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'ruins', width: 20 + rng2() * 30, height: 15 + rng2() * 20, createdAt: -1 });
       }
     }
 
@@ -336,13 +334,13 @@ function generatePixiChunk(cx, cy) {
     for (let i = 0; i < 3; i++) {
       const ox = (cx * sz + rng2() * sz) * ts;
       const oy = (cy * sz + rng2() * sz) * ts;
-      const terrain = getTerrainTypeAt(ox, oy);
-      const nearWater = getTerrainTypeAt(ox + 40, oy) === 'water' ||
-        getTerrainTypeAt(ox - 40, oy) === 'water' ||
-        getTerrainTypeAt(ox, oy + 40) === 'water' ||
-        getTerrainTypeAt(ox, oy - 40) === 'water';
+      const terrain = renderedTerrainAt(ox, oy);
+      const nearWater = renderedTerrainAt(ox + 40, oy) === 'water' ||
+        renderedTerrainAt(ox - 40, oy) === 'water' ||
+        renderedTerrainAt(ox, oy + 40) === 'water' ||
+        renderedTerrainAt(ox, oy - 40) === 'water';
       if (nearWater && terrain !== 'water') {
-        envObjects.push({ x: ox, y: oy, type: 'reeds', height: 8 + rng2() * 10, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'reeds', height: 8 + rng2() * 10, createdAt: -1 });
       }
     }
   }
@@ -351,6 +349,24 @@ function generatePixiChunk(cx, cy) {
 /**
  * Render terrain chunks around the player
  */
+// Terrain type of the tile that is actually DRAWN at (x, y): tiles render
+// from the sample at their corner, so snap to the tile grid (E0; same rule
+// as the water slowdown in combat.js)
+function renderedTerrainAt(x, y) {
+  const ts = CFG.TILE_SIZE;
+  return getTerrainTypeAt(Math.floor(x / ts) * ts, Math.floor(y / ts) * ts);
+}
+
+// Is the point or its base footprint (radius r) on a rendered water tile?
+function baseOnWater(x, y, r) {
+  if (renderedTerrainAt(x, y) === 'water') return true;
+  for (let i = 0; i < 8; i++) {
+    const a = i * Math.PI / 4;
+    if (renderedTerrainAt(x + Math.cos(a) * r, y + Math.sin(a) * r) === 'water') return true;
+  }
+  return false;
+}
+
 function renderPixiTerrain() {
   const ts = CFG.TILE_SIZE;
   const cs = CFG.CHUNK_SIZE * ts;

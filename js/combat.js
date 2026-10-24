@@ -495,15 +495,18 @@ function updateEnemies(dt) {
   }
 }
 
-// Resolve collisions between an entity and nearby solid env objects
+// Resolve collisions between an entity and nearby solid env objects.
+// E5: collision follows env state (envphys.js keeps obj.collision current:
+// stump circle when felled, 0 when destroyed) plus fallen-log capsules.
 function resolveEnvCollision(entity, entityRadius) {
   for (let i = 0; i < envObjects.length; i++) {
     const obj = envObjects[i];
-    if (!obj.collision) continue;
     // Quick reject: skip objects far away (cheap check before sqrt)
     const dx = entity.x - obj.x;
     const dy = entity.y - obj.y;
     if (dx > 60 || dx < -60 || dy > 60 || dy < -60) continue;
+    if (obj._envAt !== _envEpoch) envObjState(obj); // E7: persisted state of a regenerated object
+    if (!obj.collision) continue;
     const d2 = dx * dx + dy * dy;
     const minDist = entityRadius + obj.collision;
     if (d2 < minDist * minDist && d2 > 0) {
@@ -513,6 +516,7 @@ function resolveEnvCollision(entity, entityRadius) {
       entity.y += (dy / d) * push;
     }
   }
+  if (envLogs.length) resolveEnvLogs(entity, entityRadius);
 }
 
 const HIT_FLASH_TIME = 2 / 60; // G1: two 60 Hz frames of solid white
@@ -576,32 +580,35 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
   const isBoss = e.isBoss;
   if (isBoss) addHitStop(HIT_STOP_MAX);
 
-  // Score
-  const comboMult = 1 + combo * 0.1;
-  const basePts = isBoss ? t.score * 10 : t.score;
-  const pts = Math.round(basePts * comboMult);
-  score += pts;
-  kills++;
-  combo++;
-  comboTimer = CFG.COMBO_TIMEOUT;
-  if (combo > bestCombo) bestCombo = combo;
+  // Score (E6: not for an enemy crushed by a tree the player didn't fell)
+  if (!envNoCredit) {
+    const comboMult = 1 + combo * 0.1;
+    const basePts = isBoss ? t.score * 10 : t.score;
+    const pts = Math.round(basePts * comboMult);
+    score += pts;
+    kills++;
+    combo++;
+    comboTimer = CFG.COMBO_TIMEOUT;
+    if (combo > bestCombo) bestCombo = combo;
 
-  // Charge special ability on kills
-  if (player.specialCharge < CFG.SPECIAL_MAX_CHARGE) {
-    player.specialCharge++;
+    // Charge special ability on kills
+    if (player.specialCharge < CFG.SPECIAL_MAX_CHARGE) {
+      player.specialCharge++;
+    }
+
+    // Floating text
+    const color = isBoss ? '#f0f' : combo > 10 ? '#f44' : combo > 5 ? '#fa0' : '#ff0';
+    const size = isBoss ? 24 : combo > 5 ? 18 : 14;
+    floatingTexts.push({
+      x: e.x, y: e.y, text: `+${pts}`, life: 1.2, maxLife: 1.2, color, size,
+    });
   }
-
-  // Floating text
-  const color = isBoss ? '#f0f' : combo > 10 ? '#f44' : combo > 5 ? '#fa0' : '#ff0';
-  const size = isBoss ? 24 : combo > 5 ? 18 : 14;
-  floatingTexts.push({
-    x: e.x, y: e.y, text: `+${pts}`, life: 1.2, maxLife: 1.2, color, size,
-  });
 
   // === BOMBER: explode on death (deferred to avoid recursive chain) ===
   if (t.explodeOnDeath) {
     const r = t.explodeRadius || 100;
-    spawnExplosion(e.x, e.y, r);
+    // Bomber deaths count as the player's doing (a chain the player set off)
+    spawnExplosion(e.x, e.y, r, !envNoCredit, SRC_EXPLOSIVE);
     // Queue damage instead of applying immediately (prevents stack overflow)
     for(let j=0; j<enemies.length; j++) {
       const e2 = enemies[j];
@@ -673,7 +680,7 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
       showNotification(`BOSS DEFEATED! NEW WEAPON: ${WEAPONS[bossTarget].name.toUpperCase()}! [${bossTarget+1>9?0:bossTarget+1}]`, 3.5);
       playSound('unlock', 0.8);
       // Big celebratory explosion
-      spawnExplosion(e.x, e.y, 180);
+      spawnExplosion(e.x, e.y, 180, true, SRC_EXPLOSIVE);
       bossTarget = -1;
     }
   } else {
@@ -730,7 +737,7 @@ function damagePlayer(dmg) {
     player.hp = player.maxHp * 0.3;
     player.shield = player.maxShield * 0.2;
     player.invincible = 2;
-    spawnExplosion(player.x, player.y, 60);
+    spawnExplosion(player.x, player.y, 60, false, SRC_EXPLOSIVE);
     showNotification('SECOND WIND!', 1.5);
   }
 }
@@ -768,18 +775,39 @@ function updateBullets(dt) {
     const minY = Math.min(py, b.y), maxY = Math.max(py, b.y);
     const step60 = Math.sqrt(b.vx * b.vx + b.vy * b.vy) / 60; // path per 60 Hz frame
     const fresh = b.fresh; b.fresh = false;
-    let nearT = 2, nearE = null, nearB = null;
+    let nearT = 2, nearE = null, nearB = null, nearO = null;
+    const byPlayer = b.owner === 'player';
 
-    // Explosive barrels (G12b)
+    // Explosive barrels (G12b) and env blockers (E3/E4: tree trunks, stumps,
+    // crates, sandbags). Fallen logs are low cover: bullets fly over them.
     for(const obj of envObjects){
-      if(obj.type !== 'barrel' || obj.exploded) continue;
-      if(obj.x + 14 < minX || obj.x - 14 > maxX || obj.y + 14 < minY || obj.y - 14 > maxY) continue;
+      // 20 >= the largest barrel/trunk/crate/sandbag hit radius
+      if(obj.x + 20 < minX || obj.x - 20 > maxX || obj.y + 20 < minY || obj.y - 20 > maxY) continue;
+      if(obj.type === 'barrel'){
+        if(obj.exploded) continue;
+        if(obj.x + 14 < minX || obj.x - 14 > maxX || obj.y + 14 < minY || obj.y - 14 > maxY) continue;
+        if(b.pierce){
+          if(entersCircle(px, py, sdx, sdy, len2, obj.x, obj.y, 14, fresh))
+            hitBarrel(obj, b.dmg * pierceHits(px, py, sdx, sdy, len2, obj.x, obj.y, 14, step60), byPlayer);
+        } else {
+          const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, 14);
+          if(t >= 0 && t < nearT){ nearT = t; nearB = obj; nearO = null; }
+        }
+        continue;
+      }
+      const hr = envBulletRadius(obj);
+      if(!hr) continue;
+      // A round fired from inside a trunk/crate (shooter hugging it) ignores it
+      const fx = px - obj.x, fy = py - obj.y;
+      if(fx * fx + fy * fy <= hr * hr) continue;
       if(b.pierce){
-        if(entersCircle(px, py, sdx, sdy, len2, obj.x, obj.y, 14, fresh))
-          hitBarrel(obj, b.dmg * pierceHits(px, py, sdx, sdy, len2, obj.x, obj.y, 14, step60));
+        // Pierce rounds pass through but still chip/damage once per pass
+        const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, hr);
+        if(t >= 0) envBulletHit(obj, px + sdx * t, py + sdy * t, b.vx, b.vy,
+          b.dmg * pierceHits(px, py, sdx, sdy, len2, obj.x, obj.y, hr, step60));
       } else {
-        const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, 14);
-        if(t >= 0 && t < nearT){ nearT = t; nearB = obj; }
+        const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, hr);
+        if(t >= 0 && t < nearT){ nearT = t; nearO = obj; nearB = null; }
       }
     }
 
@@ -796,27 +824,51 @@ function updateBullets(dt) {
             bulletHitEnemy(b, e, pierceHits(px, py, sdx, sdy, len2, e.x, e.y, r, step60));
         } else {
           const t = segCircleT(px, py, sdx, sdy, len2, e.x, e.y, r);
-          if(t >= 0 && t < nearT){ nearT = t; nearE = e; nearB = null; }
+          if(t >= 0 && t < nearT){ nearT = t; nearE = e; nearB = null; nearO = null; }
         }
       }
     } else {
-      // Enemy bullet -> player (unless a barrel is nearer on its path)
+      // Enemy bullet -> player (unless a barrel or trunk is nearer on its path)
       const t = segCircleT(px, py, sdx, sdy, len2, player.x, player.y, 16);
       if(t >= 0 && t < nearT){
         b.x = px + sdx * t; b.y = py + sdy * t;
         damagePlayer(b.dmg);
-        if(b.explosive) spawnExplosion(b.x, b.y, b.radius||60);
+        if(b.explosive) spawnExplosion(b.x, b.y, b.radius||60, false, SRC_EXPLOSIVE);
         bullets.splice(i,1);
         continue;
       }
     }
 
-    // Non-piercing: the nearest enemy or barrel on the path takes the hit
-    if(nearE || nearB){
+    // Non-piercing: the nearest enemy, barrel or env blocker on the path takes the hit
+    if(nearE || nearB || nearO){
       b.x = px + sdx * nearT; b.y = py + sdy * nearT; // impact point
       if(nearE) bulletHitEnemy(b, nearE, 1);
-      else hitBarrel(nearB, b.dmg);
+      else if(nearB) hitBarrel(nearB, b.dmg, byPlayer);
+      else {
+        envBulletHit(nearO, b.x, b.y, b.vx, b.vy, b.dmg);
+        // Rockets / BFG / tank shells detonate on the trunk or crate
+        if(b.explosive) _bulletExplode(b);
+      }
       bullets.splice(i,1);
+    }
+  }
+}
+
+// Detonate an explosive round at its current position (player rounds also
+// deal area damage to enemies, as on a direct hit)
+function _bulletExplode(b) {
+  if(b.owner !== 'player'){
+    spawnExplosion(b.x, b.y, b.radius||60, false, SRC_EXPLOSIVE);
+    return;
+  }
+  const src = b.bfg ? SRC_BFG : SRC_EXPLOSIVE;
+  spawnExplosion(b.x, b.y, b.radius, true, src);
+  for(let ei=enemies.length-1; ei>=0; ei--){
+    const e2 = enemies[ei];
+    if(e2.dead) continue;
+    const d2 = dist(b.x, b.y, e2.x, e2.y);
+    if(d2 < b.radius){
+      _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: Math.atan2(e2.y-b.y, e2.x-b.x), src });
     }
   }
 }
@@ -842,12 +894,13 @@ function pierceHits(x0, y0, dx, dy, len2, cx, cy, r, step60) {
   return step60 > 0 ? Math.max(1, Math.round(chord / step60)) : 1;
 }
 
-function hitBarrel(obj, dmg) {
+function hitBarrel(obj, dmg, byPlayer = true) {
   obj.hp -= dmg;
   if(obj.hp <= 0 && !obj.exploded){
     obj.exploded = true;
+    envMarkDestroyed(obj); // E7: stays exploded when its chunk regenerates
     // BIGGER barrel explosion (radius 220, damages enemies more)
-    spawnExplosion(obj.x, obj.y, 220);
+    spawnExplosion(obj.x, obj.y, 220, byPlayer, SRC_EXPLOSIVE);
     for(let ei=enemies.length-1; ei>=0; ei--){
       const e2 = enemies[ei];
       if(e2.dead) continue;
@@ -907,17 +960,7 @@ function bulletHitEnemy(b, e, mult = 1) {
   // Disintegrator kills are handled in killEnemy (SRC_DISINT)
   damageEnemy(e, b.dmg * mult, bAngle, src);
 
-  if(b.explosive){
-    spawnExplosion(b.x, b.y, b.radius);
-    for(let ei=enemies.length-1; ei>=0; ei--){
-      const e2 = enemies[ei];
-      if(e2.dead) continue;
-      const d2 = dist(b.x, b.y, e2.x, e2.y);
-      if(d2 < b.radius){
-        _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: Math.atan2(e2.y-b.y, e2.x-b.x), src });
-      }
-    }
-  }
+  if(b.explosive) _bulletExplode(b);
 }
 
 // =====================================================================

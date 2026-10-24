@@ -21,6 +21,7 @@ function _spSnap(v) { return Math.round(v / ART) * ART; }
 // Z layers inside worldContainer (terrain is -1000000, effectsContainer 1000000)
 const SP_Z_DECAL = -999999;      // baked decal chunks
 const SP_Z_DECAL_RECENT = -999998.5;
+const SP_Z_ENVL = -999996.5;     // M8 E10: per-chunk remains (stumps, logs, rubble): above the water overlay (logs float), below ground shadows
 const SP_Z_GROUND = -999996;     // ground shadows / flat debris (water overlay is -999997)
 const SP_Z_FX = 999000;          // telegraphs, rings, health bars
 const SP_Z_TEXT = 999500;        // pixel font
@@ -83,6 +84,8 @@ const _sp = {
   hurtDrops: new Float32Array(24 * 5), // x, y, len, speed, life
   // decals
   dec: null,
+  // M8 E10: env remains layer (per terrain chunk)
+  envL: null,
 };
 
 // Type -> visual kind lookup (by enemy name, so table order can change)
@@ -204,6 +207,10 @@ function initPixiSprites() {
       _spDestroy(_sp.dec.recent);
       _spDestroy(_sp.dec.grow);
     }
+    if (_sp.envL) {
+      for (const c of _sp.envL.list) _spDestroy(c.g);
+      for (const g of _sp.envL.free) _spDestroy(g);
+    }
   }
   _sp.sprites = []; _sp.spriteN = 0; _sp.spritePrev = 0;
   _sp.gfx = []; _sp.gfxN = 0; _sp.gfxPrev = 0;
@@ -242,6 +249,7 @@ function initPixiSprites() {
   uiContainer.addChildAt(_sp.hurtG, 0);
 
   _spDecalInit();
+  _sp.envL = { version: -1, map: new Map(), list: [], free: [], rebuilds: 0 };
   _sp.inited = true;
 }
 
@@ -883,6 +891,7 @@ function renderPixiSprites() {
   const t0 = performance.now();
   _spBeginFrame();
   _spRenderDecals();
+  _spRenderEnvLayer();
   const t1 = performance.now();
   _spRenderEnv();
   _spRenderBodies();
@@ -896,6 +905,7 @@ function renderPixiSprites() {
   _spRenderParticles();
   _spRenderShells();
   _spRenderGibs();
+  _spRenderDebris();
   _spRenderFx();
   _spRenderTexts();
   _spRenderHurt();
@@ -1313,6 +1323,12 @@ function _spRenderParticles() {
       if (big) s.scale.set(r ? A : 2 * A, r ? 2 * A : A); else s.scale.set(A, A);
       s.tint = col;
       if (lr < (p.fadeStart || 0)) s.alpha = 0.5;
+    } else if (type === 'leaf') {
+      // M8 E2: 1-art-px leaf, stepped flutter, blinks out at the end (no fade)
+      if (lr < 0.15 && ((((gameTime * 14) | 0) + i) & 1)) continue;
+      const wob = Math.round(Math.sin(p.life * 7 + i * 1.7) * 1.2) * A;
+      const s = _spSprite(tw, X + wob, Y, z);
+      s.scale.set(A, A); s.tint = col;
     } else {
       // blood, spark, trail, default: chunky pixel squares
       const d = Math.max(A, _spSnap(p.size * (type === 'blood' ? 1.3 : 1.6)));
@@ -1378,6 +1394,41 @@ function _spRenderGibs() {
     const mx = (r === 0 || r === 3) ? x0 + (w - 1) * A : x0;
     const my = (r < 2) ? y0 + (h - 1) * A : y0;
     _spRectSprite(mx, my, A, A, 0xc01818, zz + 0.002);
+  }
+  sg.fill({ color: 0, alpha: 0.35 });
+}
+
+// M8 E4: flying env debris (envphys.js envDebris), pooled sprites like gibs.
+// Outline + fill chunk, rotation stepped to 45 deg, ground shadow while airborne.
+const _spDebOl = [0x24180c, 0x4a3e24, 0x1e1e1a, 0x1a120a, 0];
+function _spRenderDebris() {
+  if (typeof envDebris === 'undefined' || envDebris.length === 0) return;
+  const iso = CFG.ISO_SCALE, A = ART, Q = Math.PI / 4;
+  const sg = _sp.groundG, tw = _sp.texWhite;
+  for (let i = 0; i < envDebris.length; i++) {
+    const d = envDebris[i];
+    const sx = d.x - d.y, gy = (d.x + d.y) * iso;
+    if (!_spInView(sx, gy)) continue;
+    const z = d.z > 0 ? d.z : 0;
+    const X = _spSnap(sx), Y = _spSnap(gy - z) - A;
+    const zz = depthKey(d.x, d.y);
+    const kind = d.kind | 0;
+    if (kind === 4) { // DEBRIS_LEAF: a single green pixel
+      const s = _spSprite(tw, X, Y, zz);
+      s.scale.set(A, A); s.tint = d.color;
+      continue;
+    }
+    if (z > 2) sg.rect(X - A, _spSnap(gy), 2 * A, A);
+    const size = d.size || 2;
+    let w, h;
+    if (kind === 0 || kind === 3) { w = size >= 2.5 ? 3 : 2; h = 1; }     // wood / bark splinter
+    else if (kind === 2) { w = size >= 2.8 ? 2 : 1; h = size >= 3.5 ? 2 : 1; } // stone
+    else { w = size >= 2.4 ? 2 : 1; h = 1; }                               // sand clump
+    const rot = Math.round((d.rot || 0) / Q) * Q;
+    const o = _spSprite(tw, X, Y, zz);
+    o.scale.set((w + 2) * A, (h + 2) * A); o.rotation = rot; o.tint = _spDebOl[kind] || 0x1a120a;
+    const f = _spSprite(tw, X, Y, zz + 0.001);
+    f.scale.set(w * A, h * A); f.rotation = rot; f.tint = d.color;
   }
   sg.fill({ color: 0, alpha: 0.35 });
 }
@@ -1665,8 +1716,9 @@ function _spHueHex(h) {
   return (r << 16) | (gg << 8) | b;
 }
 
+// Cache key of a Graphics env object: rebuilt only when this changes
 function _spEnvState(obj) {
-  if (obj.type !== 'barrel') return 0;
+  if (obj.type !== 'barrel') { const e = obj._env; return e && e.cracked ? 1 : 0; } // M8 E4
   if (obj.exploded) return -1;
   return Math.ceil((obj.hp || 0) / Math.max(1, obj.maxHp || 30) * 6);
 }
@@ -1687,7 +1739,7 @@ function _spBuildEnv(obj) {
         const b = tg.getLocalBounds();
         const tex = renderer.generateTexture({ target: tg, resolution: 1, antialias: false });
         tex.source.scaleMode = 'nearest';
-        tpl = { tex, ax: -b.x / b.width, ay: -b.y / b.height };
+        tpl = { tex, ax: -b.x / b.width, ay: -b.y / b.height, top: Math.max(1, -b.y) };
         tg.destroy();
       }
       _sp.treeCtx.set(key, tpl);
@@ -1696,6 +1748,9 @@ function _spBuildEnv(obj) {
     const g = new PIXI.Sprite(tpl.tex);
     g.anchor.set(tpl.ax, tpl.ay);
     g._tree = type === 'tree' || type === 'pine';
+    g._spr = true;        // M8: sway / scorch / topple via sprite transform + tint
+    g._top = tpl.top;     // px from the base (anchor) to the top of the texture
+    g._xf = false; g._tl = 0; g._z0 = 0;
     return g;
   }
   const g = new PIXI.Graphics();
@@ -1718,6 +1773,34 @@ function _spRock(g, cx, cy, rx, ry, seed, dark) {
   g.fill(dark ? 0x8e8e82 : 0x9e9e92);
 }
 
+// M8 E4: dark pixel cracks across a cracked boulder (ellipse centre cx, cy)
+function _spRockCracks(g, cx, cy, rx, ry, seed) {
+  const A = ART;
+  const ex = (rx + 0.5) * (rx + 0.5), ey = (ry + 0.5) * (ry + 0.5);
+  for (let k = 0; k < 2; k++) {
+    const h = _spHash(seed, k + 30);
+    let x = ((h & 7) % Math.max(1, rx)) - (rx >> 1) + (k ? (rx >> 1) : 0);
+    let y = -ry + 1 + ((h >> 3) & 1);
+    const len = ry * 2 + 1;
+    for (let i = 0; i < len; i++) {
+      if (x * x / ex + y * y / ey < 0.8) g.rect(cx + x * A, cy + y * A, A, A);
+      const hh = _spHash(h, i);
+      // mostly down, sometimes sideways: reads as a jagged fracture
+      if ((hh & 3) === 0) x += (hh & 4) ? 1 : -1;
+      else { y++; if ((hh & 24) === 0) x += (hh & 32) ? 1 : -1; }
+      // short branch from the middle of the first crack
+      if (k === 0 && i === (len >> 1)) {
+        const dir = (hh & 64) ? 1 : -1;
+        for (let j = 1; j <= 2; j++) {
+          const bx = x + dir * j, by = y - (j >> 1);
+          if (bx * bx / ex + by * by / ey < 0.8) g.rect(cx + bx * A, cy + by * A, A, A);
+        }
+      }
+    }
+  }
+  g.fill(0x1a1a16);
+}
+
 function _spDrawEnv(g, obj) {
   const A = ART, type = obj.type;
   const seed = ((obj.x * 73856093) ^ (obj.y * 19349663)) | 0;
@@ -1726,6 +1809,7 @@ function _spDrawEnv(g, obj) {
     const rx = Math.max(2, Math.round((obj.radius || 8) * 1.1 / A));
     const ry = Math.max(1, Math.round(rx * 0.6));
     _spRock(g, 0, -ry * A, rx, ry, seed, type === 'boulder');
+    if (obj._env && obj._env.cracked) _spRockCracks(g, 0, -ry * A, rx, ry, seed);
   } else if (type === 'rockcluster') {
     const r = obj.radius || 12;
     for (let i = 0; i < 3; i++) {
@@ -1816,6 +1900,21 @@ function _spDrawEnv(g, obj) {
       if (hh > 3) g.rect((x0 + i + 1) * A, (-hh + 2) * A, A, A);
     }
     g.fill(0x9a968a);
+    if (obj._env && obj._env.cracked) {
+      // M8 E4: zigzag cracks down some wall columns + chipped tops
+      for (let i = 0; i < w; i += 2) {
+        const hs = _spHash(seed, i + 40);
+        if ((hs & 3) === 0) continue;
+        const hh = Math.max(1, h - (_spHash(seed, i) % Math.max(1, (h >> 1) + 1)));
+        let cx = (hs >> 2) & 1;
+        for (let y = -hh + 1; y < 0; y++) {
+          g.rect((x0 + i + cx) * A, y * A, A, A);
+          if ((_spHash(hs, y + 9) & 3) === 0) cx ^= 1;
+        }
+        if ((hs >> 4) & 1) g.rect((x0 + i + ((hs >> 5) & 1)) * A, -hh * A, A, A);
+      }
+      g.fill(0x1c1c18);
+    }
   } else if (type === 'reeds') {
     const hgt = Math.max(3, Math.round((obj.height || 12) / A));
     for (let i = 0; i < 5; i++) {
@@ -1852,11 +1951,14 @@ function _spRenderEnv() {
   const f = _sp.frame;
   const mx = 320, my0 = 80, my1 = 360;
   const x0 = _sp.vx0 - mx, x1 = _sp.vx1 + mx, y0 = _sp.vy0 - my0, y1 = _sp.vy1 + my1;
+  const eos = typeof envObjState === 'function' ? envObjState : null;
   for (let i = 0; i < envObjects.length; i++) {
     const obj = envObjects[i];
     obj._spSeen = f;
     const sx = obj.x - obj.y, sy = (obj.x + obj.y) * iso;
     if (sx < x0 || sx > x1 || sy < y0 || sy > y1) continue;
+    // M8: state record (null = never affected); also picks up persisted state
+    const rec = eos !== null ? eos(obj) : null;
     let g = _sp.env.get(obj);
     const st = _spEnvState(obj);
     if (g === undefined) {
@@ -1867,6 +1969,7 @@ function _spRenderEnv() {
         g.position.set(_spSnap(sx), _spSnap(sy));
         const flat = obj.type === 'flowers' || (obj.type === 'barrel' && obj.exploded);
         g.zIndex = flat ? SP_Z_GROUND + 1 : depthKey(obj.x, obj.y);
+        g._z0 = g.zIndex;
         worldContainer.addChild(g);
       }
     } else if (g && g._st !== st) {
@@ -1875,18 +1978,69 @@ function _spRenderEnv() {
       if (obj.type === 'barrel' && obj.exploded) g.zIndex = SP_Z_GROUND + 1;
     }
     if (!g) continue;
+    if (rec !== null) {
+      // M8: destroyed objects vanish (debris / remains replace them); the
+      // exploded-barrel wreck stays (it is the remains). Baked trees are
+      // replaced by their stump + log in the env remains layer (E10).
+      if (rec.state === 'destroyed' && obj.type !== 'barrel') continue;
+      if (rec.baked) continue;
+    }
     g.visible = true;
     vis.push(g);
-    if (g._tree) {
-      // A6 optional: stepped tree sway
-      const ph = Math.round(Math.sin(gameTime * 0.9 + obj.x * 0.013 + obj.y * 0.007) * 1.4);
-      g.skew.x = ph * 0.025;
-    }
+    if (g._spr) _spTreeXf(g, obj, rec);
   }
   // periodic sweep of graphics whose env object was unloaded
   if ((f % 120) === 0) {
     _sp.env.forEach(_spEnvSweepFn);
   }
+}
+
+// M8 E2: scorch tint per level (darker, slightly warm) - tints keep batching
+const _spScorchTint = [0xffffff, 0xc4b6a4, 0x938476, 0x695e56];
+const SP_SWAY_Q = 0.04;      // record sway quantum (rad): ~1 art px at the top of a tree
+const SP_FALL_STEPS = 6;     // topple drawn in 6 steps of 15 deg
+
+// Tree-like sprite transform: ambient stepped sway + record sway, scorch
+// tint, and the topple (rotation about the base, foreshortened in iso).
+// Transform-only: never rebuilds geometry.
+function _spTreeXf(g, obj, rec) {
+  const lv = rec !== null ? Math.min(3, rec.scorch | 0) : 0;
+  if (g._tl !== lv) { g._tl = lv; g.tint = _spScorchTint[lv]; }
+  if (rec !== null && (rec.state === 'falling' || rec.state === 'fallen')) {
+    const iso = CFG.ISO_SCALE;
+    const th = Math.round(rec.fall * SP_FALL_STEPS) / SP_FALL_STEPS * (Math.PI / 2);
+    const c = Math.cos(th), sn = Math.sin(th);
+    const fx = rec.fallDirX, fy = rec.fallDirY;
+    // Y axis (image of local +y, base -> down): the top swings from straight
+    // up to the screen projection of the fall direction, scaled so the top
+    // lands where the log ends
+    const kL = (rec.logLen > 0 ? rec.logLen : 40) / g._top;
+    const Yx = -sn * (fx - fy) * kL;
+    let Yy = c - sn * (fx + fy) * iso * kL;
+    if (Yx * Yx + Yy * Yy < 0.04) Yy = Yy < 0 ? -0.2 : 0.2; // pointing at the camera: keep a sliver
+    // X axis: canopy width turns into the projected world perpendicular
+    let px = (-fy - fx) * 0.7071, py = (fx - fy) * iso * 0.7071;
+    if (px < 0) { px = -px; py = -py; } // never pass through zero width
+    const Xx = 1 - sn + sn * px, Xy = sn * py;
+    g.rotation = 0;
+    g.skew.set(Math.atan2(Yx, Yy), Math.atan2(Xy, Xx));
+    g.scale.set(Math.sqrt(Xx * Xx + Xy * Xy), Math.sqrt(Yx * Yx + Yy * Yy));
+    // depth: the lying crown sorts by its middle (in front of the base when
+    // it falls toward the camera)
+    const zm = depthKey(obj.x + fx * rec.logLen * 0.5 * sn, obj.y + fy * rec.logLen * 0.5 * sn);
+    g.zIndex = zm > g._z0 ? zm : g._z0;
+    g._xf = true;
+    return;
+  }
+  if (g._xf) { g._xf = false; g.scale.set(1, 1); g.skew.y = 0; g.zIndex = g._z0; }
+  let skx = 0;
+  if (g._tree) {
+    // A6 optional: stepped ambient tree sway
+    skx = Math.round(Math.sin(gameTime * 0.9 + obj.x * 0.013 + obj.y * 0.007) * 1.4) * 0.025;
+  }
+  // record sway (+ = top leans to screen +x; skew.x > 0 leans it to -x)
+  if (rec !== null && rec.sway !== 0) skx -= Math.round(rec.sway / SP_SWAY_Q) * SP_SWAY_Q;
+  g.skew.x = skx;
 }
 
 function _spEnvSweepFn(g, obj, map) {
@@ -2162,6 +2316,37 @@ function _spDrawDecal(g, d) {
     g.fill(d.color2 || 0xa040c0);
     g.rect(cx - A, cy - A, A, A);
     g.fill(0x6a6a6a);
+  } else if (kind === 7) { // DECAL_WOOD: splinter (bark uses the same kind, darker colour)
+    const L = (d.radius || 2) >= 2.6 ? 3 : 2;
+    const dir = Math.round((d.angle || 0) / (Math.PI / 4)) & 3; // 0 -, 1 \, 2 |, 3 /
+    const dx = dir === 2 ? 0 : 1, dy = dir === 0 ? 0 : (dir === 3 ? -1 : 1);
+    for (let k = 0; k < L; k++) g.rect(cx + (k * dx - 1) * A, cy + (k * dy - 1) * A, 3 * A, 3 * A);
+    g.fill(darkenColorHex(col, 0.4));
+    for (let k = 0; k < L; k++) g.rect(cx + k * dx * A, cy + k * dy * A, A, A);
+    g.fill(col);
+    g.rect(cx, cy, A, A);
+    g.fill(darkenColorHex(col, 1.3));
+  } else if (kind === 8) { // DECAL_RUBBLE: stone chunk with outline + highlight
+    const rr = d.radius || 2;
+    const w = rr >= 2.8 ? 2 : 1, h = rr >= 3.5 ? 2 : 1;
+    g.rect(cx - A, cy - A, (w + 2) * A, (h + 2) * A);
+    g.fill(0x1e1e1a);
+    g.rect(cx, cy, w * A, h * A);
+    g.fill(col);
+    if (w > 1) { g.rect(cx, cy, A, A); g.fill(darkenColorHex(col, 1.3)); }
+  } else if (kind === 9) { // DECAL_SAND: small tan blob
+    const h = _spHash(seed, 2);
+    const w = (d.radius || 2) >= 2.4 ? 3 : 2;
+    g.rect(cx - A, cy, w * A, A);
+    g.rect(cx + ((h & 1) - 1 + (w > 2 ? 1 : 0)) * A, cy - A, A, A);
+    g.fill(col);
+    g.rect(cx - A + ((h >> 1) & 1) * A, cy, A, A);
+    g.fill(darkenColorHex(col, 0.82));
+  } else if (kind === 10) { // DECAL_LEAF: 1-2 green pixels
+    g.rect(cx, cy, A, A);
+    const h = _spHash(seed, 3);
+    if (h & 1) g.rect(cx + ((h & 2) ? A : -A), cy + ((h & 4) ? A : 0), A, A);
+    g.fill(col);
   } else { // DECAL_SPLAT and unknown kinds
     const sz = (d.radius || 1) >= 2.4 ? 2 : 1;
     g.rect(cx, cy, sz * A, sz * A);
@@ -2174,4 +2359,307 @@ function _spDrawDecal(g, d) {
     }
     g.fill(col);
   }
+}
+
+// =====================================================================
+// ENV REMAINS LAYER (M8 E10): stumps, fallen logs and rubble footprints
+// are world state (envphys.js envRemains), NOT gore decals. They are
+// bucketed by terrain chunk (same key as chunkCache); each chunk with
+// remains owns one Graphics, rebuilt only when its remain set changes,
+// and shown only while its terrain chunk is loaded and in view.
+// =====================================================================
+const _spRemScorch = [1, 0.8, 0.62, 0.45];
+
+// Pixel line in absolute art-px coords, thickness t; grow > 0 widens every
+// run by that many art px on each side (outline pass). Same run merging as
+// _pline. Emits rects only (caller fills).
+function _spGLine(g, x0, y0, x1, y1, t, grow) {
+  const A = ART;
+  const dx = x1 - x0, dy = y1 - y0;
+  const n = Math.max(Math.abs(dx), Math.abs(dy));
+  const o = ((t - 1) >> 1) + grow, tt = t + 2 * grow;
+  let rx = 0, ry = 0, rw = 0;
+  for (let i = 0; i <= n; i++) {
+    const x = n ? x0 + Math.round(dx * i / n) : x0;
+    const y = n ? y0 + Math.round(dy * i / n) : y0;
+    if (rw > 0 && y === ry) {
+      if (x === rx + rw) { rw++; continue; }
+      if (x === rx - 1) { rx--; rw++; continue; }
+    }
+    if (rw > 0) g.rect((rx - o) * A, (ry - o) * A, (rw + tt - 1) * A, tt * A);
+    rx = x; ry = y; rw = 1;
+  }
+  if (rw > 0) g.rect((rx - o) * A, (ry - o) * A, (rw + tt - 1) * A, tt * A);
+}
+
+// Fallen log lying on the ground from the stump side (ax, ay) to (bx, by)
+function _spDrawLog(g, r) {
+  const A = ART, iso = CFG.ISO_SCALE;
+  const variant = r.variant | 0;
+  const sc = _spRemScorch[Math.min(3, r.scorch | 0)];
+  const bark = darkenColorHex(r.barkColor || 0x5a3a1e, sc);
+  const cut = darkenColorHex(r.cutColor || 0xc8a070, sc);
+  const t = Math.max(2, Math.round((r.logR || 7) * 2 / A) - (variant === 1 ? 1 : 0));
+  const lift = t >> 1; // the trunk axis sits half a diameter above the ground
+  const X1 = Math.round((r.bx - r.by) / A), G1 = Math.round((r.bx + r.by) * iso / A);
+  // the base end starts a clear art px past the stump so the two read apart
+  const sdx = (r.bx - r.by) - (r.ax - r.ay), sdy = ((r.bx + r.by) - (r.ax + r.ay)) * iso;
+  const sdl = Math.max(1e-6, Math.abs(sdx) > Math.abs(sdy) ? Math.abs(sdx) : Math.abs(sdy));
+  const X0 = Math.round((r.ax - r.ay) / A + sdx / sdl * 2), G0 = Math.round((r.ax + r.ay) * iso / A + sdy / sdl * 2);
+  const Y0 = G0 - lift, Y1 = G1 - lift;
+  const steep = Math.abs(Y1 - Y0) > Math.abs(X1 - X0);
+  const o = (t - 1) >> 1;
+  const seed = ((r.x * 73856093) ^ (r.y * 19349663)) | 0;
+  const len = Math.max(Math.abs(X1 - X0), Math.abs(Y1 - Y0));
+  // branch stubs (broad-leaf trees; dead trees get one bare snag)
+  const nStubs = variant === 0 ? 2 + (_spHash(seed, 1) & 1) : variant === 2 ? 1 : 0;
+  // perpendicular screen side of the stubs: up for flat logs, sideways for steep ones
+  const pxs = steep ? 1 : 0, pys = steep ? 0 : 1;
+
+  // ground shadow: a 1-px strip below (flat) or right of (steep) the log
+  if (steep) _spGLine(g, X0 + t - o + 1, G0 + 1, X1 + t - o + 1, G1 + 1, 1, 0);
+  else _spGLine(g, X0 + 1, G0 + 2, X1 + 1, G1 + 2, 1, 0);
+  g.fill({ color: 0, alpha: 0.3 });
+  // outline (log + stubs + end caps)
+  _spGLine(g, X0, Y0, X1, Y1, t, 1);
+  for (let k = 0; k < nStubs; k++) {
+    const h = _spHash(seed, k + 3);
+    const f = 0.35 + (h & 255) / 255 * 0.5;
+    const sx = Math.round(X0 + (X1 - X0) * f), sy = Math.round(Y0 + (Y1 - Y0) * f);
+    const side = (h & 256) ? 1 : -1, l = o + 2 + ((h >> 9) & 1);
+    _spGLine(g, sx, sy, sx + side * pxs * l + (steep ? 0 : (h & 512 ? 1 : -1)), sy - pys * l, 1, 1);
+  }
+  g.fill(0x1a120a);
+  // bark body + stubs
+  _spGLine(g, X0, Y0, X1, Y1, t, 0);
+  for (let k = 0; k < nStubs; k++) {
+    const h = _spHash(seed, k + 3);
+    const f = 0.35 + (h & 255) / 255 * 0.5;
+    const sx = Math.round(X0 + (X1 - X0) * f), sy = Math.round(Y0 + (Y1 - Y0) * f);
+    const side = (h & 256) ? 1 : -1, l = o + 2 + ((h >> 9) & 1);
+    _spGLine(g, sx, sy, sx + side * pxs * l + (steep ? 0 : (h & 512 ? 1 : -1)), sy - pys * l, 1, 0);
+  }
+  g.fill(bark);
+  // shaded underside (flat) / right side (steep)
+  if (t > 2) {
+    if (steep) _spGLine(g, X0 + t - 1 - o, Y0, X1 + t - 1 - o, Y1, 1, 0);
+    else _spGLine(g, X0, Y0 + t - 1 - o, X1, Y1 + t - 1 - o, 1, 0);
+    g.fill(darkenColorHex(bark, 0.68));
+  }
+  // highlight along the top / left edge
+  if (steep) _spGLine(g, X0 - o, Y0, X1 - o, Y1, 1, 0);
+  else _spGLine(g, X0, Y0 - o, X1, Y1 - o, 1, 0);
+  g.fill(darkenColorHex(bark, 1.3));
+  // bark grain: a few dark pixels along the trunk (+ char spots when scorched)
+  const nGrain = Math.max(2, len >> 2);
+  for (let k = 0; k < nGrain; k++) {
+    const h = _spHash(seed, k + 20);
+    const f = 0.12 + (h & 255) / 255 * 0.76;
+    const off = ((h >> 8) % Math.max(1, t - 1)) - o + (t > 2 ? 0 : 0);
+    const gx = Math.round(X0 + (X1 - X0) * f) + (steep ? off : 0);
+    const gy = Math.round(Y0 + (Y1 - Y0) * f) + (steep ? 0 : off);
+    g.rect(gx * A, gy * A, ((h >> 12) & 1) && !steep ? 2 * A : A, A);
+  }
+  g.fill((r.scorch | 0) >= 2 ? 0x141010 : darkenColorHex(bark, 0.62));
+  // snapped base end: splintered (dark notches + a light splinter), so it
+  // reads apart from the stump's cut top
+  const ux = X1 - X0, uy = Y1 - Y0, ul = Math.max(1, Math.sqrt(ux * ux + uy * uy));
+  const ex = Math.round(ux / ul), ey = Math.round(uy / ul);
+  for (let k = -o; k < t - o; k++) {
+    if ((_spHash(seed, k + 50) & 1) === 0) continue;
+    g.rect((X0 + (steep ? k : 0)) * A, (Y0 + (steep ? 0 : k)) * A, A, A);
+  }
+  g.fill(0x1a120a);
+  g.rect((X0 - ex + (steep ? 0 : 0)) * A, (Y0 - ey) * A, A, A);
+  g.fill(cut);
+  // cut-wood end cap with a ring at the far (crown) end
+  {
+    const cw = Math.max(1, t - 2), ch = Math.max(1, t - 1);
+    const w = steep ? ch : cw, h = steep ? cw : ch;
+    const lx = X1 + ex - (w >> 1), ly = Y1 + ey - (h >> 1);
+    g.rect((lx - 1) * A, (ly - 1) * A, (w + 2) * A, (h + 2) * A);
+    g.fill(0x1a120a);
+    g.rect(lx * A, ly * A, w * A, h * A);
+    g.fill(cut);
+    if (w > 1 || h > 1) {
+      g.rect((lx + (w >> 1)) * A, (ly + (h >> 1)) * A, A, A); // heart / ring
+      g.fill(darkenColorHex(cut, 0.66));
+    }
+  }
+}
+
+// Snapped stump at the tree base (x, y): bark sides, cut-wood top, ring
+function _spDrawStump(g, r) {
+  const A = ART, iso = CFG.ISO_SCALE;
+  const variant = r.variant | 0;
+  const sc = _spRemScorch[Math.min(3, r.scorch | 0)];
+  const bark = darkenColorHex(r.barkColor || 0x5a3a1e, sc);
+  const cut = darkenColorHex(r.cutColor || 0xc8a070, (r.scorch | 0) >= 2 ? sc * 0.8 : sc);
+  const X = Math.round((r.x - r.y) / A), Y = Math.round((r.x + r.y) * iso / A);
+  const w = variant === 0 ? Math.max(4, Math.round((r.stumpR || 5) * 2 / A) + 2) : 4;
+  const h = variant === 1 ? 3 : 4;           // side height (art px)
+  const L = X - (w >> 1), T = Y - h - 1;     // left column, top-face row
+  const seed = ((r.x * 73856093) ^ (r.y * 19349663)) | 0;
+  // shadow
+  g.rect((L + 1) * A, (Y + 1) * A, w * A, A);
+  g.fill({ color: 0, alpha: 0.3 });
+  // outline: body + rounded top
+  g.rect((L - 1) * A, T * A, (w + 2) * A, (Y - T + 1) * A);
+  g.rect(L * A, (T - 1) * A, w * A, A);
+  g.fill(0x1a120a);
+  // bark sides (darker right column)
+  g.rect(L * A, (T + 1) * A, w * A, (Y - T) * A);
+  g.fill(bark);
+  g.rect((L + w - 1) * A, (T + 1) * A, A, (Y - T) * A);
+  g.fill(darkenColorHex(bark, 0.68));
+  // cut top (2 rows: reads as an ellipse in iso) + ring pixel + heart
+  g.rect(L * A, T * A, w * A, A);
+  g.rect((L + 1) * A, (T - 1) * A, Math.max(1, w - 2) * A, A);
+  g.fill(cut);
+  g.rect(L * A, T * A, A, A);
+  g.fill(darkenColorHex(cut, 0.75));
+  g.rect((L + (w >> 1)) * A, (T - (w > 3 ? 1 : 0)) * A, A, A);
+  g.fill(darkenColorHex(cut, 0.6));
+  // a jagged bark splinter sticking up where the trunk snapped
+  const hs = _spHash(seed, 7);
+  const spx = (hs & 1) ? L + w - 1 : L;
+  g.rect(spx * A, (T - 1) * A, A, A);
+  if (variant !== 1 && (hs & 2)) g.rect(spx * A, (T - 2) * A, A, A);
+  g.fill(bark);
+}
+
+// Rubble footprint of a shattered boulder / ruin
+function _spDrawRubble(g, r) {
+  const A = ART, iso = CFG.ISO_SCALE;
+  const cx = _spSnap(r.x - r.y), cy = _spSnap((r.x + r.y) * iso);
+  const seed = ((r.x * 73856093) ^ (r.y * 19349663)) | 0;
+  const ruins = r.type === 'ruins';
+  const rad = r.radius || (ruins ? 16 : 10);
+  const rx = Math.max(2, Math.round(rad * 1.1 / A)), ry = Math.max(1, Math.round(rx * 0.5));
+  const base = darkenColorHex(r.remainColor || 0x62625a, _spRemScorch[Math.min(3, r.scorch | 0)]);
+  // dusty footprint
+  _spEllRows(g, cx, cy, rx + 1, ry + 1, seed, true);
+  g.fill({ color: 0, alpha: 0.2 });
+  const n = 4 + rx + (ruins ? 2 : 0);
+  // stones: outline pass, two tone fills, highlights (same hashes each pass)
+  for (let pass = 0; pass < 4; pass++) {
+    for (let i = 0; i < n; i++) {
+      const h = _spHash(seed, i + 60);
+      const x = ((h & 255) / 255 * 2 - 1) * rx, y = (((h >> 8) & 255) / 255 * 2 - 1) * ry;
+      const px = cx + Math.round(x) * A, py = cy + Math.round(y) * A;
+      const w = 1 + ((h >> 16) & 1) + (ruins && ((h >> 19) & 1) ? 1 : 0), hh = 1 + (((h >> 17) & 3) === 0 ? 1 : 0);
+      const tone = (h >> 18) & 1;
+      if (pass === 0) g.rect(px - A, py - A, (w + 2) * A, (hh + 2) * A);
+      else if (pass === 1 && !tone) g.rect(px, py, w * A, hh * A);
+      else if (pass === 2 && tone) g.rect(px, py, w * A, hh * A);
+      else if (pass === 3 && w > 1) g.rect(px, py, A, A);
+    }
+    if (pass === 0) g.fill(0x1c1c18);
+    else if (pass === 1) g.fill(base);
+    else if (pass === 2) g.fill(darkenColorHex(base, 0.78));
+    else g.fill(darkenColorHex(base, 1.3));
+  }
+  if (ruins) {
+    // two low broken wall stubs
+    for (let i = 0; i < 2; i++) {
+      const h = _spHash(seed, i + 90);
+      const px = cx + ((h % (rx + 1)) - (rx >> 1)) * A, py = cy - ((h >> 6) & 1) * A;
+      const hh = 1 + ((h >> 4) & 1);
+      g.rect(px - A, py - (hh + 1) * A, 4 * A, (hh + 2) * A);
+      g.fill(0x22221e);
+      g.rect(px, py - hh * A, 2 * A, hh * A);
+      g.fill(base);
+      g.rect(px, py - hh * A, 2 * A, A);
+      g.fill(darkenColorHex(base, 1.3));
+    }
+  }
+}
+
+function _spRemainDepth(r) { return r.x + r.y; }
+function _spRemainCmp(a, b) { return _spRemainDepth(a) - _spRemainDepth(b); }
+
+function _spEnvLayerBuild(c) {
+  const g = c.g;
+  g.clear();
+  const items = c.items;
+  if (items.length > 1) items.sort(_spRemainCmp);
+  const iso = CFG.ISO_SCALE;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (let i = 0; i < items.length; i++) {
+    const r = items[i];
+    if (r.remain === 'log') {
+      _spDrawLog(g, r);
+      _spDrawStump(g, r);
+      const ax = r.ax - r.ay, ay = (r.ax + r.ay) * iso, bx = r.bx - r.by, by = (r.bx + r.by) * iso;
+      x0 = Math.min(x0, ax, bx); x1 = Math.max(x1, ax, bx); y0 = Math.min(y0, ay, by); y1 = Math.max(y1, ay, by);
+    } else if (r.remain === 'rubble') {
+      _spDrawRubble(g, r);
+    }
+    const sx = r.x - r.y, sy = (r.x + r.y) * iso;
+    x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
+  }
+  // screen bounds (+ margin for outlines / rubble spread)
+  c.x0 = x0 - 60; c.x1 = x1 + 60; c.y0 = y0 - 60; c.y1 = y1 + 60;
+  c.n = items.length;
+  c.sigBuilt = c.sig;
+  _sp.envL.rebuilds++;
+}
+
+// Re-bucket envRemains by chunk; rebuild only chunks whose set changed
+function _spEnvLayerSync() {
+  const L = _sp.envL;
+  const cs = CFG.CHUNK_SIZE * CFG.TILE_SIZE;
+  for (let i = 0; i < L.list.length; i++) { const c = L.list[i]; c.items.length = 0; c.sig = 0; }
+  for (let i = 0; i < envRemains.length; i++) {
+    const r = envRemains[i];
+    if (r.remain !== 'log' && r.remain !== 'rubble') continue;
+    const key = Math.floor(r.x / cs) + ',' + Math.floor(r.y / cs);
+    let c = L.map.get(key);
+    if (!c) {
+      let g = L.free.pop();
+      if (!g) { g = new PIXI.Graphics(); worldContainer.addChild(g); }
+      g.clear(); g.zIndex = SP_Z_ENVL; g.visible = false;
+      c = { key, g, items: [], n: 0, sig: 0, sigBuilt: -1, x0: 0, x1: 0, y0: 0, y1: 0 };
+      L.map.set(key, c);
+      L.list.push(c);
+    }
+    c.items.push(r);
+    c.sig = (Math.imul(c.sig, 31) + (r.x * 7 | 0) + (r.y * 13 | 0) + (r.remain === 'log' ? 1 : 2) + (r.scorch | 0) * 101) | 0;
+  }
+  let w = 0;
+  for (let i = 0; i < L.list.length; i++) {
+    const c = L.list[i];
+    if (c.items.length === 0) { // emptied (new round): release
+      c.g.clear(); c.g.visible = false; L.free.push(c.g);
+      L.map.delete(c.key);
+      continue;
+    }
+    if (c.items.length !== c.n || c.sig !== c.sigBuilt) _spEnvLayerBuild(c);
+    L.list[w++] = c;
+  }
+  L.list.length = w;
+}
+
+function _spRenderEnvLayer() {
+  const L = _sp.envL;
+  if (!L || typeof envRemains === 'undefined') return;
+  if (envRemainsVersion !== L.version) {
+    L.version = envRemainsVersion;
+    _spEnvLayerSync();
+  }
+  const hasCC = typeof chunkCache !== 'undefined';
+  for (let i = 0; i < L.list.length; i++) {
+    const c = L.list[i];
+    c.g.visible = (!hasCC || chunkCache.has(c.key)) &&
+      c.x1 > _sp.vx0 && c.x0 < _sp.vx1 && c.y1 > _sp.vy0 && c.y0 < _sp.vy1;
+  }
+}
+
+// Test hook (E10): env remains layer and its draw count right now
+function envLayerStats() {
+  const L = _sp.envL;
+  if (!L) return { chunks: 0, draws: 0 };
+  let vis = 0;
+  for (let i = 0; i < L.list.length; i++) if (L.list[i].g.visible) vis++;
+  return { chunks: L.list.length, draws: vis, rebuilds: L.rebuilds };
 }
