@@ -48,7 +48,8 @@ try {
     // chunk-sized radius is loaded, then let chunks bake for a moment.
     const spot = await page.evaluate(async (types) => {
       const R = CFG.CHUNK_SIZE * CFG.TILE_SIZE * 0.6;
-      const standing = (o) => types.includes(o.type) && (typeof envObjState !== 'function' || envObjState(o) === 'standing');
+      // envObjState() is null for untouched objects, else a record with .state.
+      const standing = (o) => { if (!types.includes(o.type)) return false; const r = envObjState(o); return !r || r.state === 'standing'; };
       const frame = () => new Promise((r) => requestAnimationFrame(r));
       for (let step = 0; step < 200; step++) {
         let best = null;

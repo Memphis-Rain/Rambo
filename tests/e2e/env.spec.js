@@ -269,7 +269,10 @@ test.describe('T12 environment physics', () => {
     //  expiry - life ran out
     // Piercing rounds never end on a hit; they count when they expire.
     await game.eval(() => {
-      const c = window.__d3b = { enemy: 0, env: 0, barrel: 0, expiry: 0, other: 0, on: false, byWeapon: {} };
+      // E11c: only env stops BEFORE the target's distance count ('env'); trunks hit by misses
+      // that flew past the target are tallied as 'envPast' (in the total, not the numerator).
+      const c = window.__d3b = { enemy: 0, env: 0, envPast: 0, barrel: 0, expiry: 0, other: 0, on: false, byWeapon: {} };
+      const shotInfo = new WeakMap(); // bullet -> { ox, oy, targetDist }
       const tally = (kind) => {
         c[kind]++;
         const w = c.byWeapon[WEAPONS[player.weapon].name] ||= { ended: 0, env: 0 };
@@ -282,12 +285,19 @@ test.describe('T12 environment physics', () => {
         window[name] = function (...args) { pre(...args); return orig.apply(this, args); };
       };
       wrap('bulletHitEnemy', (b) => hitE.add(b));
-      wrap('envBulletHit', (o, hx, hy, vx, vy) => envV.push(vx, vy));
+      wrap('envBulletHit', (o, hx, hy, vx, vy) => envV.push(vx, vy, hx, hy));
       wrap('hitBarrel', () => { barrelN++; });
       const origUpdate = window.updateBullets;
       window.updateBullets = function (dt) {
         if (!c.on) return origUpdate.call(this, dt);
         const mine = bullets.filter((b) => b.owner === 'player');
+        // Tag new shots with where they started and how far the bot's target was then.
+        const id = demoState().targetId;
+        const tgt = id >= 0 && enemies.find((e) => e._demoId === id);
+        for (const b of mine) {
+          if (shotInfo.has(b)) continue;
+          shotInfo.set(b, { ox: b.x, oy: b.y, targetDist: tgt ? Math.hypot(tgt.x - b.x, tgt.y - b.y) : Infinity });
+        }
         hitE = new Set(); envV = []; barrelN = 0;
         const r = origUpdate.call(this, dt);
         const still = new Set(bullets);
@@ -295,9 +305,13 @@ test.describe('T12 environment physics', () => {
           if (still.has(b)) continue;
           if (b.life <= 0) { tally('expiry'); continue; }
           if (hitE.has(b)) { tally('enemy'); continue; }
-          let env = false;
-          for (let i = 0; i < envV.length; i += 2) if (envV[i] === b.vx && envV[i + 1] === b.vy) { env = true; break; }
-          if (env && !b.pierce) tally('env');
+          let env = null;
+          for (let i = 0; i < envV.length; i += 4) if (envV[i] === b.vx && envV[i + 1] === b.vy) { env = { hx: envV[i + 2], hy: envV[i + 3] }; break; }
+          if (env && !b.pierce) {
+            const info = shotInfo.get(b);
+            const before = !info || Math.hypot(env.hx - info.ox, env.hy - info.oy) < info.targetDist;
+            tally(before ? 'env' : 'envPast');
+          }
           else if (barrelN) tally('barrel');
           else c.other++;
         }
@@ -336,7 +350,7 @@ test.describe('T12 environment physics', () => {
           if (demoState().active && gameTime - t0 < seconds) { requestAnimationFrame(tick); return; }
           c.on = false;
           const d = {};
-          for (const k of ['enemy', 'env', 'barrel', 'expiry', 'other']) d[k] = c[k] - c0[k];
+          for (const k of ['enemy', 'env', 'envPast', 'barrel', 'expiry', 'other']) d[k] = c[k] - c0[k];
           resolve({ ...d, gameSecs: gameTime - t0, wave0: w0, wave1: wave, trunksNear: trunks / Math.ceil(samples / 30),
             dist: Math.hypot(player.x - _demo.originX, player.y - _demo.originY), trunks0, all0, d0, active: demoState().active });
         };
@@ -346,12 +360,12 @@ test.describe('T12 environment physics', () => {
       measured += r.gameSecs;
       if (await game.eval(() => demoState().active)) await game.eval(() => stopDemo());
     }
-    const tot = { enemy: 0, env: 0, barrel: 0, expiry: 0, other: 0 };
+    const tot = { enemy: 0, env: 0, envPast: 0, barrel: 0, expiry: 0, other: 0 };
     for (const r of runs) for (const k of Object.keys(tot)) tot[k] += r[k];
-    const ended = tot.enemy + tot.env + tot.barrel + tot.expiry;
+    const ended = tot.enemy + tot.env + tot.envPast + tot.barrel + tot.expiry;
     const share = tot.env / Math.max(1, ended);
     const summary = `${runs.length} runs, ${measured.toFixed(1)} game-s at waves ${runs.map((r) => `${r.wave0}-${r.wave1}`).join(', ')}; ` +
-      `bullets ended: enemy ${tot.enemy}, env ${tot.env}, barrel ${tot.barrel}, expiry ${tot.expiry} (other ${tot.other}); ` +
+      `bullets ended: enemy ${tot.enemy}, env-before-target ${tot.env}, env-past-target ${tot.envPast}, barrel ${tot.barrel}, expiry ${tot.expiry} (other ${tot.other}); ` +
       `env share ${(share * 100).toFixed(1)}%; trunks within 400: ${runs.map((r) => r.trunksNear.toFixed(0)).join(', ')}; spot ${JSON.stringify(spot)}; ` +
       JSON.stringify(runs.map((r) => ({ trunks0: r.trunks0, all0: r.all0, d0: r.d0, dist: r.dist })));
     const byWeapon = await game.eval(() => window.__d3b.byWeapon);
@@ -363,7 +377,7 @@ test.describe('T12 environment physics', () => {
     expect(ended, 'the bot fired').toBeGreaterThanOrEqual(100);
     expect(runs.every((r) => r.wave0 >= 10), 'measured from wave 10').toBe(true);
     expect(Math.min(...runs.map((r) => r.trunksNear)), 'forest-heavy: trunks within 400 units of the bot').toBeGreaterThanOrEqual(15);
-    expect(share, 'D3b: share of demo shots that end on environment objects').toBeLessThan(0.15);
+    expect(share, 'D3b/E11c: share of demo shots stopped by the environment before the target distance').toBeLessThan(0.15);
   });
 });
 
@@ -416,5 +430,44 @@ test.describe('M8R review fixes', () => {
     }), first);
     expect(back.kept, 'remains kept in the store').toBe(first.length);
     expect(back.draws, 'remains drawn again on return').toBeGreaterThanOrEqual(1);
+  });
+});
+
+// E11e canopy fade (spec E11). Gated on LANDED.E11.
+test.describe('E11e canopy fade', () => {
+  test.skip(!(LANDED.M8 && LANDED.E11), 'E11 not landed (tests/milestones.js)');
+
+  test('E11e: a tree over the player fades to <= 0.5 alpha within 0.2 s and restores within 0.3 s after leaving', async ({ game }, testInfo) => {
+    await game.boot();
+    await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1e9; });
+    await game.start();
+    await game.freezeWaves();
+    // A standing tree near the player whose sprite exists; stand just "behind" its trunk
+    // (smaller depth), where the canopy covers the player on screen.
+    const tree = await game.eval(() => {
+      const t = envObjects.filter((o) => { const r = o.type === 'tree' && envObjState(o); return o.type === 'tree' && (!r || r.state === 'standing'); })
+        .sort((a, b) => Math.hypot(a.x - player.x, a.y - player.y) - Math.hypot(b.x - player.x, b.y - player.y))[0];
+      if (!t) return null;
+      player.x = t.x - 14; player.y = t.y - 14;
+      return { x: t.x, y: t.y, i: envObjects.indexOf(t) };
+    });
+    expect(tree, 'a standing tree near the player').not.toBeNull();
+    // Let the camera arrive so the tree is on screen and its sprite exists.
+    await game.page.waitForFunction((i) => _sp.env.has(envObjects[i]), tree.i, { timeout: T(10_000) });
+    await game.advance(0.5);
+    // Alpha hook if exposed, else the sprite's own alpha.
+    const alpha = () => game.eval((i) => {
+      const o = envObjects[i];
+      return typeof envCanopyAlpha === 'function' ? envCanopyAlpha(o) : _sp.env.get(o).alpha;
+    }, tree.i);
+    await game.advance(0.2);
+    const under = await alpha();
+    await game.eval(() => { player.x += 260; player.y += 260; });
+    await game.advance(0.3);
+    const after = await alpha();
+    testInfo.annotations.push({ type: 'E11e', description: `alpha under=${under} after=${after}` });
+    await game.snap(testInfo, 'E11e-canopy.png');
+    expect(under, 'E11e: canopy alpha while the player is under it').toBeLessThanOrEqual(0.5);
+    expect(after, 'E11e: restored after the player leaves').toBeGreaterThanOrEqual(0.95);
   });
 });

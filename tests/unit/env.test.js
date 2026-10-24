@@ -467,6 +467,8 @@ describe('M8 environment physics (headless)', () => {
     expect(t.collision, 'stump is smaller than the trunk').toBeLessThan(8);
     expect(log.logLen, 'log reaches across the path').toBeGreaterThan(60);
 
+    // Before E11a logs were walls; E11a makes them hurdles (tested separately below).
+    if (LANDED.E11) return;
     // Player walks into the log and is stopped by it.
     g.keys.s = true;
     let maxAlong = 0;
@@ -922,3 +924,95 @@ describe('M8R review fixes (headless)', () => {
       'no score / kills / combo / special charge for a chain the player did not start').toEqual(before);
   });
 });
+
+// ---------------------------------------------------------------------
+// E11a: logs are hurdles (spec E11). Gated on LANDED.E11.
+// ---------------------------------------------------------------------
+describe('E11a logs are hurdles', () => {
+  const todoE = !(LANDED.M8 && LANDED.E11);
+  beforeEach(() => { fresh(); g.player.invincible = 1e9; });
+
+  test.skipIf(todoE)('E11a: the player climbs over a log at x0.35 speed instead of being stopped', () => {
+    const p = g.player;
+    g.keys.s = true;
+    for (let i = 0; i < 10; i++) g.updatePlayer(DT);
+    g.keys.s = false;
+    const ul = Math.hypot(p.x, p.y), ux = p.x / ul, uy = p.y / ul, nx = -uy, ny = ux;
+    p.x = 0; p.y = 0;
+    const t = place('tree', ux * 100 - nx * 40, uy * 100 - ny * 40);
+    blastAt(t, 0.8, { from: Math.atan2(-ny, -nx) }); // topples; splintering only hits existing logs
+    stepEnv(3);
+    const log = logOf(t);
+    expect(log, 'log capsule exists').toBeTruthy();
+    const pr = 10; // player body radius used by resolveEnvCollision
+    const inside = () => g.envSegDist2(p.x, p.y, log) < (log.logR + pr) ** 2;
+    const speeds = [];
+    g.keys.s = true;
+    for (let i = 0; i < 300; i++) {
+      const x0 = p.x, y0 = p.y;
+      const wasInside = inside();
+      g.updatePlayer(DT);
+      if (wasInside && inside()) speeds.push(Math.hypot(p.x - x0, p.y - y0) / DT);
+    }
+    g.keys.s = false;
+    const along = p.x * ux + p.y * uy;
+    expect(along, 'player ended up beyond the log').toBeGreaterThan(100 + log.logR + pr);
+    expect(speeds.length, 'frames spent climbing').toBeGreaterThan(3);
+    const med = speeds.slice().sort((a, b) => a - b)[speeds.length >> 1];
+    const mx = (log.x + log.bx) / 2, my = (log.y + log.by) / 2, ts = g.CFG.TILE_SIZE;
+    const terrainMult = g.getTerrainTypeAt(Math.floor(mx / ts) * ts, Math.floor(my / ts) * ts) === 'water' ? 0.55 : 1;
+    expect(med / (g.CFG.PLAYER_SPEED * terrainMult), 'climb speed / normal speed').toBeGreaterThan(0.35 * 0.8);
+    expect(med / (g.CFG.PLAYER_SPEED * terrainMult), 'climb speed / normal speed').toBeLessThan(0.35 * 1.2);
+  });
+
+  test.skipIf(todoE)('E11a: a ring of logs felled tangentially around the player never encloses them (all 8 directions, no dodge)', () => {
+    const p = g.player;
+    // 8 trees on a 55-unit ring, 96-unit logs (height 120 x ENV_LOG_LEN 0.8): with
+    // wall-logs this is a closed pen (the explorer's 6-log hexagon, tightened).
+    const N = 8;
+    const trees = [];
+    for (let k = 0; k < N; k++) {
+      const a = (k / N) * Math.PI * 2;
+      trees.push(place('tree', Math.cos(a) * 55, Math.sin(a) * 55, { height: 120 }));
+    }
+    // Each tree falls along the tangent (a + 90 deg); the blast comes from the opposite side.
+    for (let k = 0; k < N; k++) {
+      const a = (k / N) * Math.PI * 2;
+      blastAt(trees[k], 0.8, { from: a - Math.PI / 2, R: 40 }); // R=40: neighbours 60 away are untouched
+    }
+    stepEnv(3);
+    expect(g.envLogs.length, 'logs around the player').toBeGreaterThanOrEqual(N - 1);
+    for (const keyset of [['w'], ['s'], ['a'], ['d'], ['w', 'a'], ['w', 'd'], ['s', 'a'], ['s', 'd']]) {
+      p.x = 0; p.y = 0; p.dodging = false;
+      for (const k of keyset) g.keys[k] = true;
+      let out = false;
+      for (let i = 0; i < 6 / DT; i++) {
+        g.updatePlayer(DT);
+        expect(p.dodging, 'no dodge used').toBeFalsy();
+        if (Math.hypot(p.x, p.y) > 110) { out = true; break; }
+      }
+      for (const k of keyset) g.keys[k] = false;
+      expect(out, `walked out holding ${keyset.join('+')}`).toBe(true);
+    }
+  });
+
+  test.skipIf(todoE)('E11a: an explosion with f > 0.5 splinters a log; a weaker one leaves it', () => {
+    const t = place('tree', 100, 0);
+    blastAt(t, 0.8, { from: Math.PI });
+    stepEnv(3);
+    const log = logOf(t);
+    expect(log, 'log').toBeTruthy();
+    const mid = { x: (log.x + log.bx) / 2, y: (log.y + log.by) / 2 };
+    // Weak blast (f = 0.3 at the log's middle): log stays.
+    g.spawnExplosion(mid.x + 0.7 * RPG_R, mid.y, RPG_R, true, g.SRC_EXPLOSIVE);
+    stepEnv(1);
+    expect(logOf(t), 'f = 0.3 keeps the log').toBeTruthy();
+    const v0 = g.envRemainsVersion;
+    // Strong blast (f = 0.7): splinters it.
+    g.spawnExplosion(mid.x + 0.3 * RPG_R, mid.y, RPG_R, true, g.SRC_EXPLOSIVE);
+    stepEnv(2);
+    expect(logOf(t), 'f = 0.7 splinters the log (capsule removed)').toBeFalsy();
+    expect(g.envRemainsVersion, 'remains updated').toBeGreaterThan(v0);
+  });
+});
+
