@@ -248,7 +248,7 @@ function initPixiSprites() {
     for (const g of _sp.enemyCache.free) _spDestroy(g);
     for (const g of _sp.bodyCache.list) _spDestroy(g);
     for (const g of _sp.bodyCache.free) _spDestroy(g);
-    _sp.env.forEach((g) => _spDestroy(g));
+    _sp.env.forEach((g) => { if (g && g._notchG) _spDestroy(g._notchG); _spDestroy(g); });
     _spDestroy(_sp.playerG); _spDestroy(_sp.ghostG); _spDestroy(_sp.shadowG);
     _spDestroy(_sp.fxG); _spDestroy(_sp.textG); _spDestroy(_sp.groundG); _spDestroy(_sp.hurtG);
     if (_sp.dec) {
@@ -2119,6 +2119,7 @@ function _spRenderEnv() {
     if (g._spr) {
       _spTreeXf(g, obj, rec);
       if (g._tree) _spCanopyFade(g, obj, rec, sx, sy, f);
+      if (rec !== null && rec.notch === true) _spTrunkNotch(g, obj, rec, vis);
     }
   }
   // periodic sweep of graphics whose env object was unloaded
@@ -2227,9 +2228,119 @@ function _spCanopyFade(g, obj, rec, sx, sy, f) {
   g.alpha = _spFadeA[nl];
 }
 
+// E13: trunk notch. A standing tree / pine / dead tree worn to <= 50% trunk
+// HP (rec.notch) shows a stepped pixel wedge on the trunk side facing the
+// shooters (rec.notchDir, world). One small Graphics per notched tree (few
+// at once), created on the first notched frame and redrawn only when its
+// pixel layout key changes; it copies the tree sprite's position, skew
+// (ambient + record sway about the base), tint (scorch), alpha (canopy
+// fade) and sorts just above it. Hidden once the topple shows (falling with
+// fall step > 0, fallen: the rotated sprite and the baked log take over) and
+// with the sprite (envVis).
+const SP_NOTCH_DARK = 0x1a1008;
+const SP_NOTCH_FH = 0.3;     // notch height as a fraction of the trunk height
+function _spTrunkNotch(g, obj, rec, vis) {
+  // a felled tree keeps it only while its topple has not visibly started
+  // (fall step 0: it waits for the shock front / stagger and looks standing)
+  if (rec.state !== 'standing' && rec.state !== 'scorched' &&
+      (rec.state !== 'falling' || Math.round(rec.fall * SP_FALL_STEPS) !== 0)) return;
+  const A = ART;
+  const type = obj.type;
+  // trunk as built by procedural-tree3d.js (bucketed dims; radius at the
+  // base rB, height tH, top radius = rB x (1 - taper))
+  // cb = height of the canopy's lower edge above the base at the trunk
+  // (screen units): the notch stays on the bare trunk below it
+  let rB, tH, taper, cb;
+  if (type === 'deadtree') {
+    rB = 2.5; tH = Math.round((obj.height || 0) / 15) * 15 || 40; taper = 0.4; cb = tH;
+  } else {
+    const R = Math.round((obj.radius || 0) / 15) * 15 || (type === 'pine' ? 30 : 40);
+    const H = Math.round((obj.height || 0) / 15) * 15 || 80;
+    if (type === 'pine') { rB = Math.max(3, R * 0.12); tH = H * 0.35; cb = tH - R * 0.58; } else { rB = Math.max(4, R * 0.15); tH = H * 0.5; cb = tH - R * 0.65; }
+    taper = 0.3;
+  }
+  const r = rB * (1 - taper * SP_NOTCH_FH);
+  // trunk half width in art px: columns -k .. k-1 around the base
+  const k = Math.max(1, Math.round(r * 1.35 / A));
+  const nx = rec.notchDirX, ny = rec.notchDirY;
+  const t = (nx - ny) * 0.7071;   // screen-lateral part (-1 left .. +1 right)
+  const fr = (nx + ny) * 0.7071;  // toward the camera (> 0) / away (< 0)
+  const s = t >= 0 ? 1 : -1;
+  const deep = rec.trunkMax > 0 && rec.trunkHp <= rec.trunkMax * 0.25 ? 1 : 0;
+  // mode 0: gash on the visible face; 1: bite into the silhouette edge
+  // on side s; 2: facing away (hidden side): small bites on both edges
+  const mode = fr > 0 && Math.abs(t) < 0.6 && k >= 2 ? 0 : (fr < -0.5 && Math.abs(t) < 0.35 ? 2 : 1);
+  // row (art px, base = 0, up < 0): the wedge sits on the trunk surface,
+  // its top row below the canopy edge, its bottom row above the ground
+  let cy = Math.round((-SP_NOTCH_FH * tH + r * Math.max(0, fr) * 1.41 * CFG.ISO_SCALE) / A);
+  const cyMin = Math.ceil(-cb / A) + 1 + deep;
+  if (cy < cyMin) cy = cyMin;
+  if (cy > -1) cy = -1;
+  const lit = fr > -0.3 ? 1 : 0;   // the cut-wood floor shows unless it faces away
+  let c0, w;
+  if (mode === 0) {
+    w = k >= 3 ? 3 + deep : 2;
+    c0 = Math.round(t * k) - (w >> 1);
+    if (c0 < -k) c0 = -k;
+    if (c0 + w > k) c0 = k - w;
+  } else {
+    w = mode === 2 ? 1 : Math.min(2 + deep, k);  // bite depth
+    c0 = s > 0 ? k - 1 : -k;                     // edge column
+  }
+  const key = mode + 3 * (s + 1) + 9 * deep + 18 * lit + 36 * (c0 + 32) + 2304 * (w + 8 * (cy + 256));
+  let n = g._notchG;
+  if (n === undefined || n === null) {
+    n = new PIXI.Graphics();
+    n.context.batchMode = 'batch';
+    n._key = -1;
+    g._notchG = n;
+    worldContainer.addChild(n);
+  }
+  if (n._key !== key) {
+    n._key = key;
+    n.clear();
+    const cut = typeof ENV_CUT_WOOD === 'number' ? ENV_CUT_WOOD : 0xc8a070;
+    const cutC = type === 'deadtree' ? darkenColorHex(cut, 0.8) : cut;
+    if (mode === 0) {
+      // head-on felling notch: sloped upper face in shadow, lit flat lower
+      // face (cut wood) - a dark lens with a light floor
+      const rt = cy - 1 - deep;
+      if (w > 2) n.rect((c0 + 1) * A, rt * A, (w - 2) * A, A);
+      n.rect(c0 * A, (rt + 1) * A, w * A, (cy - rt) * A);
+      n.fill(SP_NOTCH_DARK);
+      n.rect(c0 * A, (cy + 1) * A, w * A, A);
+      n.fill(cutC);
+      n.rect((c0 + (s > 0 ? w - 1 : 0)) * A, (cy + 1) * A, A, A);
+      n.fill(darkenColorHex(cutC, 0.72));
+    } else if (mode === 1) {
+      // sideways V cut into the silhouette edge, opening toward side s
+      const x0 = s > 0 ? c0 - w + 1 : c0;            // leftmost column of the deepest row
+      const xe = s > 0 ? c0 - (w - 2) : c0;          // rows one px shallower
+      const ws = Math.max(1, w - 1);
+      n.rect((s > 0 ? c0 - ws + 1 : c0) * A, (cy - 1 - deep) * A, ws * A, A);
+      n.rect(x0 * A, (cy - deep) * A, w * A, (1 + deep) * A);
+      n.fill(SP_NOTCH_DARK);
+      if (lit) { n.rect((s > 0 ? Math.min(xe, c0) : c0) * A, (cy + 1) * A, ws * A, A); n.fill(cutC); }
+    } else {
+      // notch on the hidden back: only the thinned silhouette shows
+      // (a 2 px trunk keeps one lit column: bite the side s edge only)
+      if (k > 1 || s < 0) n.rect(-k * A, (cy - 1) * A, A, (2 + deep) * A);
+      if (k > 1 || s > 0) n.rect((k - 1) * A, (cy - 1) * A, A, (2 + deep) * A);
+      n.fill(SP_NOTCH_DARK);
+    }
+  }
+  n.position.copyFrom(g.position);
+  if (n.skew.x !== g.skew.x) n.skew.x = g.skew.x;
+  if (n.tint !== g.tint) n.tint = g.tint;
+  if (n.alpha !== g.alpha) n.alpha = g.alpha;
+  n.zIndex = g.zIndex + 0.01;
+  n.visible = true;
+  vis.push(n);
+}
+
 function _spEnvSweepFn(g, obj, map) {
   if (obj._spSeen === _sp.frame) return;
-  if (g) _spDestroy(g);
+  if (g) { if (g._notchG) _spDestroy(g._notchG); _spDestroy(g); }
   map.delete(obj);
 }
 
