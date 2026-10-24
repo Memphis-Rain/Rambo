@@ -507,7 +507,7 @@ User: "when enemy or player enters water, only half the body should be visible (
     - Damage and falloff match the RPG path.
     - In water: the geyser and radius × 0.7.
   - **E13:**
-    - A tree under sustained minigun fire falls within 3–5 s.
+    - A tree under sustained fire falls within 3–5 s: minigun at ≤ 60u, M16 at ≤ 150u. Longer ranges are recorded, not asserted (spread misses the 16u trunk, which is physically right).
     - It falls away from the shooter (±45°).
     - The notch shows at ≤ 50% HP.
     - Persistence survives a chunk reload.
