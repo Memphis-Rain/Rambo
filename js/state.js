@@ -111,8 +111,9 @@ async function initPixiApp() {
   renderer = app.renderer;
   stage = app.stage;
 
-  W = renderer.width / DPR;
-  H = renderer.height / DPR;
+  // renderer.screen is in CSS pixels (Pixi v8 already divides by resolution)
+  W = renderer.screen.width;
+  H = renderer.screen.height;
 
   // Create scene graph containers
   worldContainer = new PIXI.Container();
