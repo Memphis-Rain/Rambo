@@ -99,30 +99,56 @@ describe('E13 trunk HP', () => {
 });
 
 describe('E13 felling by sustained fire', () => {
-  test.skipIf(todo)('E13: sustained minigun fire fells a tree in 3-5 s, away from the shooter (+-45 deg)', () => {
-    const t = place('tree', 120, 60);
+  /** Hold `weapon` on a tree `dist` away (direction 30 deg); returns { tFell, fallErrDeg }. */
+  function sustainedFell(weapon, dist, maxS = 12) {
+    const { g: r } = newRound();
+    g = r;
+    g.unlockedWeapons = g.WEAPONS.length;
+    g.waveActive = false; g.waveTimer = 1e9; g.envObjects.length = 0;
+    g.player.x = 0; g.player.y = 0; g.player.invincible = 1e9;
+    const a = Math.PI / 6;
+    const t = place('tree', Math.cos(a) * dist, Math.sin(a) * dist);
     const p = g.player;
-    p.weapon = weaponIdx('Minigun');
-    p.magAmmo = 1e6; // the magazine isn't what's being measured
+    p.weapon = weaponIdx(weapon);
     aimAt(t.x, t.y);
     g.mouseDown = true;
     let tFell = Infinity;
-    for (let i = 0; i < 8 / DT; i++) {
-      p.magAmmo = 1e6;
+    for (let i = 0; i < maxS / DT; i++) {
+      p.magAmmo = 1e6; p.reloading = false; // the magazine isn't what's being measured
       frame();
       if (felled(t)) { tFell = (i + 1) * DT; break; }
     }
     g.mouseDown = false;
-    expect(tFell, `minigun felled the tree after ${tFell.toFixed(2)} s`).toBeGreaterThanOrEqual(3);
-    expect(tFell).toBeLessThanOrEqual(5);
-    for (let i = 0; i < 2 / DT; i++) g.updateEnv(DT);
-    const log = g.envLogs.find((l) => l.id === t.id);
-    expect(log, 'log').toBeTruthy();
-    const fall = Math.atan2(log.by - log.ay, log.bx - log.ax);
-    const away = Math.atan2(t.y - p.y, t.x - p.x);
-    let d = fall - away;
-    d = Math.atan2(Math.sin(d), Math.cos(d));
-    expect(Math.abs(d) * 180 / Math.PI, 'falls away from the shooter').toBeLessThanOrEqual(45);
+    let fallErrDeg = null;
+    if (tFell < Infinity) {
+      for (let i = 0; i < 2 / DT; i++) g.updateEnv(DT);
+      const log = g.envLogs.find((l) => l.id === t.id);
+      if (log) {
+        const fall = Math.atan2(log.by - log.ay, log.bx - log.ax);
+        let d = fall - Math.atan2(t.y - p.y, t.x - p.x);
+        d = Math.atan2(Math.sin(d), Math.cos(d));
+        fallErrDeg = Math.abs(d) * 180 / Math.PI;
+      }
+    }
+    return { tFell, fallErrDeg };
+  }
+
+  // Spec 410dba9: asserted 3-5 game-s for the minigun at <= 60u and the M16 at <= 150u; at
+  // longer ranges spread misses the 16u trunk, so those times are recorded only.
+  for (const [weapon, dist] of [['Minigun', 55], ['M16', 145]]) {
+    test.skipIf(todo)(`E13: sustained ${weapon} fire at ${dist}u fells a tree in 3-5 game-s, away from the shooter (+-45 deg)`, () => {
+      const r = sustainedFell(weapon, dist);
+      expect(r.tFell, `${weapon} at ${dist}u felled the tree after ${r.tFell.toFixed(2)} s`).toBeGreaterThanOrEqual(3);
+      expect(r.tFell).toBeLessThanOrEqual(5);
+      expect(r.fallErrDeg, 'falls away from the shooter').not.toBeNull();
+      expect(r.fallErrDeg).toBeLessThanOrEqual(45);
+    });
+  }
+
+  test.skipIf(todo)('E13: minigun felling times at 100-220u are recorded (not asserted)', () => {
+    const rows = [100, 160, 220].map((d) => ({ d, ...sustainedFell('Minigun', d, 20) }));
+    console.log(`[E13] minigun fell times: ${rows.map((r) => `${r.d}u ${r.tFell === Infinity ? '> 20 s' : r.tFell.toFixed(2) + ' s'}`).join(', ')}`);
+    expect(rows.length).toBe(3);
   });
 
   test.skipIf(todo)('E13: a notch shows once trunk HP is <= 50%', () => {

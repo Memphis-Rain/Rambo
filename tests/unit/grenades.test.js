@@ -66,12 +66,16 @@ describe('N1 throwing', () => {
     expect(g.throwGrenade(100, 0)).toBe(true);
     expect(p.grenades).toBe(2);
     expect(g.throwGrenade(100, 0), 'cooldown blocks an immediate throw').toBe(false);
-    for (let i = 0; i < 31; i++) g.updatePlayer(1 / 60); // > 0.5 s
-    expect(g.throwGrenade(100, 0)).toBe(true);
-    for (let i = 0; i < 31; i++) g.updatePlayer(1 / 60);
+    // The cooldown counts down in updateGrenades (game time), like the real loop.
+    const wait = (s) => { for (let i = 0; i < Math.round(s * 60); i++) { g.updatePlayer(1 / 60); g.updateGrenades(1 / 60); } };
+    wait(0.45);
+    expect(g.throwGrenade(100, 0), 'still cooling down at 0.45 s').toBe(false);
+    wait(0.07);
+    expect(g.throwGrenade(100, 0), 'ready after 0.5 s').toBe(true);
+    wait(0.52);
     expect(g.throwGrenade(100, 0)).toBe(true);
     expect(p.grenades).toBe(0);
-    for (let i = 0; i < 31; i++) g.updatePlayer(1 / 60);
+    wait(0.52);
     expect(g.throwGrenade(100, 0), 'no ammo').toBe(false);
   });
 
@@ -80,11 +84,11 @@ describe('N1 throwing', () => {
     g.mouseX = s.x + g.W / 2 - g.cam.x;
     g.mouseY = s.y + g.H / 2 - g.cam.y;
     g.keys.f = true;
-    for (let i = 0; i < 40; i++) g.updatePlayer(1 / 60); // held for > the cooldown
+    for (let i = 0; i < 40; i++) { g.updatePlayer(1 / 60); g.updateGrenades(1 / 60); } // held for > the cooldown
     expect(g.grenades.length, 'one grenade per press').toBe(1);
     expect(Math.hypot(g.mouseGroundX - 250, g.mouseGroundY), 'raw ground point').toBeLessThan(2);
     g.keys.f = false;
-    g.updatePlayer(1 / 60);
+    g.updatePlayer(1 / 60); g.updateGrenades(1 / 60);
     g.keys.f = true;
     g.updatePlayer(1 / 60);
     expect(g.grenades.length, 'a new press throws again').toBe(2);
@@ -141,10 +145,15 @@ describe('N1 ammo', () => {
 describe('N1 fuse and explosion', () => {
   for (const dt of [1 / 30, 1 / 60, 1 / 144]) {
     test.skipIf(todo)(`N1: the fuse is 1.8 s +- 1 frame at dt 1/${Math.round(1 / dt)}`, () => {
-      g.throwGrenade(150, 0);
+      // Throw inside a frame, as the real loop does (updatePlayer then updateGrenades): the
+      // throw frame doesn't age the grenade, so time is counted from the throw frame on.
       const exploded0 = g.grenadeStats().exploded + g.grenadeStats().geysers;
+      g.throwGrenade(150, 0);
+      g.updateGrenades(dt);
       const t = stepUntil(dt, () => g.grenadeStats().exploded + g.grenadeStats().geysers > exploded0, 4);
-      expect(Math.abs(t - 1.8), `exploded after ${t.toFixed(4)} s`).toBeLessThanOrEqual(dt + 1e-9);
+      // Ralph's rule: never early, at most one frame late.
+      expect(t, `exploded after ${t.toFixed(4)} s (early)`).toBeGreaterThanOrEqual(1.8 - 1e-9);
+      expect(t - 1.8, `exploded after ${t.toFixed(4)} s`).toBeLessThanOrEqual(dt + 1e-9);
     });
   }
 
