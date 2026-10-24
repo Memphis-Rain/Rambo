@@ -23,6 +23,7 @@ function createPlayer() {
     walkDist: 0, recoilT: 0, recoilMag: 0,
     idleT: 0, fidgetT: 0,
     bloodyFeet: 0, footStep: 0, hurtFlash: 0,
+    grenades: CFG.GRENADE_AMMO_START, grenadeCd: 0, wavesStarted: 0, // N1
   };
 }
 
@@ -69,6 +70,9 @@ function _updateFootprints(p, dt) {
 }
 
 function updatePlayer(dt) {
+  if (keys['f']) {
+    if (!_grenadeKeyHeld) { _grenadeKeyHeld = true; _grenadeWant = true; }
+  } else _grenadeKeyHeld = false;
   const p = player;
   if (!p) return;
   const px0 = p.x, py0 = p.y;
@@ -170,8 +174,8 @@ function updatePlayer(dt) {
   const ox = worldOffsetX !== null ? worldOffsetX : W/2 - cam.x;
   const oy = worldOffsetY !== null ? worldOffsetY : H/2 - cam.y;
   const worldMouse = toWorld(mouseX - ox, mouseY - oy);
-  mouseWorldX = worldMouse.x;
-  mouseWorldY = worldMouse.y;
+  mouseWorldX = mouseGroundX = worldMouse.x;
+  mouseWorldY = mouseGroundY = worldMouse.y;
   // G13: the cursor maps to the GROUND, so aiming at a head meant aiming at
   // the ground behind the enemy. Over an enemy's drawn body, aim at that
   // (front-most) enemy's ground centre instead. Not for the demo bot, which
@@ -215,6 +219,9 @@ function updatePlayer(dt) {
     p.weapon = (p.weapon + 1) % unlockedWeapons;
     p.magAmmo = WEAPONS[p.weapon].mag; p.reloading = false; p.spinUp = 0;
   }
+  // N1: grenade on F key-down, once per press (key repeat ignored; a press
+  // during a dodge roll is latched at the top of updatePlayer)
+  if (_grenadeWant) { _grenadeWant = false; throwGrenade(mouseGroundX, mouseGroundY); }
 
   // Reload
   const wep = WEAPONS[p.weapon];
@@ -799,6 +806,10 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
   if (Math.random() < 0.06) {
     pickups.push({ x: e.x + randRange(-15,15), y: e.y + randRange(-10,10), type: 'shield', life: 15, amount: 40 + wave });
   }
+  // N1: grenade pickup (bosses too)
+  if (Math.random() < CFG.GRENADE_DROP_CHANCE) {
+    pickups.push({ x: e.x + randRange(-12,12), y: e.y + randRange(-8,8), type: 'grenade', life: 15, amount: 1 });
+  }
 
   playSound(isBoss ? 'boss_death' : 'death', isBoss ? 0.8 : 0.4);
 
@@ -1004,14 +1015,20 @@ function _bulletExplode(b) {
   }
   const src = b.bfg ? SRC_BFG : SRC_EXPLOSIVE;
   spawnExplosion(b.x, b.y, b.radius, true, src);
+  splashDamage(b.x, b.y, b.dmg, b.radius, src, b.vx, b.vy);
+}
+
+// Player explosive splash (RPG/BFG rounds, N1 grenades): 0.7 x dmg x (1 - d/R)
+// to every live enemy within R, queued through _pendingDamage
+function splashDamage(x, y, dmg, R, src, vx, vy) {
   for(let ei=enemies.length-1; ei>=0; ei--){
     const e2 = enemies[ei];
     if(e2.dead) continue;
-    const d2 = dist(b.x, b.y, e2.x, e2.y);
-    if(d2 < b.radius){
+    const d2 = dist(x, y, e2.x, e2.y);
+    if(d2 < R){
       // Dead-centre (G13c target): knock back along the round's flight
-      const ang = d2 < 1 ? Math.atan2(b.vy, b.vx) : Math.atan2(e2.y-b.y, e2.x-b.x);
-      _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: ang, src });
+      const ang = d2 < 1 ? Math.atan2(vy, vx) : Math.atan2(e2.y-y, e2.x-x);
+      _pendingDamage.push({ target: e2, dmg: dmg * (1-d2/R) * 0.7, angle: ang, src });
     }
   }
 }
@@ -1068,6 +1085,7 @@ function bodyColumnK(h) { return h / (2 * CFG.ISO_SCALE); }
 // G13: front-most enemy whose drawn body contains screen point (sx, sy)
 // (world-screen coordinates, i.e. toScreen space), or null
 let _aimPicked = null; // enemy the cursor picked this frame (G13)
+let _grenadeKeyHeld = false, _grenadeWant = false; // N1: F edge latch / pending throw
 function pickEnemyAtScreen(sx, sy) {
   let best = null, bestDepth = -Infinity;
   const iso = CFG.ISO_SCALE;
@@ -1233,6 +1251,8 @@ function updateWaves(dt) {
     if(waveTimer <= 0) {
       wave++;
       waveActive = true;
+      // N1: +1 grenade per wave start after the round's first wave (cap 6)
+      if (player && player.wavesStarted++ > 0) player.grenades = Math.min(player.grenades + 1, CFG.GRENADE_AMMO_MAX);
       const baseEnemies = 5 + wave * 2 + Math.floor(wave * 0.5);
       const cap = Math.min(baseEnemies, CFG.MAX_ENEMIES - enemies.length);
       enemiesThisWave = cap;
@@ -1293,6 +1313,9 @@ function updatePickups(dt) {
         playSound('pickup', 0.5);
       } else if(pk.type === 'shield'){
         player.shield = Math.min(player.shield + pk.amount, player.maxShield);
+        playSound('pickup', 0.5);
+      } else if(pk.type === 'grenade'){
+        player.grenades = Math.min(player.grenades + pk.amount, CFG.GRENADE_AMMO_MAX);
         playSound('pickup', 0.5);
       }
       pickups.splice(i,1);

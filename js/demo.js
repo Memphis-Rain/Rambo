@@ -19,6 +19,9 @@ const DEMO_LEASH_FULL = 550;      // full pull here, so the held-strafe equilibr
 const DEMO_MOVE_HOLD = 0.4;       // D3a: minimum time a chosen direction is held      // the pull ramps in smoothly from here (no on/off edge)
 const DEMO_START_WAVE = 10;       // first demo wave (real play starts at 1)
 const DEMO_WAVE_GAP = 1.0;        // max seconds between waves in the demo (ramps faster, D4)
+const DEMO_GRENADE_GAP = 4;       // N1: at most one throw per 4 s of game time
+const DEMO_GRENADE_MIN = 4;       // N1: enemies within GRENADE_RADIUS of the target point
+const DEMO_GRENADE_EVAL = 0.25;   // the cluster search runs at most this often (game s)
 const DEMO_PREF_DIST = {
   Pistol: 240, Uzi: 210, Shotgun: 130, M16: 260, Minigun: 230, RPG: 330,
   Plasma: 270, Tesla: 210, Railgun: 360, BFG: 380, Disintegrator: 250,
@@ -36,6 +39,7 @@ const _demo = {
   anchorX: null, anchorY: null,    // last real mouse position that counted as input
   overlay: null, styleInjected: false,
   terrain: new Map(),
+  lastGrenadeT: -Infinity, grenadesThrown: 0, grenadeEvalT: 0, // N1
 };
 
 // ---------------------------------------------------------------------
@@ -82,6 +86,7 @@ function demoState() {
     weaponIndex: _demo.weaponIndex,
     targetId: _demo.target ? _demo.targetId : -1,
     idleTimer: _demo.idleTimer,
+    grenadesThrown: _demo.grenadesThrown,
   };
 }
 
@@ -113,6 +118,7 @@ function startDemo() {
   _demo.patrolA = Math.random() * Math.PI * 2;
   _demo.weaponIndex = player ? player.weapon : 0;
   _demo.terrain.clear();
+  _demo.lastGrenadeT = -Infinity; _demo.grenadesThrown = 0; _demo.grenadeEvalT = 0;
 
   demoActive = true;
   gameStarted = true;
@@ -308,6 +314,57 @@ function _demoOnScreen(p, e) {
   const sx = dx - dy, sy = (dx + dy) * CFG.ISO_SCALE; // toScreen, inlined
   const hw = (W || 1280) / 2 - 24, hh = (H || 720) / 2 - 24;
   return Math.abs(sx) < hw && Math.abs(sy) < hh;
+}
+
+// N1: find a grenade target: a point within GRENADE_RANGE of the player with
+// >= DEMO_GRENADE_MIN live enemies inside GRENADE_RADIUS, the player outside
+// that radius. Candidates are the enemies themselves, refined to the centroid
+// of their cluster when that still qualifies. O(n^2) over <= 80 enemies, so
+// the caller gates it (ammo, cooldown, 4 s gap, every DEMO_GRENADE_EVAL s).
+// Returns true and fills `out` when a point qualifies.
+const _demoGrenE = [];
+const _demoGrenPt = { x: 0, y: 0 };
+function _demoCountNear(x, y, n, R2) {
+  let c = 0;
+  for (let j = 0; j < n; j++) {
+    const e = _demoGrenE[j], dx = e.x - x, dy = e.y - y;
+    if (dx * dx + dy * dy < R2) c++;
+  }
+  return c;
+}
+function _demoGrenadePoint(p, out) {
+  const R = CFG.GRENADE_RADIUS, R2 = R * R;
+  const reach = CFG.GRENADE_RANGE + R; // enemies past this can't share a blast with an in-range point
+  let n = 0;
+  for (let i = 0; i < enemies.length; i++) {
+    const e = enemies[i];
+    if (e.dead) continue;
+    const dx = e.x - p.x, dy = e.y - p.y;
+    if (dx * dx + dy * dy <= reach * reach) _demoGrenE[n++] = e;
+  }
+  if (n < DEMO_GRENADE_MIN) return false;
+  const ok = (x, y) => {
+    const dx = x - p.x, dy = y - p.y, d2 = dx * dx + dy * dy;
+    return d2 > R2 && d2 <= CFG.GRENADE_RANGE * CFG.GRENADE_RANGE;
+  };
+  let bestC = 0;
+  for (let i = 0; i < n; i++) {
+    const c0 = _demoGrenE[i];
+    if (!ok(c0.x, c0.y)) continue;
+    let c = 0, sx = 0, sy = 0;
+    for (let j = 0; j < n; j++) {
+      const e = _demoGrenE[j], dx = e.x - c0.x, dy = e.y - c0.y;
+      if (dx * dx + dy * dy < R2) { c++; sx += e.x; sy += e.y; }
+    }
+    if (c < DEMO_GRENADE_MIN || c <= bestC) continue;
+    // The cluster centroid lands the blast closer to everyone in it
+    const mx = sx / c, my = sy / c;
+    const cm = ok(mx, my) ? _demoCountNear(mx, my, n, R2) : 0;
+    if (cm >= c) { bestC = cm; out.x = mx; out.y = my; }
+    else { bestC = c; out.x = c0.x; out.y = c0.y; }
+  }
+  for (let i = 0; i < n; i++) _demoGrenE[i] = null;
+  return bestC >= DEMO_GRENADE_MIN;
 }
 
 // ---------------------------------------------------------------------
@@ -658,6 +715,18 @@ function _demoBot(dt) {
     const low = p.magAmmo <= Math.max(1, Math.floor(wep.mag * 0.25));
     const idle = !tgtVisible && p.magAmmo < wep.mag * 0.6;
     if (low || idle) { _demoPress('r'); _demo.reloadLock = 0.5; }
+  }
+
+  // --- Grenade (N1): a clustered group out of our own blast radius ---
+  // Throws straight at the world point (the demo owns input; F would aim at
+  // the virtual cursor, which is busy leading the gun target)
+  if (p.grenades > 0 && p.grenadeCd <= 0 && gameTime - _demo.lastGrenadeT >= DEMO_GRENADE_GAP &&
+      gameTime >= _demo.grenadeEvalT) {
+    _demo.grenadeEvalT = gameTime + DEMO_GRENADE_EVAL;
+    if (_demoGrenadePoint(p, _demoGrenPt) && throwGrenade(_demoGrenPt.x, _demoGrenPt.y)) {
+      _demo.lastGrenadeT = gameTime;
+      _demo.grenadesThrown++;
+    }
   }
 
   // --- Shockwave when charged and swarmed ---
