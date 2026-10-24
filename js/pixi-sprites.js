@@ -1920,6 +1920,17 @@ function _spDecalInit() {
   };
 }
 
+// Test hook (P4/G4): decal layers and their draw count right now
+function decalStats() {
+  const D = _sp.dec;
+  if (!D) return { chunks: 0, dynamic: 0, draws: 0 };
+  let chunks = 0;
+  for (const c of D.chunks) if (c.g.visible !== false) chunks++;
+  // recent + grow layers; an empty Graphics issues no draw
+  const dynamic = (D.recent.context.instructions.length ? 1 : 0) + (D.grow.context.instructions.length ? 1 : 0);
+  return { chunks, dynamic, draws: chunks + dynamic };
+}
+
 function _spDecChunkG() {
   const D = _sp.dec;
   let g = D.freeG.pop();
