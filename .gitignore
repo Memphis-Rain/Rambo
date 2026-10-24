@@ -6,3 +6,4 @@ playwright/.cache/
 dist/
 .vite/
 worktrees/
+.playwright-mcp/
