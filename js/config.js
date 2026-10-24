@@ -33,6 +33,8 @@ const CFG = {
   MAX_GIBS: 160,
   MAX_DMG_NUMBERS: 60,
   SHAKE_MAX: 20, // J5a: screen px; addShake clamps to this
+  // Physical environment (M8)
+  ENV_TREE_DENSITY: 1.26, // E1: x original tree counts (= ~+30% placed trees)
   WATER_CAMO_ALPHA_SCALE: 3.0, // W1 (Ralph: 3.0): water camo block alpha (1 = as designed; higher -> opaque). Baked: call rebakeWaterCamo()
   // Attract-mode demo (M6)
   DEMO_IDLE_SECONDS: 5,
