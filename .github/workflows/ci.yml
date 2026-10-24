@@ -49,7 +49,7 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: E2E tests (T4-T11), shard ${{ matrix.shard }}/4
         run: npx playwright test --grep-invert "@perf|@long" --shard=${{ matrix.shard }}/4
-      - name: Guard: the shard actually ran tests
+      - name: "Guard: the shard actually ran tests"
         if: success()
         run: node tests/ci/assert-ran.mjs
       - name: Upload Playwright report and screenshots
@@ -83,7 +83,7 @@ jobs:
       # Relative criteria only on CI (Q2a); absolute ms budgets are skipped or recorded.
       - name: Perf and statistical tests (@perf)
         run: npx playwright test --grep @perf --shard=${{ matrix.shard }}/3
-      - name: Guard: the shard actually ran tests
+      - name: "Guard: the shard actually ran tests"
         if: success()
         run: node tests/ci/assert-ran.mjs
       - name: Upload Playwright report
@@ -117,7 +117,7 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: G13 head-to-toe shots at x${{ matrix.scale }} (@long)
         run: npx playwright test -g "x${{ matrix.scale }}\) @long"
-      - name: Guard: the shard actually ran tests
+      - name: "Guard: the shard actually ran tests"
         if: success()
         run: node tests/ci/assert-ran.mjs
       - name: Upload Playwright report
