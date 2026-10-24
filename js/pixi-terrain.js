@@ -395,6 +395,7 @@ function renderPixiTerrain() {
 
   // Cleanup distant chunks (only when exceeding limit)
   if (chunkCache.size > 40) {
+    const dropped = new Set();
     for (const [key, sprite] of chunkCache) {
       const [cx2, cy2] = key.split(',').map(Number);
       if (Math.abs(cx2 - pcx) > chunkRange + 2 || Math.abs(cy2 - pcy) > chunkRange + 2) {
@@ -403,12 +404,17 @@ function renderPixiTerrain() {
         chunkCache.delete(key);
         destroyChunkWater(key);
         envChunks.delete(key);
+        dropped.add(key);
       }
     }
-    // Cleanup distant environmental objects
-    for (let i = envObjects.length - 1; i >= 0; i--) {
-      const d = dist(envObjects[i].x, envObjects[i].y, player.x, player.y);
-      if (d > 2500) envObjects.splice(i, 1);
+    // Drop exactly the env objects of the unloaded chunks (id = chunk key +
+    // '#' + n), so they regenerate with their chunk. A separate distance cut
+    // used to remove objects of chunks that stayed cached: those never came back.
+    if (dropped.size) {
+      for (let i = envObjects.length - 1; i >= 0; i--) {
+        const id = envObjects[i].id;
+        if (id && dropped.has(id.slice(0, id.indexOf('#')))) envObjects.splice(i, 1);
+      }
     }
   }
 }
