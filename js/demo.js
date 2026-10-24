@@ -103,6 +103,7 @@ function startDemo() {
   _demo.target = null; _demo.targetId = -1;
   _demo.moveIdx = -1; _demo.moveHold = 0; _demo.flipCd = 0; _demo.dirAge = 0;
   _demo.huntBest = Infinity; _demo.huntT = 0;
+  _demo.losBlocked = false; _demo.losBlockedT = 0;
   _demo.strafeDir = Math.random() < 0.5 ? -1 : 1;
   _demo.strafeTimer = 2;
   _demo.jx = _demo.jy = _demo.jtx = _demo.jty = 0; _demo.jitterTimer = 0;
@@ -203,6 +204,21 @@ function _demoClearInputs() {
 function _demoPress(k) {
   keys[k] = true;
   _demo.pulsed.push(k);
+}
+
+// D3b: would a non-piercing round from (x0,y0) to (x1,y1) hit a tree trunk,
+// stump, crate or sandbag first? (same swept test the bullets use)
+function _demoLosBlocked(x0, y0, x1, y1) {
+  const dx = x1 - x0, dy = y1 - y0, len2 = dx * dx + dy * dy;
+  const minX = Math.min(x0, x1) - 30, maxX = Math.max(x0, x1) + 30;
+  const minY = Math.min(y0, y1) - 30, maxY = Math.max(y0, y1) + 30;
+  for (let i = 0; i < envObjects.length; i++) {
+    const o = envObjects[i];
+    if (o.x < minX || o.x > maxX || o.y < minY || o.y > maxY) continue;
+    const r = envBulletRadius(o);
+    if (r > 0 && segCircleT(x0, y0, dx, dy, len2, o.x, o.y, r) >= 0) return true;
+  }
+  return false;
 }
 
 // Dot product of two moves in WASD key space (< 0: turning back)
@@ -328,7 +344,8 @@ function _demoBot(dt) {
     if (e.dead) continue;
     const d = dist(p.x, p.y, e.x, e.y);
     if (d > DEMO_ENGAGE_RANGE) { if (d < farD) { farD = d; far = e; } continue; }
-    const s = d / _demoThreatWeight(e);
+    let s = d / _demoThreatWeight(e);
+    if (e._demoLosBadUntil > _demo.elapsed) s *= 3; // D3b: its line of fire is blocked
     if (e === cur) curS = s;
     if (s < bestS) { bestS = s; best = e; }
   }
@@ -361,8 +378,10 @@ function _demoBot(dt) {
     // sign every time the distance crosses pref and the bot see-saws
     const off = tgtD - pref;
     const radial = Math.abs(off) < 40 ? 0 : clamp((off - Math.sign(off) * 40) / 60, -1.2, 1);
-    wantX = tox * radial + (-toy) * _demo.strafeDir * 0.9;
-    wantY = toy * radial + tox * _demo.strafeDir * 0.9;
+    // Blocked line of fire (D3b): strafe harder to open it up
+    const strafe = _demo.losBlocked ? 1.6 : 0.9;
+    wantX = tox * radial + (-toy) * _demo.strafeDir * strafe;
+    wantY = toy * radial + tox * _demo.strafeDir * strafe;
     wantW = 1.6;
   } else {
     // Patrol a slow circle around the origin
@@ -588,6 +607,15 @@ function _demoBot(dt) {
 
   // --- Fire ---
   let fire = tgt !== null && tgtVisible && !p.reloading;
+  // D3b: don't waste non-piercing fire into trees/crates/sandbags on the line
+  _demo.losBlocked = false;
+  if (fire && !wep.pierce && _demoLosBlocked(p.x, p.y, tgt.x, tgt.y)) {
+    fire = false;
+    _demo.losBlocked = true;
+    _demo.losBlockedT += dt;
+    // still blocked after a while: prefer another target for a moment
+    if (_demo.losBlockedT > 1.2) { tgt._demoLosBadUntil = _demo.elapsed + 1.5; _demo.losBlockedT = 0; }
+  } else _demo.losBlockedT = 0;
   if (fire) {
     // Don't shoot a barrel next to ourselves
     const ax = (tgt.x - p.x) / (tgtD || 1), ay = (tgt.y - p.y) / (tgtD || 1);
