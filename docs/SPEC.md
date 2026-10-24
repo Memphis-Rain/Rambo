@@ -264,6 +264,19 @@ Principles:
   - The active physics set is ≤ 64 objects, and debris pieces ≤ `CFG.MAX_DEBRIS` (default 300; oldest settle-and-bake first).
   - Baked environment debris shares the chunk decal draws; G4's ≤ 16 decal draws still holds.
   - Q2a still holds: a BFG felling 10+ trees must not cause a frame over 16.7 ms (spread baking over frames, as in P3).
+- **E10. Rulings on the E2–E9 core (Ralph, after Josh's 5446b82 report).**
+  - **(a) Trunks stop bullets: KEEP** ("as in real life"). Before this, bullets were never stopped by trunks; only barrels were checked.
+    - Non-piercing rounds stop at trunks, stumps, crates and sandbags. RPG, BFG and tank shells explode on impact, which feeds E2.
+    - **Piercing rounds (Plasma, Railgun, Disintegrator) pass through trunks**, emitting chips, per E3.
+    - Enemy bullets are blocked the same way, so trees become cover for both sides.
+  - **(b) New small collisions** for dead trees, crates and sandbags: **KEEP**.
+  - **(c) Demo bot line of fire (D3b).** The bot must not waste fire into trunks. Before firing a non-piercing weapon, it checks the swept line to its target. If an obstacle blocks it, it strafes to clear the line, or retargets. Acceptance: < 15% of demo shots end on environment objects at wave 10 in forest-heavy areas.
+  - **(d) Credit** as Josh implemented it: a fall the player didn't cause still damages, but gives no score or combo. Bushes are destroyed, not toppled.
+  - **(e) Decal budget split.**
+    - **Structural remains** (stump, log, rubble footprint) are **world state, not decals**. Render them from the E7 persistence store, baked into the chunk's environment layer at chunk bake and rebuilt from the store when a chunk regenerates.
+    - They are **never recycled by gore**: a log that still has collision must always be visible.
+    - Cosmetic splinters, sand and leaves share the gore decal pool, as now (leaves at 1 in 8).
+    - The environment layer may add **≤ 4 draws per visible chunk ring** on top of G4's ≤ 16.
 - **E9. Test hooks.**
   - `envState(id)` returns `{ state: 'standing'|'scorched'|'falling'|'fallen'|'destroyed', hp, sway }`.
   - `envStats()` returns `{ active, debris, felled }`.
