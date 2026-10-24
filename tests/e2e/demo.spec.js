@@ -198,4 +198,68 @@ test.describe('T11 attract mode', () => {
     expect(all, 'D5: DEMO banner').toMatch(/\bDEMO\b/);
     expect(all, 'D5: bottom prompt').toMatch(/PRESS ANY KEY OR CLICK TO PLAY/);
   });
+
+  test('B6: the bot does not oscillate while its target sits just off-screen', async ({ game }, testInfo) => {
+    test.skip(!LANDED.G12A, 'G12A not landed (tests/milestones.js)');
+    test.setTimeout(150_000);
+    await bootTitle(game, 1e9);
+    const runs = [];
+    for (let run = 0; run < 3; run++) {
+      await game.eval(() => { CFG.DEMO_MAX_SECONDS = 1e9; startDemo(); });
+      runs.push(await game.eval((seconds) => new Promise((resolve) => {
+        // Sample the bot's movement keys every frame. A reversal is a new direction
+        // pointing against the last non-zero direction (dot < 0) within 0.4 s.
+        const dirOf = () => {
+          const x = (keys.d ? 1 : 0) - (keys.a ? 1 : 0), y = (keys.s ? 1 : 0) - (keys.w ? 1 : 0);
+          return x || y ? { x, y, t: performance.now() / 1000 } : null;
+        };
+        let last = null, start = null, offTime = 0, prevT = null;
+        const reversals = [], offReversals = [];
+        const offscreenTarget = () => {
+          const id = demoState().targetId;
+          const e = id >= 0 && enemies.find((en) => en._demoId === id);
+          if (!e) return false;
+          const sp = toScreen(e.x, e.y);
+          const x = sp.x + worldOffsetX, y = sp.y + worldOffsetY, m = 150;
+          const out = x < 0 || y < 0 || x > W || y > H;
+          return out && x > -m && y > -m && x < W + m && y < H + m;
+        };
+        const tick = () => {
+          const now = performance.now() / 1000;
+          if (start === null) start = now;
+          const off = offscreenTarget();
+          if (off && prevT !== null) offTime += now - prevT;
+          prevT = now;
+          const d = dirOf();
+          if (d) {
+            if (last && d.x * last.x + d.y * last.y < 0 && d.t - last.t < 0.4) {
+              reversals.push(d.t);
+              if (off) offReversals.push(d.t);
+            }
+            last = d;
+          }
+          if (now - start < seconds && demoState().active) requestAnimationFrame(tick);
+          else {
+            // Oscillation window: 3+ reversals within 1 s.
+            const windows = reversals.filter((t, i) => i >= 2 && t - reversals[i - 2] <= 1).length;
+            resolve({ secs: now - start, reversals: reversals.length, offTime, offReversals: offReversals.length, windows });
+          }
+        };
+        requestAnimationFrame(tick);
+      }), 30));
+      await game.eval(() => stopDemo());
+    }
+    const total = runs.reduce((a, r) => ({ secs: a.secs + r.secs, reversals: a.reversals + r.reversals,
+      offTime: a.offTime + r.offTime, offReversals: a.offReversals + r.offReversals, windows: a.windows + r.windows }),
+    { secs: 0, reversals: 0, offTime: 0, offReversals: 0, windows: 0 });
+    const summary = `secs=${total.secs.toFixed(1)} reversals=${total.reversals} (${(total.reversals / total.secs).toFixed(2)}/s) targetJustOffscreen=${total.offTime.toFixed(1)}s reversalsThen=${total.offReversals} oscillationWindows=${total.windows}`;
+    console.log(`[B6] ${summary}`);
+    testInfo.annotations.push({ type: 'B6', description: summary });
+    expect(total.windows, 'B6: no 3-reversals-in-1-s oscillation windows').toBeLessThanOrEqual(1);
+    if (total.offTime > 2) {
+      expect(total.offReversals / total.offTime, 'B6: reversals/s while the target is just off-screen').toBeLessThan(0.5);
+    }
+    expect(total.reversals / total.secs, 'B6: overall reversal rate').toBeLessThan(0.5);
+  });
 });
+

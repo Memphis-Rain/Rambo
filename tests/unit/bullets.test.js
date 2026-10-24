@@ -190,3 +190,123 @@ describe('G2a knockback cap', () => {
     }
   });
 });
+
+// G12a (spec 49f3e2a): a pierce round hits an enemy once per pass for
+// dmg * max(1, round(chord / (speed / 60))), reproducing the old 60 fps damage.
+// Golden hit counts measured with main@5c5fb60's per-frame point test at 60 fps,
+// centre pass, target 300 units away (spread over 260-340 units: Plasma 3/9,
+// Disintegrator 2-3/6-7, Railgun 0-1/2-3).
+const GOLDEN = [
+  { weapon: 'Plasma', target: 'Tank', boss: false, hits: 3 },
+  { weapon: 'Plasma', target: 'Juggernaut', boss: true, hits: 9 },
+  { weapon: 'Disintegrator', target: 'Tank', boss: false, hits: 2 },
+  { weapon: 'Disintegrator', target: 'Juggernaut', boss: true, hits: 6 },
+  { weapon: 'Railgun', target: 'Tank', boss: false, hits: 1 },
+  { weapon: 'Railgun', target: 'Juggernaut', boss: true, hits: 3 },
+];
+
+/** Damage per bullet, in hits, for one pass through a stationary target (lateral offset in units). */
+function passHits(weaponName, targetName, boss, fps, lateral = 0) {
+  const { g: r } = newRound();
+  r.unlockedWeapons = r.WEAPONS.length;
+  const wi = r.WEAPONS.findIndex((w) => w.name === weaponName);
+  const ti = r.ENEMY_TYPES.findIndex((t) => t.name === targetName);
+  const e = boss ? r.spawnEnemy(ti, 300, 0, { name: 'Golden', hp: 1e9 }) : r.spawnEnemy(ti, 300, 0);
+  e.hp = e.maxHp = 1e9;
+  e.shieldHp = 0;
+  const p = r.player;
+  p.weapon = wi; p.magAmmo = r.WEAPONS[wi].mag; p.fireTimer = 0; p.spinUp = 1;
+  const s = r.toScreen(300, 0);
+  r.mouseX = s.x + r.W / 2; r.mouseY = s.y + r.H / 2;
+  r.mouseJustPressed = true; r.mouseDown = true;
+  r.updatePlayer(0.0001);
+  r.mouseDown = false;
+  const n = r.bullets.length;
+  // Remove spread: aim every bullet exactly through (target + lateral offset across the path).
+  for (const b of r.bullets) {
+    const sp = Math.hypot(b.vx, b.vy);
+    const dx = e.x - b.x, dy = e.y + lateral - b.y, d = Math.hypot(dx, dy);
+    b.vx = (dx / d) * sp; b.vy = (dy / d) * sp;
+  }
+  for (let i = 0; i < fps * 3 && r.bullets.length; i++) { r.updateBullets(1 / fps); r.processPendingDamage(); }
+  return { hits: (e.maxHp - e.hp) / r.WEAPONS[wi].dmg / n, radius: 15 * e.size, speed: r.WEAPONS[wi].speed };
+}
+
+describe('G12a pierce damage per pass', () => {
+  const todo = !LANDED.G12A;
+
+  for (const c of GOLDEN) {
+    test.skipIf(todo)(`G12a: ${c.weapon} vs ${c.boss ? 'Juggernaut boss' : c.target} matches the old 60 fps damage (±1 hit) at 30/60/144 fps`, () => {
+      const at = [30, 60, 144].map((fps) => passHits(c.weapon, c.target, c.boss, fps).hits);
+      expect(at[0], '30 fps == 60 fps').toBeCloseTo(at[1], 6);
+      expect(at[2], '144 fps == 60 fps').toBeCloseTo(at[1], 6);
+      expect(Math.abs(at[1] - c.hits), `got ${at[1]} hits, golden ${c.hits}`).toBeLessThanOrEqual(1);
+    });
+  }
+
+  test.skipIf(todo)('G12a: an off-centre pass uses the chord: max(1, round(chord / (speed/60))) hits, same at any fps', () => {
+    for (const [weapon, target, boss] of [['Plasma', 'Juggernaut', true], ['Disintegrator', 'Tank', false]]) {
+      const probe = passHits(weapon, target, boss, 60, 0);
+      const lateral = probe.radius * 0.8;
+      const chord = 2 * Math.sqrt(probe.radius ** 2 - lateral ** 2);
+      const expected = Math.max(1, Math.round(chord / (probe.speed / 60)));
+      for (const fps of [30, 60, 144]) {
+        const h = passHits(weapon, target, boss, fps, lateral).hits;
+        // The bullet path isn't perfectly straight through the offset point; allow ±1.
+        expect(Math.abs(h - expected), `${weapon} vs ${target} @${fps}fps: ${h} vs ${expected}`).toBeLessThanOrEqual(1);
+      }
+      expect(passHits(weapon, target, boss, 30, lateral).hits).toBeCloseTo(passHits(weapon, target, boss, 144, lateral).hits, 6);
+    }
+  });
+});
+
+describe('G12b barrels on the bullet path', () => {
+  const todo = !LANDED.G12A;
+
+  const barrel = (x, y) => {
+    const b = { x, y, type: 'barrel', hp: 1e9, maxHp: 1e9, exploded: false, createdAt: -1 };
+    g.envObjects.push(b);
+    return b;
+  };
+
+  test.skipIf(todo)('G12b: the Railgun cannot tunnel through a barrel', () => {
+    const rand = g.seededRand(21);
+    let hits = 0;
+    for (let i = 0; i < 40; i++) {
+      resetShot();
+      g.envObjects.length = 0;
+      const a = rand() * Math.PI * 2, d = 150 + rand() * 100;
+      const br = barrel(Math.cos(a) * d, Math.sin(a) * d);
+      fireAt(RAILGUN, br.x, br.y);
+      for (const b of g.bullets) { // exact aim through the barrel centre
+        const sp = Math.hypot(b.vx, b.vy), dx = br.x - b.x, dy = br.y - b.y, dd = Math.hypot(dx, dy);
+        b.vx = (dx / dd) * sp; b.vy = (dy / dd) * sp;
+      }
+      stepBullets(1 / 60, 60);
+      if (br.hp < br.maxHp) hits++;
+    }
+    expect(hits).toBe(40);
+  });
+
+  for (const nearer of ['barrel', 'enemy']) {
+    test.skipIf(todo)(`G12b: on a non-pierce path the nearer ${nearer} takes the hit`, () => {
+      resetShot();
+      g.envObjects.length = 0;
+      const [bd, ed] = nearer === 'barrel' ? [110, 150] : [150, 110];
+      const br = barrel(bd, 0);
+      const e = dummy(typeIdx(g, 'Militia'), ed, 0);
+      fireAt(M16, 200, 0);
+      const b = g.bullets[0];
+      b.vy = 0; b.vx = 4000; // crosses both in one 0.05 s step
+      stepBullets(0.05, 10);
+      if (nearer === 'barrel') {
+        expect(br.hp, 'barrel hit').toBeLessThan(br.maxHp);
+        expect(e.hp, 'enemy behind untouched').toBe(e.maxHp);
+      } else {
+        expect(e.hp, 'enemy hit').toBeLessThan(e.maxHp);
+        expect(br.hp, 'barrel behind untouched').toBe(br.maxHp);
+      }
+      expect(g.bullets.length, 'non-piercing bullet consumed').toBe(0);
+    });
+  }
+});
