@@ -437,6 +437,12 @@ User: "when enemy or player enters water, only half the body should be visible (
     - Throw cooldown 0.5 s.
   - HUD: grenade icons next to the ammo (H-series style).
   - Demo bot: throws when ≥ 4 enemies are within 140u of a point inside the throw range and the player is outside that radius; at most once per 4 s.
+  - **N1 rulings** (Ralph, on Josh's question):
+    - Damage uses literal RPG-path reuse: a pseudo-round with dmg 200 and R 140 goes through the same explode code, with no direct hit. So splash = 0.7 × 200 × (1 − d/R), which is 140 at the centre.
+    - Geyser: same dmg, R 98.
+    - No self-damage (as RPG). Kill source SRC_EXPLOSIVE.
+    - A pickup gives +1, capped at 6, and bosses drop at 6% too. The wave +1 is capped at 6.
+    - F throws on key-down, once per press. The target is the raw ground point, before the G13 pick.
   - Audio: a pin/throw click, bounce ticks, the boom (reuse the RPG boom pitched up), and a muffled boom for the geyser.
 
 ### Trees
