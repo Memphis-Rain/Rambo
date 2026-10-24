@@ -456,6 +456,9 @@ User: "when enemy or player enters water, only half the body should be visible (
   - At 0 HP the tree **topples away from the dominant recent shot direction**, using the E2 topple, E6 falling damage and kill credit, E10 remains and E7 persistence.
   - Rough timings, for reference only: a minigun fells a tree in ~3–5 s of sustained fire, an M16 in ~4 s, and a pistol needs ~9 s.
   - Trunk HP persists with E7.
+  - **E13 rulings** (Ralph):
+    - E2 doesn't change. Each blast also subtracts **f × the explosion's own damage** from trunk HP: RPG 250, grenade 200, BFG 800. Sources without a round (barrels, bombers, enemy shells) default to ENV_BLAST_DMG 100.
+    - **Enemy rounds damage trunks too**, so cover erodes, which is intended. Only falls the player caused credit the player (E6).
 
 ### Flamethrower
 
