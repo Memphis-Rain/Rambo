@@ -131,6 +131,12 @@ Because of M1, art must read at 1/3 resolution:
   - Triggers are limited to **boss kills and explosions with radius ≥ 100**. Ordinary overkill and gib deaths do NOT hit-stop.
   - Without these limits, fast weapons stalled the simulation to about half speed at 10 kills/s.
   - Acceptance: over 10 s of 10 kills/s with the Minigun, the total simulated time is ≥ 90% of wall time.
+- **G2a. Knockback cap (decision, Ralph).** The push stops scaling at 140 damage today, because it's `clamp(50 + dmg*2.5, 60, 400)`. Raise the cap to **900**, and keep the resist factors for Heavy, Tank, Juggernaut and bosses plus the /size divisor. Acceptance: environment collision still resolves after a push, so no enemy ends up inside a tree or rock.
+- **G12. Swept bullet hits (bug fix, decision, Ralph).**
+  - Since the initial commit, bullets hit by a point test. Fast rounds (Railgun at 4000 moves about 67 units per frame) tunnel through enemies; the Railgun misses about 19 of 20 aimed shots.
+  - Fix: use a **swept segment-vs-circle test from the previous to the current position for ALL bullets** (player and enemy).
+  - Pierce semantics stay the same: each bullet damages a given enemy at most once, and a non-piercing bullet hits the **nearest** enemy along the segment.
+  - Q4 exception: this restores the intended weapon stats and doesn't change them. Unit-test the Railgun hit rate (≥ 95% of aimed shots on a stationary target at 300 units), plus the non-pierce "nearest first" rule.
 - **G11. Bomber chain carry-over (bug fix, found by Anna in T3).**
   - Today `processPendingDamage()` runs at most 3 rounds per frame, then `_pendingDamage.length = 0` throws away the damage still queued. A long bomber chain dies out after about 6 links.
   - Keep the 3-rounds-per-frame anti-recursion cap, but **carry the leftover queue to the next frame** instead of discarding it.
