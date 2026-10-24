@@ -15,7 +15,8 @@
 //                        radial: magnitude rescaled (m - dz) / (1 - dz), <= 1)
 //   inputDevice        'kbm' | 'pad' (last used wins)
 //   padAim             { x, y, dirX, dirY, dist, has } world aim point =
-//                        player + dir x (180 + rmag x 240); the reticle
+//                        player + dir x (180 + rmag x 240); the reticle;
+//                        has = an aim direction exists (either stick)
 //   padAssistTarget(px, py, dirX, dirY, maxDist, coneDeg) -> enemy | null
 //   padRumble(weak, strong, ms) -> bool (played)
 //   padState()         { connected, inputDevice, disconnectPaused, sprint }
@@ -47,6 +48,7 @@ let _padRumbleUntil = -1e9, _padRumbleStr = 0;   // the effect playing now
 let _padRumbleQ = null;                         // strongest effect blocked by the gap
 const _padRumbleQBuf = { weak: 0, strong: 0, ms: 0 };
 let _padTapT = -1;                              // gameTime the pending taps were set
+let _padRightUsed = false;                       // RS has aimed: the left stick no longer steers the aim
 let _padPrevR = 0;                              // right-stick magnitude last poll (spring-back)
 let _padToastPending = false;
 let _padMouseAX = null, _padMouseAY = null;
@@ -264,11 +266,12 @@ function pollGamepad() {
   if (active) _padSetDevice('pad');
 
   // Pause: Start toggles; A / B also resume (C5)
+  let swallow = false; // the resume press itself isn't an action
   if (jp[PAD_BTN.START] || (paused && (jp[PAD_BTN.A] || jp[PAD_BTN.B]))) {
     const resume = paused;
     _padTogglePause();
     if (!resume) return;
-    jp.fill(0); // the resume press itself isn't an action
+    swallow = true;
   }
   if (paused || inputDevice !== 'pad' || !player) return;
 
@@ -279,16 +282,19 @@ function pollGamepad() {
   // once it holds for a poll, so a release keeps the last aim
   const steady = pad.rmag >= _padPrevR - CFG.PAD_AIM_SETTLE;
   _padPrevR = pad.rmag;
-  if (pad.rmag > 0 && steady) {
-    _padWorldDir(pad.rx, pad.ry, _padAimPt);
-    padAim.dirX = _padAimPt.x; padAim.dirY = _padAimPt.y;
-    padAim.dist = CFG.PAD_AIM_MIN + pad.rmag * CFG.PAD_AIM_RANGE;
-    padAim.has = true;
-  } else if (!padAim.has && pad.lmag > 0) {
+  if (pad.rmag > 0) {
+    if (steady || !_padRightUsed) {
+      _padWorldDir(pad.rx, pad.ry, _padAimPt);
+      padAim.dirX = _padAimPt.x; padAim.dirY = _padAimPt.y;
+    }
+    _padRightUsed = true; padAim.has = true;
+  } else if (!_padRightUsed && pad.lmag > 0) {
     _padWorldDir(pad.lx, pad.ly, _padAimPt);
     padAim.dirX = _padAimPt.x; padAim.dirY = _padAimPt.y;
-    padAim.dist = CFG.PAD_AIM_MIN + pad.lmag * CFG.PAD_AIM_RANGE;
+    padAim.has = true;
   }
+  // C3: distance = 180 + magnitude x 240 (a released stick -> 180u, direction kept)
+  padAim.dist = CFG.PAD_AIM_MIN + pad.rmag * CFG.PAD_AIM_RANGE;
   padAim.x = player.x + padAim.dirX * padAim.dist;
   padAim.y = player.y + padAim.dirY * padAim.dist;
   // The reticle drives the cursor path (G13 picking, N1 ground point); the
@@ -306,13 +312,15 @@ function pollGamepad() {
   const rt = pad.pressed[PAD_BTN.RT];
   if (rt) { mouseDown = true; _padMouseOwned = true; }
   else if (_padMouseOwned) { mouseDown = false; _padMouseOwned = false; }
-  if (jp[PAD_BTN.RT]) mouseJustPressed = true;
-  if (jp[PAD_BTN.LT]) mouseRightJustPressed = true;
-  if (jp[PAD_BTN.A]) _padTap(' ');
-  if (jp[PAD_BTN.LB] || jp[PAD_BTN.LEFT]) _padTap('q');
-  if (jp[PAD_BTN.RB] || jp[PAD_BTN.RIGHT] || jp[PAD_BTN.Y]) _padTap('e');
-  _padKey('r', !!pad.pressed[PAD_BTN.X]);
-  if (jp[PAD_BTN.B]) _grenadeWant = true; // combat.js throws at padAim while pad-aiming
+  if (!swallow) {
+    if (jp[PAD_BTN.RT]) mouseJustPressed = true;
+    if (jp[PAD_BTN.LT]) mouseRightJustPressed = true;
+    if (jp[PAD_BTN.A]) _padTap(' ');
+    if (jp[PAD_BTN.LB] || jp[PAD_BTN.LEFT]) _padTap('q');
+    if (jp[PAD_BTN.RB] || jp[PAD_BTN.RIGHT] || jp[PAD_BTN.Y]) _padTap('e');
+    if (jp[PAD_BTN.X]) _padTap('r'); // reload once per press
+    if (jp[PAD_BTN.B]) _grenadeWant = true; // combat.js throws at padAim while pad-aiming
+  }
   if (jp[PAD_BTN.L3]) _padSprint = !_padSprint;
   if (pad.lmag <= 0) _padSprint = false; // sprint toggle cancels on stop
   _padKey('shift', _padSprint);

@@ -38,7 +38,7 @@ const CFG = {
   PAD_TRIGGER: 0.3,            // RT fires / LT shockwave past this
   PAD_AIM_MIN: 180,            // aim point = player + dir x (MIN + stick x RANGE)
   PAD_AIM_RANGE: 240,
-  PAD_AIM_SETTLE: 0.04,        // right stick: a magnitude falling by more than this per poll is a release (keep the aim)
+  PAD_AIM_SETTLE: 0.04,        // right stick: a magnitude falling by more than this per poll is a release (keep the direction)
   PAD_AIM_ASSIST: true,        // C3: pad-only assist (not the demo bot)
   PAD_ASSIST_DEG: 5,
   PAD_ASSIST_RANGE: 420,
