@@ -179,11 +179,17 @@ function updatePlayer(dt) {
   if (!(typeof demoActive !== 'undefined' && demoActive)) {
     const picked = pickEnemyAtScreen(mouseX - ox, mouseY - oy);
     if (picked) { mouseWorldX = picked.x; mouseWorldY = picked.y; }
-  }
+    _aimPicked = picked;
+  } else _aimPicked = null;
   p.aimAngle = Math.atan2(mouseWorldY - p.y, mouseWorldX - p.x);
   const sp = toScreen(p.x, p.y);
-  const smx = mouseX - ox - sp.x;
-  const smy = mouseY - oy - sp.y;
+  let smx = mouseX - ox - sp.x;
+  let smy = mouseY - oy - sp.y;
+  if (_aimPicked) { // G13: point the gun where the shot goes (the picked torso)
+    const e = _aimPicked;
+    smx = (e.x - e.y) - sp.x;
+    smy = (e.x + e.y) * CFG.ISO_SCALE - ENEMY_PICK_H * 0.45 * e.size - sp.y;
+  }
   p.angle = Math.atan2(smy, smx);
 
   // Weapon switching (1-9, 0 for 10th, - for 11th)
@@ -1050,11 +1056,14 @@ function hitBarrel(obj, dmg, byPlayer = true) {
 // G13: drawn body heights (screen units above the feet, size 1) and the
 // world-space length of a body column: screen-up (0, -h) is world
 // (-h / (2 ISO), -h / (2 ISO)), i.e. k along both axes.
-const ENEMY_BODY_H = 42, PLAYER_BODY_H = 44;
+// Column heights (the round cap adds ~0.78 r of screen height on top) and
+// the drawn sprite height used for cursor picking (head top + hat).
+const ENEMY_BODY_H = 36, PLAYER_BODY_H = 34, ENEMY_PICK_H = 48;
 function bodyColumnK(h) { return h / (2 * CFG.ISO_SCALE); }
 
 // G13: front-most enemy whose drawn body contains screen point (sx, sy)
 // (world-screen coordinates, i.e. toScreen space), or null
+let _aimPicked = null; // enemy the cursor picked this frame (G13)
 function pickEnemyAtScreen(sx, sy) {
   let best = null, bestDepth = -Infinity;
   const iso = CFG.ISO_SCALE;
@@ -1063,7 +1072,7 @@ function pickEnemyAtScreen(sx, sy) {
     if (e.dead) continue;
     const ex = e.x - e.y, ey = (e.x + e.y) * iso;
     const hw = 10 * e.size + 3;
-    if (sx < ex - hw || sx > ex + hw || sy > ey + 6 || sy < ey - ENEMY_BODY_H * e.size - 3) continue;
+    if (sx < ex - hw || sx > ex + hw || sy > ey + 6 || sy < ey - ENEMY_PICK_H * e.size - 3) continue;
     const depth = e.x + e.y; // larger depth draws on top
     if (depth > bestDepth) { bestDepth = depth; best = e; }
   }
@@ -1076,28 +1085,45 @@ function pickEnemyAtScreen(sx, sy) {
 let _capCx = 0, _capCy = 0, _capStartOutside = true;
 function segCapsuleT(x0, y0, dx, dy, len2, ax, ay, bx, by, r) {
   const ex = bx - ax, ey = by - ay, el2 = ex * ex + ey * ey;
-  // start point inside?
+  // Starting inside the column: the column is a ground region behind the
+  // feet, so a shooter standing in it must not hit everything at t = 0.
+  // Inside the foot circle = touching (t = 0); inside the column only =
+  // ignore the column for this segment and test the foot circle alone.
   let u0 = el2 > 0 ? ((x0 - ax) * ex + (y0 - ay) * ey) / el2 : 0;
   u0 = u0 < 0 ? 0 : u0 > 1 ? 1 : u0;
   const sx0 = x0 - (ax + ex * u0), sy0 = y0 - (ay + ey * u0);
-  _capStartOutside = sx0 * sx0 + sy0 * sy0 > r * r;
-  if (!_capStartOutside) { _capCx = ax + ex * u0; _capCy = ay + ey * u0; return 0; }
-  // closest points between the two segments (clamped)
-  const wx = x0 - ax, wy = y0 - ay;
-  const a = len2, b = dx * ex + dy * ey, c = el2, d = dx * wx + dy * wy, f = ex * wx + ey * wy;
-  const den = a * c - b * b;
-  let t = den > 1e-9 ? (b * f - c * d) / den : 0;
-  t = t < 0 ? 0 : t > 1 ? 1 : t;
-  let u = c > 0 ? (b * t + f) / c : 0;
-  if (u < 0) { u = 0; t = a > 0 ? -d / a : 0; } else if (u > 1) { u = 1; t = a > 0 ? (b - d) / a : 0; }
-  t = t < 0 ? 0 : t > 1 ? 1 : t;
-  _capCx = ax + ex * u; _capCy = ay + ey * u;
-  const qx = x0 + dx * t - _capCx, qy = y0 + dy * t - _capCy;
-  const dist2 = qx * qx + qy * qy;
-  if (dist2 > r * r) return -1;
-  // entry point: the swept circle test against the closest axis point
-  const te = segCircleT(x0, y0, dx, dy, len2, _capCx, _capCy, r);
-  return te >= 0 ? te : t;
+  if (sx0 * sx0 + sy0 * sy0 <= r * r) {
+    _capCx = ax; _capCy = ay;
+    const fx = x0 - ax, fy = y0 - ay;
+    // _capStartOutside stays false: a piercing round inside the capsule has
+    // already counted its pass (G12a) - only non-pierce uses the foot fallback
+    _capStartOutside = false;
+    if (fx * fx + fy * fy <= r * r) return 0;
+    return segCircleT(x0, y0, dx, dy, len2, ax, ay, r);
+  }
+  _capStartOutside = true;
+  // Exact capsule entry: the earliest of the two end circles and the side
+  // slab (|distance to the axis line| <= r with the foot of the projection
+  // inside the axis segment).
+  let best = 2;
+  const ta = segCircleT(x0, y0, dx, dy, len2, ax, ay, r);
+  if (ta >= 0) { best = ta; _capCx = ax; _capCy = ay; }
+  const tb = segCircleT(x0, y0, dx, dy, len2, bx, by, r);
+  if (tb >= 0 && tb < best) { best = tb; _capCx = bx; _capCy = by; }
+  if (el2 > 0) {
+    const el = Math.sqrt(el2), nx = -ey / el, ny = ex / el;
+    const s0 = (x0 - ax) * nx + (y0 - ay) * ny;   // signed distance to the axis line at t = 0
+    const ds = dx * nx + dy * ny;                 // its change per unit t
+    if (Math.abs(ds) > 1e-9) {
+      const ts = ((s0 > 0 ? r : -r) - s0) / ds;   // where |distance| first reaches r
+      if (ts >= 0 && ts <= 1 && ts < best) {
+        const qx = x0 + dx * ts - ax, qy = y0 + dy * ts - ay;
+        const u = (qx * ex + qy * ey) / el2;
+        if (u >= 0 && u <= 1) { best = ts; _capCx = ax + ex * u; _capCy = ay + ey * u; }
+      }
+    }
+  }
+  return best <= 1 ? best : -1;
 }
 
 // G12a with G13: the pierce chord is measured over the bullet's whole pass,
