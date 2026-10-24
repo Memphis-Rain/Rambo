@@ -433,6 +433,7 @@ function resetRound() {
     sprite.destroy(true);
   }
   chunkCache.clear();
+  clearWaterBakes();
   envObjects.length = 0;
   envChunks.clear();
   floatingTexts.length = 0;

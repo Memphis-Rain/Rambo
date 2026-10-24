@@ -52,7 +52,8 @@ The primary sessions keep their context for coordination and decisions:
 - **Q1.** No uncaught errors or `console.error` from boot through 60 s of play. Allowed noise: the `favicon.ico` 404 and `[RAMBO PERF]` warnings during the first second.
 - **Q2.** Performance: with 40+ enemies on screen and heavy gore, the F4 dump shows a CPU frame time under 12 ms on the dev machine, and the game holds 60 fps.
   - **Q2a. Definition (Ralph, after Anna's perf pass).** "CPU frame time" means **all main-thread JS per displayed frame**: update, sprite/HUD build, the retro RT pass and `app.render`/submit. `perfLog.totalCpuMs` and F4 must measure exactly that.
-  - Budget on the reference machine (RTX 5090, 1920×1080, DPR 1):
+  - Budget on the reference machine (RTX 5090, 1920×1080, DPR 1), **measured pinned to CCD0** per the P1(b) protocol. Unpinned numbers are recorded as informational.
+  - The remaining render cost is Pixi per-object work for ~2,400 visible objects. A particle/puppet atlas pass is deferred as **P5 (future)** and is out of scope now.
     - 40 enemies + continuous gore: median ≤ 8 ms, p99 ≤ 16.7 ms.
     - 80 enemies + gore: p99 ≤ 16.7 ms.
   - **Sustained:** over a 5-minute gore session, the median at minute 5 is within 15% of the median at minute 0.5, and fps never sits below 60 for more than 1 s.
@@ -196,12 +197,78 @@ Because of M1, art must read at 1/3 resolution:
   - **Find the root cause first, with evidence:** a profile or a bisect showing what grows. Then fix it.
   - Prefer an approach that doesn't rebuild geometry every frame: bake the water mask once per chunk and animate it through a shader, a uniform, or a tiling offset.
   - Acceptance: Q2a's sustained criterion.
+  - **P1 root cause (Josh, with evidence in `worktrees/josh/.scratch/p1-investigation/`):**
+    - Nothing in the game grows. The ~60 s step is the OS moving the renderer onto the busier CCD of the 2-CCD Ryzen 9950X3D, which makes the same JS ~1.6× slower.
+    - Flipping CPU affinity mid-run recovers it, and steps it again, instantly. A run pinned to CCD0 doesn't step (ratio ~1.09).
+  - **P1 decision (Ralph):**
+    - (a) **Fix the biggest real cost anyway.** `renderPixiWaterOverlay` rebuilds ~3300 rects every frame (~3.7 ms of the 5.0 ms late-state total). Bake the camo per chunk once, and animate the drift with a stepped tiling or texture offset (≤ 10 Hz).
+      - Target: water overlay ≤ 0.3 ms per frame, and totalCpuMs (40 + gore) median ≤ 3 ms **unpinned** at minute 2.
+      - **Corrected (Ralph):** the 3 ms figure came from pre-P2 accounting, which excluded the render pass. It now applies to `buildMs + updateMs` only, and is met at ~2.0 ms. Render-inclusive cost is governed by Q2a.
+      - **Result:** the overlay costs 0.01 ms per frame.
+      - That makes the scheduler's slow-CCD penalty irrelevant on real machines.
+    - (b) **Measurement protocol (Q2a):**
+      - Sustained-ratio runs on the reference machine pin the browser to CCD0 (`ProcessorAffinity = 0xFFFF` after launch). They also record an unpinned run, which is informational.
+      - The CI relative check runs as-is: GitHub runners have no CCD split.
+- **W1. Water camo translucency (bug found in P1, decision Ralph).**
+  - `g.alpha` was set per block, but only the final `g.alpha = 1` applied, so the camo has always drawn opaque instead of the intended 0.15–0.37.
+  - Restore the intended translucency through per-fill alpha. Expose it as `CFG.WATER_CAMO_ALPHA_SCALE` (1 = as designed, and a higher value moves it back toward opaque).
+  - Josh supplies before/after screenshots at x3 with dither on. Ralph picks the shipped value from them.
 - **P2. Honest instrumentation.** `perfLog` and F4 include the retro pass and `app.render` (Q2a), and report them as separate lines too.
 - **P3. Chunk-generation budget.** At most ~4 ms of chunk baking per frame. Queue the rest and bake nearest-first over the following frames; chunks just off-screen are pre-baked.
   - Acceptance: walking continuously for 30 s produces no frame over 16.7 ms that is caused by terrain.
 - **P4. Decal draws under continuous gore.**
   - Growing pools must not block chunk merging. Keep growing decals in a small dynamic layer, and bake only settled decals into 256-chunks.
   - Acceptance: ≤ 16 decal draw calls **during** continuous gore (10 kills/s plus explosions) at `MAX_BLOOD_POOLS`, not just after a static fill.
+
+## M8: Physical environment (Josh) *(user request 2026-10-24)*
+
+User: "when something blows up it does not affect the trees… make the env react to physics as in real life… consider baked textures when removing debris… add a little more trees… some trees grow from water."
+
+Principles:
+- Reactions are **impulse-driven and local**. Only objects near an event get simulated, in a small active set that sleeps again when they come to rest, so idle cost stays ~0.
+- Anything that has finished moving gets **baked**: debris, stumps, logs, rubble and scorch go into the terrain-chunk decal layer, the same path as G4, so a destroyed forest costs no more per frame than an intact one.
+- All of this is a deliberate gameplay change, requested by the user. Q4 is waived for M8 items only.
+
+- **E0. Root-cause and fix "trees growing from water" (bug).**
+  - `world.js` already rejects water at the centre and 8 points at r=40, yet trees appear in water.
+  - Find out WHY before fixing. Candidates: `getTerrainTypeAt` disagrees with the rendered tiles (sampling vs tile quantization), the trunk is drawn offset from (x, y), the canopy radius (up to 60) is bigger than the check radius, or chunk-border sampling. Report the evidence.
+  - Acceptance: no tree, pine, dead tree, bush or boulder has its drawn trunk or base on a rendered water tile, checked over 200 generated chunks. A canopy may overhang water; a trunk may not.
+- **E1. More trees.**
+  - Raise tree density by **~30%** (forest and open ground alike), keeping the clear spawn area and the E0 rule.
+  - Perf must stay within Q2a; trees are already baked sprites.
+- **E2. Blast response for trees.** For each tree within an explosion's radius R, with `f = 1 − d/R`:
+  - `f > 0`: a sway impulse away from the blast, on a damped spring (~1.5 s to settle), plus a leaf burst scaled by f.
+  - `f > 0.35`: also **scorch**. The canopy darkens in steps and smokes briefly. Persistent.
+  - `f > 0.6`, or a cumulative damage threshold from repeated blasts: the tree **topples**. The trunk snaps at its base and the tree falls away from the blast over ~0.6–0.9 s, rotating about the base in iso, foreshortened along the fall direction.
+    - Impact: a dust and leaf burst plus shake (J5a cap).
+    - Then the log settles, and the stump and log get **baked** into the chunk.
+  - BFG and RPG explosions can fell several trees at once.
+- **E3. Small-arms response.** Bullets hitting a tree (trunk circle) emit bark and leaf chips, and give a tiny sway.
+  - Bullets are stopped by trunks as today. Pierce rounds pass through and still emit chips.
+  - Small arms never fell trees.
+- **E4. Other environment objects.**
+  - Crates splinter, and sandbags burst with a sand puff, under explosions (f > 0.3) or after enough bullet damage.
+  - Boulders and ruins crack under f > 0.6, and shatter into rubble chunks under BFG.
+  - Dead trees snap more easily (threshold f > 0.4).
+  - Debris pieces use simple z-gravity, bounce and friction (like the G5 gibs), then settle and **bake**.
+- **E5. Collision follows state.**
+  - A standing tree is a circle obstacle (as today). A felled tree's stump becomes a small circle.
+  - The fallen log becomes a **capsule obstacle**: it blocks movement, but bullets fly over it as low cover.
+  - Destroyed crates and sandbags lose their collision. Rubble has none.
+  - Enemy and demo-bot pathing (D3) must handle new and removed obstacles.
+- **E6. Falling-tree damage.** Enemies under a falling trunk take **120** damage, and the player takes **40**, applied once when the trunk lands. A kill credits the player (score, combo) when the player's explosion caused the fall.
+- **E7. Persistence.**
+  - Destruction state persists for the whole session, even when a chunk unloads and regenerates: store it per stable object id (chunk + index).
+  - A new round (`resetRound`, including the demo, D6) restores an intact world.
+- **E8. Budget & caps.**
+  - The active physics set is ≤ 64 objects, and debris pieces ≤ `CFG.MAX_DEBRIS` (default 300; oldest settle-and-bake first).
+  - Baked environment debris shares the chunk decal draws; G4's ≤ 16 decal draws still holds.
+  - Q2a still holds: a BFG felling 10+ trees must not cause a frame over 16.7 ms (spread baking over frames, as in P3).
+- **E9. Test hooks.**
+  - `envState(id)` returns `{ state: 'standing'|'scorched'|'falling'|'fallen'|'destroyed', hp, sway }`.
+  - `envStats()` returns `{ active, debris, felled }`.
+  - `CFG.MAX_DEBRIS`.
+  - Thresholds live in `CFG.ENV_*`, so tests can read them.
 
 ## M6: Attract mode / CPU demo (Josh) *(user request 2026-10-24)*
 
@@ -282,6 +349,20 @@ Classic 90s arcade behaviour: if nobody touches the game on the title screen for
 - **T8.** `npm run lint`: ESLint flat config with the cross-file globals declared. It catches undefined and unused variables, not style.
 - **T9.** GitHub Actions `ci.yml` runs lint, unit and e2e (installing Chromium) on push and PR.
 - **T10.** A README "Development" section covering install, dev, test, e2e, lint and the showcase keys.
+- **T12. Environment physics tests (M8).**
+  - **Unit:**
+    - E0: no trunk on a water tile over 200 seeded chunks.
+    - E1: density is +30% ±5% against the old generator for the same seeds.
+    - E2 thresholds by distance, via `envState`.
+    - E5: a log capsule blocks a moving entity, but not a bullet.
+    - E6: enemy 120 / player 40, applied once.
+    - E7: destruction survives a chunk unload/reload, and `resetRound` restores it.
+    - E8 caps.
+  - **E2e:**
+    - An RPG next to a tree makes it topple and bake.
+    - A BFG in a forest fells multiple trees with no frame over 16.7 ms (soft on SwiftShader).
+    - No console errors.
+    - G4 decal draws stay ≤ 16 after a forest is destroyed.
 - **T11. Attract-mode e2e (M6).**
   - With `CFG.DEMO_IDLE_SECONDS = 1`, the title starts the demo (D1). The demo kills enemies within 20 s, and `gameTime`, kills and weapon index all advance (D3, D4).
   - A keypress exits to the title without starting a game (D6). A subsequent real game starts with score 0, kills 0 and `unlockedWeapons = 1` (D6 isolation).
@@ -295,4 +376,5 @@ Classic 90s arcade behaviour: if nobody touches the game on the title screen for
 2. Anna runs the full suite plus manual exploratory play on that milestone. She reports pass/fail per ID to Ralph and sends bugs to Josh with repro steps.
 3. Ralph reviews the diff against the spec and decides whether to accept or rework. Ralph commits when the user approves.
 
-Order: **M2 (in progress) → M1 → M6 → M3 → M4 → M5**. T runs in parallel throughout. M6 is mostly a new file (`js/demo.js`), so Josh may give it to a subagent in parallel with M1, as long as he integrates the `main.js` hooks himself to avoid edit collisions.
+Order (current): **M7 P1 + W1 → M8 (E0 first, since it's a bug; then E1, E2, E5, E6, E3, E4, E7, E8)**. Earlier milestones are done.
+Previous order: **M2 (in progress) → M1 → M6 → M3 → M4 → M5**. T runs in parallel throughout. M6 is mostly a new file (`js/demo.js`), so Josh may give it to a subagent in parallel with M1, as long as he integrates the `main.js` hooks himself to avoid edit collisions.
