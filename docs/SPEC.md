@@ -21,10 +21,29 @@ Non-goals for this round:
 | Developer | Josh | All game code: `js/**`, `game.html`, `assets/**` |
 | Tester | Anna | `package.json`, `tests/**`, test/lint configs, `.github/workflows/**`, `.gitignore`, the README "Development" section |
 
-- **Nobody commits except Ralph.** Ralph commits after review, and only when the user approves.
 - Anna never edits `js/` or `game.html`. If a test needs a hook, she asks Josh with the exact name and semantics.
-- Josh reports each milestone to Ralph and Anna with: the IDs done, the files changed, any new globals or hooks, and the known issues.
-- Shared dev server: `http://localhost:8765/game.html`, run by Ralph's session. The test tooling uses its own port (5173).
+- Josh reports each milestone to Ralph and Anna with: the IDs done, the commit SHA, any new globals or hooks, and the known issues.
+
+### Worktrees & branches (race-free file access)
+
+| Who | Worktree | Branch | Dev server |
+|---|---|---|---|
+| Ralph | `C:\work\Rambo` | `main` (integration) | `:8765` |
+| Josh | `C:\work\Rambo-josh` | `dev/josh` | `:8766` |
+| Anna | `C:\work\Rambo-anna` | `test/anna` | `:5173` (Vite), Playwright as she configures it |
+
+- Each person edits **only inside their own worktree**. Nobody edits `C:\work\Rambo` except Ralph.
+- Josh and Anna commit to their own branches. Use small commits with spec IDs in the message, e.g. `M1 R1-R3: low-res world target`. Never push, never commit to `main`, and never rewrite history that has already been reported.
+- Ralph reviews each reported commit range against the spec and merges it into `main` with `--no-ff`. Pushing to a remote happens only with the user's approval.
+- Anna tests a milestone by merging `main`, or Josh's reported SHA, into `test/anna` (`git merge dev/josh`) and running the full suite there.
+- Josh may `git merge test/anna` to pick up the tooling (lint and tests) and run it locally before reporting.
+
+### Context hygiene: delegate to subagents
+
+The primary sessions keep their context for coordination and decisions:
+- Split each milestone into independent subtasks, for example one per spec ID or file group, and hand them to subagents with a precise brief: the spec IDs, the files, the acceptance criteria, and what not to touch.
+- Subagents that edit code run sequentially, or on disjoint files, so they don't collide inside one worktree. Use parallel subagents for read-only work: research, review and exploratory testing.
+- The primary session reviews each subagent's diff summary, runs the checks (`node --check`, lint and tests), and commits.
 
 ## 2. Global acceptance bar (applies to every milestone)
 
