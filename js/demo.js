@@ -208,15 +208,28 @@ function _demoPress(k) {
 
 // D3b: would a non-piercing round from (x0,y0) to (x1,y1) hit a tree trunk,
 // stump, crate or sandbag first? (same swept test the bullets use)
-function _demoLosBlocked(x0, y0, x1, y1) {
+// A fire CONE, not a line: an obstacle blocks when it sits within its bullet
+// radius plus a spread margin (grows with distance, capped) of the segment,
+// short of the end point. Rounds fan out by +/- spread, so a zero-width
+// line let trunks just off the line eat many shots.
+function _demoLosBlocked(x0, y0, x1, y1, spread) {
   const dx = x1 - x0, dy = y1 - y0, len2 = dx * dx + dy * dy;
-  const minX = Math.min(x0, x1) - 30, maxX = Math.max(x0, x1) + 30;
-  const minY = Math.min(y0, y1) - 30, maxY = Math.max(y0, y1) + 30;
+  if (len2 <= 0) return false;
+  const len = Math.sqrt(len2), ux = dx / len, uy = dy / len;
+  const tanS = Math.tan(Math.min(spread, 0.3) * 0.6);
+  const pad = 30 + Math.min(20, len * tanS);
+  const minX = Math.min(x0, x1) - pad, maxX = Math.max(x0, x1) + pad;
+  const minY = Math.min(y0, y1) - pad, maxY = Math.max(y0, y1) + pad;
   for (let i = 0; i < envObjects.length; i++) {
     const o = envObjects[i];
     if (o.x < minX || o.x > maxX || o.y < minY || o.y > maxY) continue;
     const r = envBulletRadius(o);
-    if (r > 0 && segCircleT(x0, y0, dx, dy, len2, o.x, o.y, r) >= 0) return true;
+    if (r <= 0) continue;
+    const rx = o.x - x0, ry = o.y - y0;
+    const along = rx * ux + ry * uy;
+    if (along < -r || along > len - 6) continue; // behind us, or past the target
+    const perp = Math.abs(rx * uy - ry * ux);
+    if (perp < r + 2 + Math.min(20, Math.max(0, along) * tanS)) return true;
   }
   return false;
 }
@@ -605,7 +618,9 @@ function _demoBot(dt) {
   let fire = tgt !== null && tgtVisible && !p.reloading;
   // D3b: don't waste non-piercing fire into trees/crates/sandbags on the line
   _demo.losBlocked = false;
-  if (fire && !wep.pierce && _demoLosBlocked(p.x, p.y, tgt.x, tgt.y)) {
+  // Check both the line to the target and the actually aimed (lead + jitter) line
+  if (fire && !wep.pierce && (_demoLosBlocked(p.x, p.y, tgt.x, tgt.y, wep.spread) ||
+      _demoLosBlocked(p.x, p.y, _demoAim.x + _demo.jx, _demoAim.y + _demo.jy, wep.spread))) {
     fire = false;
     _demo.losBlocked = true;
     _demo.losBlockedT += dt;
