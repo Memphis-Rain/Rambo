@@ -95,7 +95,7 @@ Because of M1, art must read at 1/3 resolution:
 - **A3. Firing**: a recoil pose (arms and weapon pulled back for about 2 frames) on every shot, with the size scaled by `weapon.kickback`.
 - **A4. Dodge roll**: a visible roll or tumble animation, not just a slide.
 - **A5. Enemy telegraphs**:
-  - The bomber blinks red at a speed that increases near detonation.
+  - The bomber blinks red, faster the closer it gets to the player. **Decision (Ralph):** this is visual only. The bomber still explodes only when it dies, and no fuse or self-detonation is added (Q4).
   - The sniper shows a laser sight, plus a glint before it fires.
   - The berserker shakes when it charges.
   - The Medic shows a heal pulse.
