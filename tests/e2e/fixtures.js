@@ -49,6 +49,8 @@ class GameDriver {
   async boot() {
     await this.page.goto('/game.html');
     await this.page.waitForFunction(() => typeof app !== 'undefined' && app && app.renderer, null, { timeout: 30_000 });
+    // M5: the button stays disabled until font, Pixi and input are ready.
+    await expect(this.page.locator('#start-btn')).toBeEnabled({ timeout: 10_000 });
   }
 
   /** Click START MISSION and wait for the loop to tick. */
