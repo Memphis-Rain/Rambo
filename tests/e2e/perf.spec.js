@@ -139,6 +139,9 @@ test.describe('M7 / Q2a', () => {
     console.log(`[P3] ${summary}`);
     testInfo.annotations.push({ type: 'P3', description: summary + ' ' + JSON.stringify(w.bad.slice(0, 5)) });
     expect(w.bad, 'P3: terrain-caused frames over 16.7 ms').toEqual([]);
+    // P3 budget: ~4 ms of chunk baking per frame, plus the rest of the terrain pass
+    // (water overlay ~2-3 ms on SwiftShader), with slack.
+    expect(w.maxTerrain, 'P3: per-frame terrain time within the bake budget').toBeLessThanOrEqual(8);
   });
 
   test('P4: decal draw calls stay <= 16 during continuous gore at MAX_BLOOD_POOLS', async ({ game, page }, testInfo) => {
@@ -151,6 +154,7 @@ test.describe('M7 / Q2a', () => {
         addDecal(DECAL_POOL, player.x + Math.cos(a) * r, player.y + Math.sin(a) * r, 3, 0x8a0a0a, 0, 12 + (i % 9));
       }
     });
+    expect(await game.eval(() => typeof decalStats === 'function'), 'P4 hook: decalStats()').toBe(true);
     await game.eval(GORE);
     await page.waitForTimeout(4_000);
     const r = await game.eval(() => new Promise((resolve) => {
