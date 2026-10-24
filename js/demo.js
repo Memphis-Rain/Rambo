@@ -323,7 +323,8 @@ function _demoBot(dt) {
   }
   // Nothing in range but the wave isn't over (e.g. a straggler stuck behind
   // terrain): hunt the nearest one so the next wave can start
-  if (!best && far) { best = far; bestS = curS = farD; }
+  _demo.chasingFar = false;
+  if (!best && far) { best = far; _demo.chasingFar = true; }
   if (cur && curS < Infinity && best !== cur && bestS > curS * 0.7) best = cur;
   if (best !== _demo.target) {
     _demo.target = best;
@@ -365,8 +366,10 @@ function _demoBot(dt) {
 
   const dO = dist(p.x, p.y, _demo.originX, _demo.originY);
   let leash = clamp((dO - DEMO_LEASH_SOFT) / (DEMO_LEASH - DEMO_LEASH_SOFT) * 3, 0, 4); // full pull by DEMO_LEASH
-  // A straggler off-screen keeps the wave from ending: let the bot go get it
-  if (tgt && !tgtVisible) leash = 0;
+  // Stragglers keep a wave from ending: hunt them past the leash. Only for an
+  // out-of-range target or the last couple of enemies (keying it on
+  // visibility toggled the pull at the screen edge)
+  if (tgt && (_demo.chasingFar || enemies.length <= 2)) leash = 0;
   const oX = dO > 0 ? (_demo.originX - p.x) / dO : 0, oY = dO > 0 ? (_demo.originY - p.y) / dO : 0;
 
   let pk = null, pkD = Infinity;
