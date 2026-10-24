@@ -88,10 +88,16 @@ export default [
         ...globals.browser,
         PIXI: 'readonly',
         ...Object.assign({}, ...Object.values(declsByFile)),
-        // Test hooks the spec promises (R7, G9); tests skip until they exist.
-        RETRO: 'readonly',
-        retroState: 'readonly',
-        hitStopTimer: 'readonly',
+        // Test hooks promised by the spec and Josh (R2, R7, G4, G5, G8, G9, D8).
+        // Tests skip until they exist; drop entries once the game defines them.
+        ...Object.fromEntries([
+          'RETRO', 'retroState', 'snapToPixel',
+          'gibs', 'SRC_EXPLOSIVE', 'SRC_BFG', 'SRC_RAIL',
+          'decalVersion', 'DECAL_POOL', 'DECAL_SPLAT', 'DECAL_SCORCH', 'DECAL_FOOT', 'DECAL_SMEAR', 'DECAL_GIB', 'DECAL_ASH',
+          'dmgNumbers', 'DMG_NORMAL', 'DMG_CRIT', 'DMG_SHIELD',
+          'hitStopTimer', 'addHitStop',
+          'startDemo', 'stopDemo', 'demoState',
+        ].map((name) => [name, 'readonly'])),
       },
     },
     rules: {
