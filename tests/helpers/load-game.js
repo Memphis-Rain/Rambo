@@ -7,17 +7,6 @@ import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-// Pure game logic, in game.html load order. No rendering modules.
-export const LOGIC_FILES = [
-  'js/config.js',
-  'js/utils.js',
-  'js/audio.js',
-  'js/state.js',
-  'js/particles.js',
-  'js/world.js',
-  'js/combat.js',
-];
-
 // Scripts game.html loads, in order (excluding the PixiJS library itself).
 export function gameHtmlScripts() {
   const html = fs.readFileSync(path.join(ROOT, 'game.html'), 'utf8');
@@ -25,6 +14,11 @@ export function gameHtmlScripts() {
     .map((m) => m[1])
     .filter((src) => !src.startsWith('lib/'));
 }
+
+// Everything game.html loads except main.js, whose async init would overwrite
+// W/H after the test sets them. Rendering modules load fine against the PIXI stub,
+// and new files (e.g. js/retro.js) are picked up automatically.
+export const LOGIC_FILES = gameHtmlScripts().filter((src) => src !== 'js/main.js');
 
 // Deterministic PRNG so noise tables and Math.random-driven logic are reproducible.
 export function mulberry32(seed) {
