@@ -4,6 +4,9 @@
   "private": true,
   "description": "Top-down isometric shoot-em-up built with PixiJS",
   "license": "MIT",
+  "engines": {
+    "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "test": "vitest run",

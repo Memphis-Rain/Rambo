@@ -41,6 +41,9 @@ export default defineConfig({
   root: '.',
   publicDir: false,
   plugins: [classicScriptReload(), vendoredWithoutSourcemap()],
+  // Only scan the game's entry page; otherwise the dep scanner globs every *.html,
+  // including other worktrees and playwright-report/.
+  optimizeDeps: { entries: ['game.html'] },
   server: {
     port: 5173,
     strictPort: true,

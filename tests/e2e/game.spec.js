@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures.js';
+import { LANDED } from '../milestones.js';
 
 test.describe('T4 boot & loop', () => {
   test('T4: boots with no console errors', async ({ game, page }, testInfo) => {
@@ -61,12 +62,13 @@ test.describe('T4 input', () => {
     await page.mouse.move(w / 2 + 200, h / 2);
     const mag0 = await game.eval(() => player.magAmmo);
     await page.mouse.down();
-    await page.waitForFunction(() => bullets.some((b) => b.owner === 'player'));
-    await page.mouse.up();
-    const shot = await game.eval(() => {
+    // Capture the bullet in the same tick it's seen; it can expire before a second evaluate.
+    const handle = await page.waitForFunction(() => {
       const b = bullets.find((b) => b.owner === 'player');
-      return { vx: b.vx, vy: b.vy, mag: player.magAmmo };
+      return b && { vx: b.vx, vy: b.vy, mag: player.magAmmo };
     });
+    const shot = await handle.jsonValue();
+    await page.mouse.up();
     expect(shot.mag).toBeLessThan(mag0);
     // Cursor is to the right of the player on screen, so the bullet moves right on screen.
     const screenVx = shot.vx - shot.vy; // toScreen x = wx - wy
@@ -101,15 +103,32 @@ test.describe('T4 gore', () => {
     await game.snap(testInfo, 'T7-gore.png');
   });
 
-  // Needs Josh's gib representation (M3) to assert against.
-  test.fixme('G5: an explosive kill bursts into gibs', async () => {});
+  test('G5: an explosive kill bursts into gibs that settle as decals', async ({ game }, testInfo) => {
+    test.skip(!LANDED.M3, 'M3 not landed (tests/milestones.js)');
+    await game.boot();
+    await game.start();
+    await game.freezeWaves();
+    const burst = await game.eval(() => {
+      const e = spawnEnemy(0, player.x + 80, player.y);
+      const before = gibs.length;
+      damageEnemy(e, e.hp + 1, 0, SRC_EXPLOSIVE);
+      return { added: gibs.length - before, dead: !!e.dead };
+    });
+    expect(burst.dead).toBe(true);
+    expect(burst.added).toBeGreaterThanOrEqual(5);
+    expect(burst.added).toBeLessThanOrEqual(8);
+    await game.advance(0.2);
+    await game.snap(testInfo, 'T7-gibs.png');
+    // Gibs land within ~1-3 s and become DECAL_GIB decals.
+    await game.page.waitForFunction(() => gibs.length === 0, null, { timeout: 20_000 });
+    expect(await game.eval(() => bloodPools.filter((d) => d.kind === DECAL_GIB).length)).toBeGreaterThan(0);
+  });
 });
 
 test.describe('T4 retro toggles (M1)', () => {
   test('R6/R7: F6/F7/F8 change retroState()', async ({ game, page }, testInfo) => {
+    test.skip(!LANDED.M1, 'M1 not landed (tests/milestones.js)');
     await game.boot();
-    const hasHook = await game.eval(() => typeof retroState === 'function' && typeof window.RETRO === 'object');
-    test.skip(!hasHook, 'needs retroState() and window.RETRO from M1 (R7)');
     await game.start();
 
     const s0 = await game.eval(() => retroState());
@@ -131,25 +150,60 @@ test.describe('T4 retro toggles (M1)', () => {
   });
 });
 
+/** Press F6 until retroState().scale === target (R6 cycles 1 -> 2 -> 3 -> 4). */
+async function setPixelScale(game, target) {
+  for (let i = 0; i < 4; i++) {
+    if ((await game.eval(() => retroState().scale)) === target) return;
+    await game.page.keyboard.press('F6');
+  }
+  expect(await game.eval(() => retroState().scale)).toBe(target);
+}
+
 test.describe('T5 aim', () => {
-  test('T5: cursor maps to the correct world point at the current pixel scale', async ({ game, page }) => {
+  for (const scale of [1, 3]) {
+    test(`T5: cursor maps to the correct world point at PIXEL_SCALE ${scale}`, async ({ game, page }) => {
+      test.skip(scale !== 1 && !LANDED.M1, 'M1 not landed (tests/milestones.js)');
+      await game.boot();
+      await game.start();
+      await game.freezeWaves();
+      if (LANDED.M1) await setPixelScale(game, scale);
+      const { W: w, H: h } = await game.eval(() => ({ W, H }));
+      for (const target of [
+        { x: Math.round(w / 2 + 150), y: Math.round(h / 2 - 80) },
+        { x: Math.round(w / 2 - 230), y: Math.round(h / 2 + 140) },
+      ]) {
+        await page.mouse.move(target.x, target.y);
+        await game.advance(0.1);
+        const r = await game.eval(({ x, y }) => {
+          const expected = toWorld(x - W / 2 + cam.x, y - H / 2 + cam.y);
+          return { mouseWorldX, mouseWorldY, expected,
+            aim: player.aimAngle, expectedAim: Math.atan2(expected.y - player.y, expected.x - player.x) };
+        }, target);
+        // Q5: within one low-res pixel. One screen pixel is at most ~1 world unit horizontally
+        // and 1/(2*ISO_SCALE) ~ 0.9 vertically, so 1 low-res pixel <= scale * 1.
+        expect(Math.abs(r.mouseWorldX - r.expected.x)).toBeLessThanOrEqual(scale);
+        expect(Math.abs(r.mouseWorldY - r.expected.y)).toBeLessThanOrEqual(scale);
+        expect(Math.abs(r.aim - r.expectedAim)).toBeLessThan(0.05);
+      }
+    });
+  }
+});
+
+test.describe('R2 pixel-grid camera', () => {
+  test('R2: world offset sits on whole low-res pixels while moving', async ({ game, page }) => {
+    test.skip(!LANDED.M1, 'M1 not landed (tests/milestones.js)');
     await game.boot();
     await game.start();
     await game.freezeWaves();
-    const { W: w, H: h } = await game.eval(() => ({ W, H }));
-    const target = { x: Math.round(w / 2 + 150), y: Math.round(h / 2 - 80) };
-    await page.mouse.move(target.x, target.y);
-    await game.advance(0.1);
-    const r = await game.eval(({ x, y }) => {
-      const expected = toWorld(x - W / 2 + cam.x, y - H / 2 + cam.y);
-      const scale = typeof retroState === 'function' ? retroState().scale : 1;
-      return { mouseWorldX, mouseWorldY, expected, scale,
-        aim: player.aimAngle, expectedAim: Math.atan2(expected.y - player.y, expected.x - player.x) };
-    }, target);
-    // Within one low-res pixel in screen space (~1 world unit per screen pixel).
-    expect(Math.abs(r.mouseWorldX - r.expected.x)).toBeLessThanOrEqual(r.scale * 2);
-    expect(Math.abs(r.mouseWorldY - r.expected.y)).toBeLessThanOrEqual(r.scale * 2);
-    expect(Math.abs(r.aim - r.expectedAim)).toBeLessThan(0.05);
+    await setPixelScale(game, 3);
+    await page.keyboard.down('d');
+    for (let i = 0; i < 10; i++) {
+      await game.advance(0.05);
+      const off = await game.eval(() => ({ x: worldContainer.x, y: worldContainer.y, s: RETRO.PIXEL_SCALE }));
+      expect(Math.abs(off.x / off.s - Math.round(off.x / off.s))).toBeLessThan(1e-6);
+      expect(Math.abs(off.y / off.s - Math.round(off.y / off.s))).toBeLessThan(1e-6);
+    }
+    await page.keyboard.up('d');
   });
 });
 
@@ -167,24 +221,37 @@ test.describe('T6 perf', () => {
         spawnEnemy(i % 4, player.x + Math.cos(a) * 250, player.y + Math.sin(a) * 250);
       }
     });
-    await game.page.waitForTimeout(5000);
+    // Sample CPU frame time across the whole window: perfLog.totalCpuMs is a single
+    // frame and gets overwritten every frame, so one GC spike would make it flaky.
+    await game.eval(() => {
+      window.__t6 = { cpu: [], timer: setInterval(() => window.__t6.cpu.push(perfLog.totalCpuMs), 25) };
+    });
+    await game.advance(5);
     const perf = await game.eval(() => {
+      clearInterval(window.__t6.timer);
+      const cpu = window.__t6.cpu.slice().sort((a, b) => a - b);
+      const pct = (q) => cpu[Math.min(cpu.length - 1, Math.floor(q * cpu.length))];
       const gl = document.createElement('canvas').getContext('webgl');
       const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
       return {
-        fps: perfLog.fps, updateMs: perfLog.updateMs, renderMs: perfLog.renderMs,
-        cpuMs: perfLog.totalCpuMs, enemies: enemies.length,
+        fps: perfLog.fps, // already averaged over the last 60 frames
+        samples: cpu.length,
+        cpuMedianMs: pct(0.5), cpuP90Ms: pct(0.9), cpuMaxMs: cpu[cpu.length - 1],
+        cpuMeanMs: cpu.reduce((a, b) => a + b, 0) / cpu.length,
+        enemies: enemies.length,
         gpu: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : 'unknown',
       };
     });
     await testInfo.attach('perf.json', { body: JSON.stringify(perf, null, 2), contentType: 'application/json' });
-    console.log(`[T6] fps=${perf.fps} cpu=${perf.cpuMs.toFixed(1)}ms update=${perf.updateMs.toFixed(1)}ms render=${perf.renderMs.toFixed(1)}ms enemies=${perf.enemies} gpu="${perf.gpu}" (min fps ${minFps})`);
+    const summary = `fps=${perf.fps} cpu median=${perf.cpuMedianMs.toFixed(1)}ms p90=${perf.cpuP90Ms.toFixed(1)}ms max=${perf.cpuMaxMs.toFixed(1)}ms (${perf.samples} samples) enemies=${perf.enemies} gpu="${perf.gpu}"`;
+    console.log(`[T6] ${summary} (min fps ${minFps})`);
+    testInfo.annotations.push({ type: 'perf', description: summary });
+    expect(perf.samples).toBeGreaterThan(20);
     expect(perf.enemies).toBeGreaterThanOrEqual(40);
-    // Q2: CPU frame time is meaningful everywhere.
-    expect(perf.cpuMs).toBeLessThan(12);
+    // Q2: CPU frame time is meaningful everywhere; judge the typical frame, not a spike.
+    expect(perf.cpuMedianMs).toBeLessThan(12);
     // With software WebGL (headless/CI) fps measures SwiftShader, not the game: record it only.
     const softwareGl = /swiftshader|llvmpipe|software/i.test(perf.gpu);
-    testInfo.annotations.push({ type: 'perf', description: `fps=${perf.fps} cpu=${perf.cpuMs.toFixed(1)}ms gpu=${perf.gpu}` });
     if (!softwareGl) expect(perf.fps).toBeGreaterThanOrEqual(minFps);
   });
 });

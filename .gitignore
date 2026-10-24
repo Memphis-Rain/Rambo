@@ -5,5 +5,5 @@ blob-report/
 playwright/.cache/
 dist/
 .vite/
-worktrees/
+/worktrees/
 .playwright-mcp/
