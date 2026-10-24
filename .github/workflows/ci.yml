@@ -24,6 +24,10 @@ jobs:
         run: for f in js/*.js; do node --check "$f"; done
       - name: Lint (T8)
         run: npm run lint
+      # Spec B1: every local asset in game.html carries the one ?v=<BUILD> (runs once tools/stamp.mjs exists).
+      - name: Build stamp check (B1)
+        if: hashFiles('tools/stamp.mjs') != ''
+        run: node tools/stamp.mjs --check
       - name: Unit tests (T3)
         run: npm test
 

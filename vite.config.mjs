@@ -37,10 +37,21 @@ function vendoredWithoutSourcemap() {
   };
 }
 
+// Spec B1 stamps local assets with ?v=<BUILD>. Vite's dev server serves any ?v= URL as
+// immutable for a year, so a live reload would bring back the cached old script. Strip the
+// stamps from game.html in dev only; static hosting keeps them. (Josh's review.)
+function stripBuildQuery() {
+  return {
+    name: 'strip-build-query',
+    apply: 'serve',
+    transformIndexHtml: (html) => html.replace(/\?v=[\w.-]+/g, ''),
+  };
+}
+
 export default defineConfig({
   root: '.',
   publicDir: false,
-  plugins: [classicScriptReload(), vendoredWithoutSourcemap()],
+  plugins: [classicScriptReload(), vendoredWithoutSourcemap(), stripBuildQuery()],
   // Only scan the game's entry page; otherwise the dep scanner globs every *.html,
   // including other worktrees and playwright-report/.
   optimizeDeps: { entries: ['game.html'] },
