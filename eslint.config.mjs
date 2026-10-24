@@ -60,7 +60,7 @@ const bugRules = {
 // ESLint runs from elsewhere with -c.
 export default [
   {
-    ignores: ['worktrees/**', 'node_modules/', 'lib/', 'test-results/', 'playwright-report/', 'dist/', ...UNLOADED],
+    ignores: ['worktrees/**', '.scratch/**', 'node_modules/', 'lib/', 'test-results/', 'playwright-report/', 'dist/', ...UNLOADED],
   },
   js.configs.recommended,
   ...gameFiles.map((file) => ({
@@ -101,7 +101,7 @@ export default [
           'decalVersion', 'DECAL_POOL', 'DECAL_SPLAT', 'DECAL_SCORCH', 'DECAL_FOOT', 'DECAL_SMEAR', 'DECAL_GIB', 'DECAL_ASH',
           'dmgNumbers', 'DMG_NORMAL', 'DMG_CRIT', 'DMG_SHIELD',
           'hitStopTimer', 'addHitStop',
-          'startDemo', 'stopDemo', 'demoState',
+          'startDemo', 'stopDemo', 'demoState', 'demoAimLead',
         ].map((name) => [name, 'readonly'])),
       },
     },
