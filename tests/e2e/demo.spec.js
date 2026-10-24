@@ -200,7 +200,7 @@ test.describe('T11 attract mode', () => {
   });
 
   test('B6: the bot does not oscillate while its target sits just off-screen', async ({ game }, testInfo) => {
-    test.skip(!LANDED.G12A, 'G12A not landed (tests/milestones.js)');
+    test.skip(!LANDED.B6M, 'B6 metric thresholds pending a decision (tests/milestones.js)');
     test.setTimeout(150_000);
     await bootTitle(game, 1e9);
     const runs = [];

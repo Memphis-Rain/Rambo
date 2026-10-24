@@ -106,16 +106,29 @@ describe('G12 swept bullet hits', () => {
     }
   });
 
-  test.skipIf(todo)('G12: a piercing bullet damages each enemy at most once', () => {
-    for (const dt of [1 / 240, 1 / 60]) {
+  test.skipIf(todo)('G12/G12a: a piercing bullet deals one damage event per enemy per pass, worth dmg x max(1, round(chord/(speed/60)))', () => {
+    const dmg = g.WEAPONS[RAILGUN].dmg, perFrame = g.WEAPONS[RAILGUN].speed / 60;
+    const expectedHits = (radius) => Math.max(1, Math.round((2 * radius) / perFrame)); // centre pass: chord = 2r
+    for (const dt of [1 / 240, 1 / 60, 1 / 30]) {
       resetShot();
-      // A big target the bullet overlaps for many small steps.
+      // A big target the bullet overlaps for many small steps, and a small one behind it.
       const e = g.spawnEnemy(typeIdx(g, 'Heavy'), 300, 0, { name: 'Wall', hp: 1e7 });
+      e.hp = e.maxHp = 1e7;
       const behind = dummy(typeIdx(g, 'Militia'), 420, 0);
-      fireAt(RAILGUN, 300, 0);
-      stepBullets(dt, 200);
-      expect(e.maxHp - e.hp, `dt ${dt}: one railgun hit`).toBeCloseTo(g.WEAPONS[RAILGUN].dmg, 6);
-      expect(behind.maxHp - behind.hp, `dt ${dt}: pierces to the next enemy once`).toBeCloseTo(g.WEAPONS[RAILGUN].dmg, 6);
+      // Count damage events per enemy (game code calls damageEnemy through the global binding).
+      const events = new Map();
+      const orig = g.damageEnemy;
+      g.damageEnemy = (target, ...rest) => { events.set(target, (events.get(target) || 0) + 1); return orig(target, ...rest); };
+      try {
+        fireAt(RAILGUN, 300, 0);
+        stepBullets(dt, 400);
+      } finally {
+        g.damageEnemy = orig;
+      }
+      expect(events.get(e), `dt ${dt}: one damage event on the big target`).toBe(1);
+      expect(events.get(behind), `dt ${dt}: one damage event on the enemy behind`).toBe(1);
+      expect(e.maxHp - e.hp, `dt ${dt}: big target damage`).toBeCloseTo(dmg * expectedHits(15 * e.size), 6);
+      expect(behind.maxHp - behind.hp, `dt ${dt}: enemy behind damage`).toBeCloseTo(dmg * expectedHits(15 * behind.size), 6);
     }
   });
 
