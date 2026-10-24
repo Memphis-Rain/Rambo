@@ -155,7 +155,8 @@ test.describe('T11 attract mode', () => {
     test.skip(!LANDED.FU1, 'follow-up FU1 not landed (tests/milestones.js)');
     await bootTitle(game, 1);
     await waitForDemo(game, true, 10_000);
-    await game.page.waitForFunction(() => wave > 0, null, { timeout: 10_000 });
+    // The counter sits at 9 for ~0.3 s; the first wave that actually runs must be 10.
+    await game.page.waitForFunction(() => waveActive, null, { timeout: 10_000 });
     expect(await game.eval(() => wave)).toBeGreaterThanOrEqual(10);
     // Wave-10 enemy types are in the spawn pool.
     const types = await game.eval(() => ENEMY_TYPES.filter((t) => t.wave <= wave).map((t) => t.name));

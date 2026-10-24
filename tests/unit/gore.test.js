@@ -132,16 +132,43 @@ describe('G9 hit-stop', () => {
   // radius >= 100; every stop <= 0.06 s; ordinary overkill and gib deaths don't stop.
   const review = !LANDED.REVIEW1;
 
-  test.skipIf(review)('G9: a single stop is at most 0.06 s, bosses included', () => {
+  test.skipIf(review)('G9: a single stop is at most 0.06 s', () => {
     g.addHitStop(5);
+    expect(g.hitStopTimer).toBeGreaterThan(0);
     expect(g.hitStopTimer).toBeLessThanOrEqual(0.06);
-    g.hitStopTimer = 0;
+  });
+
+  test.skipIf(review)('G9: a boss kill hit-stops, capped at 0.06 s', () => {
     g.bossActive = true;
     g.bossTarget = 1;
     const boss = g.spawnEnemy(0, 0, 0, { name: 'Test', hp: 100 });
     g.damageEnemy(boss, 1000, 0, g.SRC_EXPLOSIVE);
     expect(g.hitStopTimer).toBeGreaterThan(0);
     expect(g.hitStopTimer).toBeLessThanOrEqual(0.06);
+  });
+
+  test.skipIf(review)('G9: a new stop needs 0.3 s of simulated time after the previous one', () => {
+    g.gameTime = 10;
+    g.addHitStop(0.05);
+    expect(g.hitStopTimer).toBeGreaterThan(0);
+    g.addHitStop(0.05); // while active: ignored
+    expect(g.hitStopTimer).toBeLessThanOrEqual(0.06);
+    g.hitStopTimer = 0; // the stop ran out (gameTime is frozen during it)
+    g.gameTime = 10.2;
+    g.addHitStop(0.05);
+    expect(g.hitStopTimer, 'within the cooldown').toBe(0);
+    g.gameTime = 10.31;
+    g.addHitStop(0.05);
+    expect(g.hitStopTimer, 'after the cooldown').toBeGreaterThan(0);
+  });
+
+  test.skipIf(review)('G9: resetHitStop clears the timer and the cooldown', () => {
+    g.gameTime = 5;
+    g.addHitStop(0.05);
+    g.resetHitStop();
+    expect(g.hitStopTimer).toBe(0);
+    g.addHitStop(0.05);
+    expect(g.hitStopTimer).toBeGreaterThan(0);
   });
 
   test.skipIf(review)('G9: ordinary overkill does not hit-stop', () => {
