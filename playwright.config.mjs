@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const PORT = 5173;
+// PW_PORT lets several worktrees run e2e side by side (default 5173, see docs/SPEC.md section 1).
+const PORT = Number(process.env.PW_PORT || 5173);
 
 export default defineConfig({
   testDir: 'tests/e2e',
@@ -35,7 +36,9 @@ export default defineConfig({
   webServer: {
     command: `npx vite --port ${PORT} --strictPort`,
     url: `http://localhost:${PORT}/game.html`,
-    reuseExistingServer: !process.env.CI,
+    // Never reuse a server already on the port: it may be serving another worktree,
+    // which would silently test the wrong code. strictPort makes a busy port fail loudly.
+    reuseExistingServer: false,
     timeout: 60_000,
     env: { BROWSER: 'none' },
   },

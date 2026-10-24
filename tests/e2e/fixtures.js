@@ -14,7 +14,12 @@ export const test = base.extend({
     await use([]);
   },
 
-  page: async ({ page, consoleErrors }, use, testInfo) => {
+  // Per-test Q1 exceptions: push a RegExp for an error the test itself provokes.
+  allowedErrors: async ({}, use) => {
+    await use([]);
+  },
+
+  page: async ({ page, consoleErrors, allowedErrors }, use, testInfo) => {
     page.on('console', (msg) => {
       if (msg.type() !== 'error') return;
       const entry = { text: msg.text(), url: msg.location()?.url || '' };
@@ -30,7 +35,8 @@ export const test = base.extend({
     if (consoleErrors.length) {
       await testInfo.attach('console-errors.txt', { body: consoleErrors.join('\n'), contentType: 'text/plain' });
     }
-    expect(consoleErrors, 'Q1: no uncaught errors or console.error').toEqual([]);
+    const unexpected = consoleErrors.filter((e) => !allowedErrors.some((re) => re.test(e)));
+    expect(unexpected, 'Q1: no uncaught errors or console.error').toEqual([]);
   },
 
   game: async ({ page }, use) => {
@@ -49,6 +55,8 @@ class GameDriver {
   async boot() {
     await this.page.goto('/game.html');
     await this.page.waitForFunction(() => typeof app !== 'undefined' && app && app.renderer, null, { timeout: 30_000 });
+    // M5: the button stays disabled until font, Pixi and input are ready.
+    await expect(this.page.locator('#start-btn')).toBeEnabled({ timeout: 10_000 });
   }
 
   /** Click START MISSION and wait for the loop to tick. */

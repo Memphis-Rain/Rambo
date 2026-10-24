@@ -2,8 +2,11 @@
 // Tests for a milestone skip while it's false. Flip it to true when Josh reports
 // the milestone: from then on a missing or renamed hook FAILS instead of skipping.
 export const LANDED = {
-  M1: false, // retro pipeline: RETRO, retroState(), snapToPixel(), F6/F7/F8
-  M3: false, // gore: gibs[], SRC_*, DECAL_*, decalVersion, dmgNumbers, addHitStop()
-  M6: false, // attract mode: startDemo(), stopDemo(), demoState(), demoAimLead(), CFG.DEMO_*
-  G11: false, // bomber chain: leftover pending damage carries over to the next frame
+  M1: true, // retro pipeline: RETRO, retroState(), snapToPixel(), F6/F7/F8
+  M3: true, // gore: gibs[], SRC_*, DECAL_*, decalVersion, dmgNumbers, addHitStop()
+  M6: true, // attract mode: startDemo(), stopDemo(), demoState(), demoAimLead(), CFG.DEMO_*
+  G11: true, // bomber chain: leftover pending damage carries over to the next frame
+  M5: true, // retro HUD & title: pixel font from assets/fonts, PRESS START gated until ready
+  REVIEW1: true, // review must-fixes (spec dfe6194): G9 rate/limits, D6 decal + HUD isolation, G4 draw bound
+  FU1: true, // follow-ups after the first build (spec 1c81384): R4a DITHER_STRENGTH, D4 wave 10, D5 overlay visible
 };
