@@ -30,6 +30,7 @@ export const LANDED = {
   F2: false, // burning enemies panic
   F3: false, // burning trees
   F4: false, // demo bot uses the flamethrower
-  M9PERF: false, // M9 perf scenario (burning enemies/trees + red pond)
+  M9PERF: false,
+  CACHEBUST: false, // spec B1: ?v=<BUILD> on every local asset in game.html (npm run stamp) // M9 perf scenario (burning enemies/trees + red pond)
   FU1: true, // follow-ups after the first build (spec 1c81384): R4a DITHER_STRENGTH, D4 wave 10, D5 overlay visible
 };
