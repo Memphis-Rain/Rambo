@@ -277,6 +277,16 @@ Principles:
     - They are **never recycled by gore**: a log that still has collision must always be visible.
     - Cosmetic splinters, sand and leaves share the gore decal pool, as now (leaves at 1 in 8).
     - The environment layer may add **≤ 4 draws per visible chunk ring** on top of G4's ≤ 16.
+- **E11. Rulings on Anna's M8 exploratory findings (Ralph).**
+  - **(a) Logs are hurdles, not walls. This fixes the closed pen (#4).**
+    - Anyone (player, enemies, demo bot) may **climb over a log at ×0.35 speed** while their body overlaps the capsule.
+    - Explosions with **f > 0.5 splinter a log** into debris: the capsule is removed and the remains update.
+    - Steering along the log toward its nearer end (review item 1) stays: enemies take the end when it's closer than ~1.5× the log's width, otherwise they climb.
+    - The player can never be fully enclosed.
+  - **(b) Depth-sorting logs against standing entities (#7): DEFERRED** as a known visual issue. Logs are low and ground-level.
+  - **(c) D3b measures only what the bot controls:** shots stopped by an environment object **before reaching the target's distance**. Misses that fly on past the target into trees behind it don't count. The bar stays < 15%.
+  - **(d) The D3a kill-rate bar applies in normal terrain.** Forest-heavy runs are recorded as informational.
+  - **(e) Canopy fade (#10): YES.** Tree sprites whose bounds cover the **player** fade to ~40%, using an ordered-dither (retro) or a stepped alpha, over 0.15 s, and restore when the player leaves. Sprite alpha only, no rebake.
 - **E9. Test hooks.**
   - `envState(id)` returns `{ state: 'standing'|'scorched'|'falling'|'fallen'|'destroyed', hp, sway }`.
   - `envStats()` returns `{ active, debris, felled }`.
