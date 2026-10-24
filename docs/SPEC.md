@@ -149,6 +149,45 @@ Because of M1, art must read at 1/3 resolution:
   - Show the controls, including the F6/F7/F8 showcase toggles.
   - The `#start-btn` id and the `startGame()` entry point must keep working for the tests.
 
+## M6: Attract mode / CPU demo (Josh) *(user request 2026-10-24)*
+
+Classic 90s arcade behaviour: if nobody touches the game on the title screen for 5 s, a CPU-controlled demo starts and shows how the game is played.
+
+- **D1. Idle trigger.**
+  - On the title screen, an idle timer resets on any `keydown`, `mousedown`, `wheel`, or mouse movement of more than 8 px.
+  - After `CFG.DEMO_IDLE_SECONDS` (default **5**) with no input, the demo starts.
+  - The demo never triggers during real play or while paused.
+- **D2. Same input path as a human.**
+  - The bot drives the player only through the same inputs a human uses: the `keys` map, the mouse world position, `mouseDown`, right-click, R, Space and the weapon keys. It writes these virtual inputs every frame.
+  - No teleporting, and no direct edits to player or enemy state. The demo must show real gameplay.
+- **D3. Bot behaviour**, which should look skilled and readable rather than perfect:
+  - Target selection: the nearest threat, weighted by danger (bombers and berserkers first).
+  - Aim leads the target by its velocity, plus slight human-like jitter.
+  - Kiting: keeps a preferred distance and strafes around enemies.
+  - Avoids water and obstacles, and stays out of the corners.
+  - Reloads when the magazine is low and no enemy is close. Dodge-rolls when an enemy is inside its melee range, or a projectile is about to hit.
+  - Uses the shockwave when charged and 5+ enemies are within `CFG.SPECIAL_RADIUS`.
+  - Detours for health pickups when HP < 40%.
+- **D4. Showcase script.**
+  - The demo starts with all weapons unlocked and cycles to the next weapon every ~8 s, so viewers see the whole arsenal: explosions, Tesla chains, railgun beams, gore.
+  - Waves ramp faster than in real play (e.g. it starts at wave 4) so the screen gets busy quickly.
+  - The demo player takes 25% damage so it survives for a decent run.
+- **D5. Demo overlay.**
+  - A blinking pixel-font `DEMO` banner at the top, plus `PRESS ANY KEY OR CLICK TO PLAY` at the bottom.
+  - Score and HUD are visible as normal.
+  - There's no audio (browsers block it before a user gesture anyway); it must not throw when audio is unavailable.
+- **D6. Exit & isolation.**
+  - Any real input (as in D1) ends the demo immediately and returns to the title screen. That input must not also start a game; the next click on START does that.
+  - The demo ends on its own after 60 s, or when the demo player dies. Then it returns to the title and the idle timer restarts, so title → demo → title → demo loops forever.
+  - The demo must leave no trace in real-game state: score, kills, unlocks and any best-score storage all reset. Starting a real game afterwards must be identical to starting one from a fresh page load.
+- **D7. Code layout.**
+  - New file `js/demo.js`, holding the bot plus the demo controller, loaded after `combat.js`.
+  - Changes to `main.js` are minimal hooks: the idle timer, the demo entry and exit, and applying the virtual input before `updatePlayer`.
+- **D8. Test hooks.**
+  - `startDemo()` and `stopDemo()`.
+  - `demoState()` returns `{ active, elapsed, weaponIndex, targetId, idleTimer }`.
+  - `CFG.DEMO_IDLE_SECONDS` is writable at runtime, so tests can shorten it.
+
 ---
 
 ## T: Dev environment & testing (Anna)
@@ -174,6 +213,12 @@ Because of M1, art must read at 1/3 resolution:
 - **T8.** `npm run lint`: ESLint flat config with the cross-file globals declared. It catches undefined and unused variables, not style.
 - **T9.** GitHub Actions `ci.yml` runs lint, unit and e2e (installing Chromium) on push and PR.
 - **T10.** A README "Development" section covering install, dev, test, e2e, lint and the showcase keys.
+- **T11. Attract-mode e2e (M6).**
+  - With `CFG.DEMO_IDLE_SECONDS = 1`, the title starts the demo (D1). The demo kills enemies within 20 s, and `gameTime`, kills and weapon index all advance (D3, D4).
+  - A keypress exits to the title without starting a game (D6). A subsequent real game starts with score 0, kills 0 and `unlockedWeapons = 1` (D6 isolation).
+  - Mouse movement under 8 px doesn't reset the idle timer.
+  - There are no console errors throughout (Q1).
+  - A unit test for the bot's aim-lead math, if the math is exposed as a pure function.
 
 ## Milestone flow
 
@@ -181,4 +226,4 @@ Because of M1, art must read at 1/3 resolution:
 2. Anna runs the full suite plus manual exploratory play on that milestone. She reports pass/fail per ID to Ralph and sends bugs to Josh with repro steps.
 3. Ralph reviews the diff against the spec and decides whether to accept or rework. Ralph commits when the user approves.
 
-Order: **M2 (in progress) → M1 → M3 → M4 → M5**. T runs in parallel throughout.
+Order: **M2 (in progress) → M1 → M6 → M3 → M4 → M5**. T runs in parallel throughout. M6 is mostly a new file (`js/demo.js`), so Josh may give it to a subagent in parallel with M1, as long as he integrates the `main.js` hooks himself to avoid edit collisions.
