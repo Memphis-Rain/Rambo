@@ -1008,7 +1008,9 @@ function _bulletExplode(b) {
     if(e2.dead) continue;
     const d2 = dist(b.x, b.y, e2.x, e2.y);
     if(d2 < b.radius){
-      _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: Math.atan2(e2.y-b.y, e2.x-b.x), src });
+      // Dead-centre (G13c target): knock back along the round's flight
+      const ang = d2 < 1 ? Math.atan2(b.vy, b.vx) : Math.atan2(e2.y-b.y, e2.x-b.x);
+      _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: ang, src });
     }
   }
 }
@@ -1186,7 +1188,9 @@ function bulletHitEnemy(b, e, mult = 1) {
   // Disintegrator kills are handled in killEnemy (SRC_DISINT)
   damageEnemy(e, b.dmg * mult, bAngle, src);
 
-  if(b.explosive) _bulletExplode(b);
+  // G13c: a contact explosive that hits the body detonates at the target's
+  // feet (ground position), not at the column entry up to 135u away
+  if(b.explosive){ b.x = e.x; b.y = e.y; _bulletExplode(b); }
 }
 
 // =====================================================================
