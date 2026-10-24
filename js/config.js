@@ -33,6 +33,7 @@ const CFG = {
   MAX_GIBS: 160,
   MAX_DMG_NUMBERS: 60,
   SHAKE_MAX: 20, // J5a: screen px; addShake clamps to this
+  WATER_CAMO_ALPHA_SCALE: 1, // W1: water camo block alpha (1 = as designed; higher -> opaque). Baked: call rebakeWaterCamo()
   // Attract-mode demo (M6)
   DEMO_IDLE_SECONDS: 5,
   DEMO_MAX_SECONDS: 60,

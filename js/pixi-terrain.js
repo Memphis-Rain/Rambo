@@ -246,6 +246,9 @@ function generatePixiChunk(cx, cy) {
   // Clean up temporary container
   chunkContainer.destroy({ children: true });
 
+  // Bake this chunk's water camo once (P1)
+  bakeChunkWater(cx, cy);
+
   // Spawn environmental objects (unchanged from original - handled by world.js)
   if (!envChunks.has(key)) {
     envChunks.add(key);
@@ -382,6 +385,7 @@ function renderPixiTerrain() {
         terrainContainer.removeChild(sprite);
         sprite.destroy(true); // Destroy sprite and texture
         chunkCache.delete(key);
+        destroyChunkWater(key);
         envChunks.delete(key);
       }
     }
@@ -396,125 +400,132 @@ function renderPixiTerrain() {
 const TERRAIN_BAKE_BUDGET_MS = 4; // P3: per-frame budget for pre-baking off-screen chunks
 
 /**
- * Animated water overlay - digital blue camo effect with slow movement
- * Draws semi-transparent camo blocks on water tiles, animated with gameTime
+ * Animated water overlay - digital blue camo blocks drifting over water tiles.
+ * P1: the camo is baked ONCE per terrain chunk into low-res textures (camo
+ * blocks + two ripple groups); per frame only a stepped drift offset and the
+ * ripple alphas change (<= 10 Hz), instead of rebuilding ~3300 rects.
+ * W1: per-block alpha as designed, scaled by CFG.WATER_CAMO_ALPHA_SCALE.
  */
-function renderPixiWaterOverlay() {
-  if (!renderPixiWaterOverlay._graphics) {
-    renderPixiWaterOverlay._graphics = new PIXI.Graphics();
-    renderPixiWaterOverlay._graphics.zIndex = -999997; // Above blood/craters, below entities
-    worldContainer.addChild(renderPixiWaterOverlay._graphics);
-  }
+const waterCache = new Map();          // chunk key -> { camo, ripA, ripB } sprites, or null (no water)
+const WATER_BAKE_RES = 1 / 3;          // the world is shown at 1/3 resolution anyway (R1)
+const WATER_DRIFT = 3;                 // max drift in screen units (1 low-res pixel)
+const WATER_STEP_HZ = 8;               // animation update rate (stepped, <= 10 Hz)
+const WATER_CAMO_COLORS = [
+  0x163d5c, 0x1a4a6e, 0x0f3348, 0x1e5577,
+  0x12405a, 0x255d80, 0x0d2c40, 0x1b5270,
+  0x183e5e, 0x2a6888, 0x0e3550, 0x1f5878
+];
 
-  const g = renderPixiWaterOverlay._graphics;
-  g.clear();
+// Deterministic per-tile hash for camo patterns
+function waterTileHash(tx, ty, i) {
+  let h = (tx * 374761393 + ty * 668265263 + i * 2654435761) | 0;
+  h = ((h ^ (h >>> 13)) * 1274126177) | 0;
+  return (h ^ (h >>> 16)) & 0x7fffffff;
+}
 
-  const ts = CFG.TILE_SIZE;
-  const iso = CFG.ISO_SCALE;
-  const centerWorld = toWorld(cam.x, cam.y);
-  const rangeX = Math.ceil(W / (ts * 1.5)) + 3;
-  const rangeY = Math.ceil(H / (ts * iso * 1.5)) + 3;
-  const centerTX = Math.floor(centerWorld.x / ts);
-  const centerTY = Math.floor(centerWorld.y / ts);
-  const time = gameTime;
+// All 4 corners of a rect (relative to the tile centre) inside the tile diamond
+function waterRectInDiamond(rx, ry, rw, rh, dhw, dhh) {
+  const hw = rw * 0.5, hh = rh * 0.5;
+  return (Math.abs(rx - hw) / dhw + Math.abs(ry - hh) / dhh <= 1) &&
+         (Math.abs(rx + hw) / dhw + Math.abs(ry - hh) / dhh <= 1) &&
+         (Math.abs(rx - hw) / dhw + Math.abs(ry + hh) / dhh <= 1) &&
+         (Math.abs(rx + hw) / dhw + Math.abs(ry + hh) / dhh <= 1);
+}
 
-  // Camo color palette - deep blues, teals, navy
-  const camoColors = [
-    0x163d5c, 0x1a4a6e, 0x0f3348, 0x1e5577,
-    0x12405a, 0x255d80, 0x0d2c40, 0x1b5270,
-    0x183e5e, 0x2a6888, 0x0e3550, 0x1f5878
-  ];
+function _bakeWaterLayer(g, w, h) {
+  const rt = PIXI.RenderTexture.create({ width: w, height: h, resolution: WATER_BAKE_RES, scaleMode: 'nearest', antialias: false });
+  app.renderer.render({ container: g, target: rt, clear: true });
+  const sp = new PIXI.Sprite(rt);
+  sp.zIndex = -999997; // above blood/craters, below entities
+  worldContainer.addChild(sp);
+  return sp;
+}
 
-  // Hash function for deterministic per-tile patterns
-  function tileHash(tx, ty, i) {
-    let h = (tx * 374761393 + ty * 668265263 + i * 2654435761) | 0;
-    h = ((h ^ (h >>> 13)) * 1274126177) | 0;
-    return (h ^ (h >>> 16)) & 0x7fffffff;
-  }
-
-  // Check if ALL 4 corners of a rect are inside the isometric diamond
-  // rx, ry are relative to tile center; dhw/dhh are diamond half-widths
-  function rectInDiamond(rx, ry, rw, rh, dhw, dhh) {
-    const hw = rw * 0.5, hh = rh * 0.5;
-    // Test all 4 corners against diamond: |x|/dhw + |y|/dhh <= 1
-    return (Math.abs(rx - hw) / dhw + Math.abs(ry - hh) / dhh <= 1) &&
-           (Math.abs(rx + hw) / dhw + Math.abs(ry - hh) / dhh <= 1) &&
-           (Math.abs(rx - hw) / dhw + Math.abs(ry + hh) / dhh <= 1) &&
-           (Math.abs(rx + hw) / dhw + Math.abs(ry + hh) / dhh <= 1);
-  }
-
-  for (let ty = centerTY - rangeY; ty <= centerTY + rangeY; ty++) {
-    for (let tx = centerTX - rangeX; tx <= centerTX + rangeX; tx++) {
+// Bake the water camo of one terrain chunk (called when the chunk is baked)
+function bakeChunkWater(cx, cy) {
+  const key = `${cx},${cy}`;
+  destroyChunkWater(key);
+  const sz = CFG.CHUNK_SIZE, ts = CFG.TILE_SIZE, iso = CFG.ISO_SCALE;
+  const w = sz * ts * 2 + ts * 2, h = sz * ts * iso * 2 + ts * 2;
+  // Same local frame as the terrain chunk sprite
+  const origin = toScreen(cx * sz * ts, cy * sz * ts);
+  const ox0 = origin.x - sz * ts, oy0 = origin.y;
+  const aScale = CFG.WATER_CAMO_ALPHA_SCALE;
+  const dhw = ts, dhh = ts * iso;
+  const camo = new PIXI.Graphics(), ripA = new PIXI.Graphics(), ripB = new PIXI.Graphics();
+  let any = false;
+  for (let ty = cy * sz; ty < cy * sz + sz; ty++) {
+    for (let tx = cx * sz; tx < cx * sz + sz; tx++) {
       if (getTerrainTypeAt(tx * ts, ty * ts) !== 'water') continue;
-
-      // Tile center in screen coords
-      const sp = toScreen(tx * ts + ts * 0.5, ty * ts + ts * 0.5);
-
-      // Diamond half-widths for this tile in screen space
-      const dhw = ts;       // half-width of isometric diamond
-      const dhh = ts * iso; // half-height
-
-      // Large camo blocks (slow drift)
-      for (let i = 0; i < 5; i++) {
-        const h = tileHash(tx, ty, i);
-        const w = 8 + ((h >> 16) & 0xf);
-        const bh = 4 + ((h >> 20) & 0x7);
-
-        // Slow animated drift
-        const phase = ((h >> 4) & 0xf) * 0.39;
-        const ox = Math.sin(time * 0.25 + phase) * 3;
-        const oy = Math.cos(time * 0.18 + phase * 1.3) * 1.5;
-
-        // Final center position relative to tile center
-        const cx = ((h & 0xff) / 255 - 0.5) * dhw * 0.9 + ox;
-        const cy = (((h >> 8) & 0xff) / 255 - 0.5) * dhh * 0.9 + oy;
-
-        // Reject if ANY corner is outside the diamond
-        if (!rectInDiamond(cx, cy, w, bh, dhw, dhh)) continue;
-
-        const color = camoColors[h % camoColors.length];
-        g.alpha = 0.25 + ((h >> 28) & 3) * 0.06;
-        g.rect(sp.x + cx - w * 0.5, sp.y + cy - bh * 0.5, w, bh);
-        g.fill(color);
+      any = true;
+      const c = toScreen(tx * ts + ts * 0.5, ty * ts + ts * 0.5);
+      const lx = c.x - ox0, ly = c.y - oy0;
+      // Large camo blocks + small detail blocks; the reject test keeps the
+      // drift margin so a drifted block never crosses onto land
+      for (let i = 0; i < 10; i++) {
+        const hh = waterTileHash(tx, ty, i);
+        const big = i < 5;
+        const bw = big ? 8 + ((hh >> 16) & 0xf) : 4 + ((hh >> 16) & 0x7);
+        const bh = big ? 4 + ((hh >> 20) & 0x7) : 2 + ((hh >> 20) & 0x3);
+        const spread = big ? 0.9 : 0.8;
+        const rx = ((hh & 0xff) / 255 - 0.5) * dhw * spread;
+        const ry = (((hh >> 8) & 0xff) / 255 - 0.5) * dhh * spread;
+        if (!waterRectInDiamond(rx, ry, bw + WATER_DRIFT * 2, bh + WATER_DRIFT, dhw, dhh)) continue;
+        const color = WATER_CAMO_COLORS[(big ? hh : hh >> 3) % WATER_CAMO_COLORS.length];
+        const alpha = big ? 0.25 + ((hh >> 28) & 3) * 0.06 : 0.15 + ((hh >> 28) & 3) * 0.04;
+        camo.rect(lx + rx - bw * 0.5, ly + ry - bh * 0.5, bw, bh).fill({ color, alpha: Math.min(1, alpha * aScale) });
       }
-
-      // Small detail blocks (faster shimmer)
-      for (let i = 5; i < 10; i++) {
-        const h = tileHash(tx, ty, i);
-        const w = 4 + ((h >> 16) & 0x7);
-        const bh2 = 2 + ((h >> 20) & 0x3);
-
-        const phase = ((h >> 4) & 0xf) * 0.47;
-        const ox = Math.sin(time * 0.4 + phase) * 2;
-        const oy = Math.cos(time * 0.3 + phase * 0.9) * 1;
-
-        const cx = ((h & 0xff) / 255 - 0.5) * dhw * 0.8 + ox;
-        const cy = (((h >> 8) & 0xff) / 255 - 0.5) * dhh * 0.8 + oy;
-
-        if (!rectInDiamond(cx, cy, w, bh2, dhw, dhh)) continue;
-
-        const color = camoColors[(h >> 3) % camoColors.length];
-        g.alpha = 0.15 + ((h >> 28) & 3) * 0.04;
-        g.rect(sp.x + cx - w * 0.5, sp.y + cy - bh2 * 0.5, w, bh2);
-        g.fill(color);
-      }
-
-      // Occasional bright ripple highlight (time-varying visibility)
-      const rippleH = tileHash(tx, ty, 99);
-      const ripplePhase = ((rippleH & 0xff) / 255) * Math.PI * 2;
-      const rippleVis = Math.sin(time * 0.5 + ripplePhase);
-      if (rippleVis > 0.3) {
-        const rx = ((rippleH >> 8 & 0xff) / 255 - 0.5) * dhw * 0.4;
-        const ry = ((rippleH >> 16 & 0xff) / 255 - 0.5) * dhh * 0.4;
-        const rw = 8 + (rippleH >> 24 & 0xf);
-        if (rectInDiamond(rx, ry, rw, 2, dhw, dhh)) {
-          g.alpha = (rippleVis - 0.3) * 0.2;
-          g.rect(sp.x + rx - rw * 0.5, sp.y + ry - 1, rw, 2);
-          g.fill(0x4488aa);
-        }
+      // Ripple highlight, in one of two groups that pulse in counter-phase
+      const rh = waterTileHash(tx, ty, 99);
+      const rx = (((rh >> 8) & 0xff) / 255 - 0.5) * dhw * 0.4;
+      const ry = (((rh >> 16) & 0xff) / 255 - 0.5) * dhh * 0.4;
+      const rw = 8 + ((rh >> 24) & 0xf);
+      if (waterRectInDiamond(rx, ry, rw, 2, dhw, dhh)) {
+        ((rh & 1) ? ripA : ripB).rect(lx + rx - rw * 0.5, ly + ry - 1, rw, 2).fill({ color: 0x4488aa, alpha: Math.min(1, 0.14 * aScale) });
       }
     }
   }
+  if (any) {
+    const entry = { camo: _bakeWaterLayer(camo, w, h), ripA: _bakeWaterLayer(ripA, w, h), ripB: _bakeWaterLayer(ripB, w, h), x: ox0, y: oy0 };
+    entry.ripA.position.set(ox0, oy0);
+    entry.ripB.position.set(ox0, oy0);
+    waterCache.set(key, entry);
+  } else {
+    waterCache.set(key, null);
+  }
+  camo.destroy(); ripA.destroy(); ripB.destroy();
+}
 
-  g.alpha = 1;
+function destroyChunkWater(key) {
+  const e = waterCache.get(key);
+  if (e) for (const sp of [e.camo, e.ripA, e.ripB]) { worldContainer.removeChild(sp); sp.destroy(true); }
+  waterCache.delete(key);
+}
+
+function clearWaterBakes() {
+  for (const key of [...waterCache.keys()]) destroyChunkWater(key);
+}
+
+// W1: CFG.WATER_CAMO_ALPHA_SCALE is baked in; call this after changing it
+function rebakeWaterCamo() {
+  for (const key of chunkCache.keys()) {
+    const [cx, cy] = key.split(',').map(Number);
+    bakeChunkWater(cx, cy);
+  }
+}
+
+// Per frame: move/fade the baked layers in steps (no geometry rebuild)
+function renderPixiWaterOverlay() {
+  const tq = Math.floor(gameTime * WATER_STEP_HZ) / WATER_STEP_HZ;
+  const dx = Math.round(Math.sin(tq * 0.25) * WATER_DRIFT / 3) * 3;
+  const dy = Math.round(Math.cos(tq * 0.18) * WATER_DRIFT / 3) * 3;
+  const pulse = Math.sin(tq * 0.5);
+  const aA = Math.round(Math.max(0, pulse) * 4) / 4;
+  const aB = Math.round(Math.max(0, -pulse) * 4) / 4;
+  for (const e of waterCache.values()) {
+    if (!e) continue;
+    e.camo.x = e.x + dx; e.camo.y = e.y + dy;
+    e.ripA.alpha = aA; e.ripB.alpha = aB;
+    e.ripA.visible = aA > 0; e.ripB.visible = aB > 0;
+  }
 }
