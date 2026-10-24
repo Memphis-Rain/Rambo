@@ -51,6 +51,12 @@ The primary sessions keep their context for coordination and decisions:
 
 - **Q1.** No uncaught errors or `console.error` from boot through 60 s of play. Allowed noise: the `favicon.ico` 404 and `[RAMBO PERF]` warnings during the first second.
 - **Q2.** Performance: with 40+ enemies on screen and heavy gore, the F4 dump shows a CPU frame time under 12 ms on the dev machine, and the game holds 60 fps.
+  - **Q2a. Definition (Ralph, after Anna's perf pass).** "CPU frame time" means **all main-thread JS per displayed frame**: update, sprite/HUD build, the retro RT pass and `app.render`/submit. `perfLog.totalCpuMs` and F4 must measure exactly that.
+  - Budget on the reference machine (RTX 5090, 1920×1080, DPR 1):
+    - 40 enemies + continuous gore: median ≤ 8 ms, p99 ≤ 16.7 ms.
+    - 80 enemies + gore: p99 ≤ 16.7 ms.
+  - **Sustained:** over a 5-minute gore session, the median at minute 5 is within 15% of the median at minute 0.5, and fps never sits below 60 for more than 1 s.
+  - CI (SwiftShader) checks only the relative sustained criterion. The absolute budget is checked on real-GPU runs.
 - **Q3.** `node --check` passes on every `js/*.js` file, and `npm run lint` reports 0 errors.
 - **Q4.** Gameplay is unchanged unless the spec says otherwise. That covers damage numbers, weapon stats, unlock scores and wave scaling, which the unit tests lock down.
 - **Q5.** Mouse aim stays exact after the pixel pipeline lands. The cursor must map to the correct world point.
@@ -181,6 +187,21 @@ Because of M1, art must read at 1/3 resolution:
   - Retro title with the pixel font, a blinking `PRESS START`, and scanlines.
   - Show the controls, including the F6/F7/F8 showcase toggles.
   - The `#start-btn` id and the `startGame()` entry point must keep working for the tests.
+
+## M7: Performance hardening (Josh) *(from Anna's perf pass on release point 1)*
+
+- **P1. No frame-time step-up over time (high).**
+  - About 60 s after load, frame time steps up permanently (CPU median 2.9 → 4.5–6.4 ms, fps 135 → 60–85) while entity and draw counts stay flat.
+  - The prime suspect is the water overlay, which rebuilds ~3000 Graphics instructions every frame (`renderPixiWaterOverlay` 2.1 → 3.0 ms per call).
+  - **Find the root cause first, with evidence:** a profile or a bisect showing what grows. Then fix it.
+  - Prefer an approach that doesn't rebuild geometry every frame: bake the water mask once per chunk and animate it through a shader, a uniform, or a tiling offset.
+  - Acceptance: Q2a's sustained criterion.
+- **P2. Honest instrumentation.** `perfLog` and F4 include the retro pass and `app.render` (Q2a), and report them as separate lines too.
+- **P3. Chunk-generation budget.** At most ~4 ms of chunk baking per frame. Queue the rest and bake nearest-first over the following frames; chunks just off-screen are pre-baked.
+  - Acceptance: walking continuously for 30 s produces no frame over 16.7 ms that is caused by terrain.
+- **P4. Decal draws under continuous gore.**
+  - Growing pools must not block chunk merging. Keep growing decals in a small dynamic layer, and bake only settled decals into 256-chunks.
+  - Acceptance: ≤ 16 decal draw calls **during** continuous gore (10 kills/s plus explosions) at `MAX_BLOOD_POOLS`, not just after a static fill.
 
 ## M6: Attract mode / CPU demo (Josh) *(user request 2026-10-24)*
 
