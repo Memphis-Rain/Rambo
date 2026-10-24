@@ -15,5 +15,6 @@ export const LANDED = {
   M7: true, // perf hardening P1-P4 (Q2a): sustained frame time, honest perfLog, chunk budget, decal draws in gore
   G2A: true, // knockback cap 900, env collision still resolves after a push (spec 545f085)
   BATCH2: true, // fixes for exploratory bugs B1-B7 on release point 1 (HiDPI, dither, decal cap/growth, shake)
+  M8: false, // physical environment E0-E9 (spec 2a33306): no trees in water, blast response, persistence
   FU1: true, // follow-ups after the first build (spec 1c81384): R4a DITHER_STRENGTH, D4 wave 10, D5 overlay visible
 };
