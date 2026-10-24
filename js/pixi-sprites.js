@@ -2032,8 +2032,13 @@ function _spRenderDecals() {
     let runStart = -1, run = 0, found = -1;
     for (let i = 0; i < D.chunks.length; i++) {
       const c = D.chunks[i];
-      if (!c.big && c.sig < 0) { if (run === 0) runStart = i; run++; if (run === SP_DEC_MERGE) { found = runStart; break; } }
-      else run = 0;
+      // Big chunks start on a 256-decal boundary so addDecal's 256-aligned
+      // recycling drops whole chunks instead of cutting (and rebuilding) one
+      if (!c.big && c.sig < 0 && (run > 0 || c.start % (SP_DEC_SMALL * SP_DEC_MERGE) === 0)) {
+        if (run === 0) runStart = i;
+        run++;
+        if (run === SP_DEC_MERGE) { found = runStart; break; }
+      } else run = 0;
     }
     if (found < 0) break;
     const s0 = D.chunks[found].start, e0 = D.chunks[found + SP_DEC_MERGE - 1].end;
