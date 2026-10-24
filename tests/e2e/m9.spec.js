@@ -193,7 +193,11 @@ test.describe('W2 wading', () => {
         const at10 = recs.find((x) => (x.h - from) / cut >= 0.1);
         const at90 = recs.find((x) => (x.h - from) / cut >= 0.9);
         expect(at10 && at90, `${r.who} ${phase}: the transition completes`).toBeTruthy();
-        expect(at90.t - at10.t, `${r.who} ${phase}: 10% -> 90% of the cut takes >= 0.2 game-s`).toBeGreaterThanOrEqual(0.2 - 1e-6);
+        // Both crossings are sampled at frame boundaries, so the measured span can be short by up
+        // to one frame: allow the largest frame step seen in this transition.
+        const frameDt = Math.max(...recs.slice(1).map((x, k) => x.t - recs[k].t));
+        expect(at90.t - at10.t, `${r.who} ${phase}: 10% -> 90% of the cut takes >= 0.2 game-s (minus one frame, ${frameDt.toFixed(3)} s)`)
+          .toBeGreaterThanOrEqual(0.2 - frameDt - 1e-6);
       }
     }
   });
