@@ -1082,6 +1082,11 @@ const ENEMY_BODY_H = 36, PLAYER_BODY_H = 34, ENEMY_PICK_H = 48,
   PLAYER_HAND_H = 24; // gun hand height above the feet (screen units)
 function bodyColumnK(h) { return h / (2 * CFG.ISO_SCALE); }
 
+// G13(d): walk/idle bob frames draw the body one art px (3 screen units,
+// x round(size) above 1.6, as the puppet scales it) higher; the pick's top
+// edge includes it so the topmost head pixels pick on every frame
+function enemyBobUp(e) { const s = e.size || 1; return 3 * (s > 1.6 ? Math.round(s) : 1); }
+
 // G13: front-most enemy whose drawn body contains screen point (sx, sy)
 // (world-screen coordinates, i.e. toScreen space), or null
 let _aimPicked = null; // enemy the cursor picked this frame (G13)
@@ -1094,7 +1099,7 @@ function pickEnemyAtScreen(sx, sy) {
     if (e.dead) continue;
     const ex = e.x - e.y, ey = (e.x + e.y) * iso;
     const hw = 10 * e.size + 3;
-    if (sx < ex - hw || sx > ex + hw || sy > ey + 6 || sy < ey - ENEMY_PICK_H * e.size - 3) continue;
+    if (sx < ex - hw || sx > ex + hw || sy > ey + 6 || sy < ey - ENEMY_PICK_H * e.size - 3 - enemyBobUp(e)) continue;
     const depth = e.x + e.y; // larger depth draws on top
     if (depth > bestDepth) { bestDepth = depth; best = e; }
   }
