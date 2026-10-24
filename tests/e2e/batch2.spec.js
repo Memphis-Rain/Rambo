@@ -5,9 +5,6 @@ import { LANDED } from '../milestones.js';
 // Skipped until BATCH2 is marked landed in tests/milestones.js.
 test.skip(!LANDED.BATCH2, 'BATCH2 not landed (tests/milestones.js)');
 
-// B7 assumption until a cap is specced: nothing shakes harder than the shockwave (20).
-const SHAKE_CAP = 20;
-
 async function startCalm(game) {
   await game.boot();
   await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1e9; });
@@ -145,15 +142,16 @@ test.describe('B3 decal cap', () => {
   });
 });
 
-test.describe('B7 shake cap', () => {
-  test('B7: addShake is capped globally', async ({ game }) => {
+test.describe('B7/J5a shake cap', () => {
+  test('B7/J5a: addShake is capped at CFG.SHAKE_MAX', async ({ game }) => {
     await startCalm(game);
-    const m = await game.eval(() => { addShake(1000); return shakeMag; });
-    expect(m).toBeGreaterThan(0);
-    expect(m, 'B7: global shake cap').toBeLessThanOrEqual(SHAKE_CAP);
+    const r = await game.eval(() => { addShake(1000); return { m: shakeMag, cap: CFG.SHAKE_MAX }; });
+    expect(r.cap, 'J5a: CFG.SHAKE_MAX').toBe(20);
+    expect(r.m).toBeGreaterThan(0);
+    expect(r.m, 'J5a: addShake clamps to CFG.SHAKE_MAX').toBeLessThanOrEqual(r.cap);
   });
 
-  test('B7: shake decay does not depend on the frame rate', async ({ game }) => {
+  test('B7/J5a: shake decay does not depend on the frame rate', async ({ game }) => {
     await startCalm(game);
     const r = await game.eval(() => {
       paused = true;
