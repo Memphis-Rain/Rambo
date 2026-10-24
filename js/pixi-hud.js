@@ -461,7 +461,11 @@ function renderHudPlayerPanel(p, hpRatio, Wi, Hi) {
   const hpIdx = hpRatio > 0.6 ? 0 : hpRatio > 0.3 ? 1 : 2;
   // B8: show every unlocked slot that fits left of the minimap; on narrow
   // screens the visible window scrolls so the selected weapon is always shown
-  const fit = Math.max(4, Math.floor((Wi - panX - 280) / (HUD_SLOT_W + HUD_SLOT_GAP)));
+  const slotStep = HUD_SLOT_W + HUD_SLOT_GAP;
+  let fit = Math.floor((Wi - panX - 280) / slotStep);
+  // Not all fit: reserve room for the "+N (Q/E)" hint so it can't reach the minimap
+  if (unlockedWeapons > fit) fit = Math.floor((Wi - panX - 280 - 96) / slotStep);
+  fit = Math.max(4, fit);
   const maxVisible = Math.min(unlockedWeapons, fit);
   const slot0 = clamp(p.weapon - maxVisible + 1, 0, unlockedWeapons - maxVisible);
   const hasNext = unlockedWeapons < WEAPONS.length && !bossActive;
