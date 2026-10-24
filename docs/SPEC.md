@@ -29,10 +29,12 @@ Non-goals for this round:
 | Who | Worktree | Branch | Dev server |
 |---|---|---|---|
 | Ralph | `C:\work\Rambo` | `main` (integration) | `:8765` |
-| Josh | `C:\work\Rambo-josh` | `dev/josh` | `:8766` |
-| Anna | `C:\work\Rambo-anna` | `test/anna` | `:5173` (Vite), Playwright as she configures it |
+| Josh | `C:\work\Rambo\worktrees\josh` | `dev/josh` | `:8766`, or via Ralph's `:8765/worktrees/josh/game.html` |
+| Anna | `C:\work\Rambo\worktrees\anna` | `test/anna` | `:5173` (Vite), Playwright as she configures it |
 
-- Each person edits **only inside their own worktree**. Nobody edits `C:\work\Rambo` except Ralph.
+- Each person edits **only inside their own worktree**. Nobody edits `C:\work\Rambo` outside `worktrees/` except Ralph.
+- **Everything stays inside `C:\work\Rambo`.** Nothing is created elsewhere on disk; temp files go in your own worktree, under a git-ignored dir.
+- `worktrees/` is excluded locally via `.git/info/exclude`. Every tool config (ESLint, Vitest, Vite, Playwright) must ignore `worktrees/**`.
 - Josh and Anna commit to their own branches. Use small commits with spec IDs in the message, e.g. `M1 R1-R3: low-res world target`. Never push, never commit to `main`, and never rewrite history that has already been reported.
 - Ralph reviews each reported commit range against the spec and merges it into `main` with `--no-ff`. Pushing to a remote happens only with the user's approval.
 - Anna tests a milestone by merging `main`, or Josh's reported SHA, into `test/anna` (`git merge dev/josh`) and running the full suite there.
