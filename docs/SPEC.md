@@ -153,6 +153,17 @@ Because of M1, art must read at 1/3 resolution:
     - Show one merged damage number per pass (G8).
     - Acceptance (unit): for Plasma, Disintegrator and Railgun against a Tank and against a Juggernaut boss, the new damage per pass is within ±1 hit of the old 60 fps simulation, and identical at 30, 60 and 144 fps.
   - **G12b.** Explosive barrels use the same swept test, so rounds no longer tunnel through barrels. On a non-piercing bullet's path, the nearest of enemy or barrel takes the hit.
+- **G13. Head-to-toe hits (bug, user report 2026-10-24: "shooting works only when aiming at their legs, headshots are impossible").**
+  - Cause, to be confirmed with evidence: aim maps the cursor to the **ground plane**. Aiming at a head maps to a ground point *behind* the enemy (screen-up = world (−1, −1) in iso), so the bullet path passes it by. The hit circle sits at the feet.
+  - Fix, both parts:
+    - **(a) Aim picking.** If the cursor is over an enemy's drawn body (sprite bounds, topmost by depth), the aim point becomes that enemy's ground position, i.e. the centre of its hit circle, plus the existing spread. Otherwise the ground-plane mapping stays. The cursor itself is not moved, and Q5 stays exact for ground aiming.
+    - **(b) Body-column hitbox.** Each enemy's hit region is its foot circle **extended along the iso screen-up direction** by its drawn body height, converted to world units: a capsule from the feet to "head height behind". That way a shot whose path crosses the visible body counts even without picking (e.g. with spread).
+    - The same applies to the player's hitbox against enemy bullets, for symmetry.
+  - Q4 note: this makes hits match what you see; it's a bug fix.
+  - Acceptance:
+    - With a zero-spread weapon (e.g. Railgun), aiming at the **head, torso and legs** of each of the 12 enemy types and a boss, from 4 iso directions, at x1 and x3, gives ≥ 95% hits each.
+    - Aiming 1 body-width beside the drawn sprite misses.
+    - An enemy standing behind another doesn't steal a shot aimed at the front enemy's head (picking takes the topmost).
 - **G11. Bomber chain carry-over (bug fix, found by Anna in T3).**
   - Today `processPendingDamage()` runs at most 3 rounds per frame, then `_pendingDamage.length = 0` throws away the damage still queued. A long bomber chain dies out after about 6 links.
   - Keep the 3-rounds-per-frame anti-recursion cap, but **carry the leftover queue to the next frame** instead of discarding it.
