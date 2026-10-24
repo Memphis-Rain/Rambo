@@ -90,6 +90,13 @@ const CFG = {
   ENV_CROWN_R: 0.75,           // E10: fallen crown radius = canopy radius x this
   ENV_CROWN_PUSH: 0.35,        // E10: crown centre = log end + fallDir x crownR x this
   ENV_CROWN_DARK: 0.6,         // E10: fallen crown colour = leaf green x this (x (1 - 0.18 scorch))
+  // M9 E13: sustained fire fells trees (trunk HP, separate from the E2 blast hp)
+  ENV_TRUNK_HP_TREE: 900,
+  ENV_TRUNK_HP_PINE: 750,
+  ENV_TRUNK_HP_DEAD: 300,
+  ENV_TRUNK_NOTCH: 0.5,        // notch shows at trunkHp <= this x trunkMax
+  ENV_TRUNK_PIERCE: 0.5,       // a pierce pass applies dmg x this to a trunk
+  ENV_SHOT_TAU: 2,             // s: decay of the dominant recent shot direction
   WATER_CAMO_ALPHA_SCALE: 3.0, // W1 (Ralph: 3.0): water camo block alpha (1 = as designed; higher -> opaque). Baked: call rebakeWaterCamo()
   // Attract-mode demo (M6)
   DEMO_IDLE_SECONDS: 5,

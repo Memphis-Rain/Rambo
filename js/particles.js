@@ -228,8 +228,9 @@ function spawnBloodDrip(x, y, z) {
 // =====================================================================
 // byPlayer / src: who caused it and with what (M8: the environment reacts,
 // and trees felled by a player's explosion credit the player, E6)
-// snd: sound override (N1 grenades use a pitched-up boom)
-function spawnExplosion(x, y, radius=80, byPlayer=false, src=SRC_EXPLOSIVE, snd=null) {
+// snd: sound override (N1 grenades use a pitched-up boom); dmg: the round's
+// damage for the environment (E13 trunk HP; envBlast defaults it)
+function spawnExplosion(x, y, radius=80, byPlayer=false, src=SRC_EXPLOSIVE, snd=null, dmg=undefined) {
   const k = radius / 80;
   // White core flash (two frames)
   spawnParticle(x, y, 0, 0, 0.035, radius * 0.45, 0xffffff, 'flash', OPT_FLASH, 10, 0);
@@ -282,7 +283,7 @@ function spawnExplosion(x, y, radius=80, byPlayer=false, src=SRC_EXPLOSIVE, snd=
   if (radius >= 100) addHitStop(radius >= 200 ? 0.06 : 0.04);
   playSound(snd || (radius > 150 ? 'big_explosion' : 'explosion'), Math.min(1, radius / 100));
   // Trees sway/scorch/topple, crates break, rocks crack (M8 E2/E4)
-  if (typeof envBlast === 'function') envBlast(x, y, radius, byPlayer, src);
+  if (typeof envBlast === 'function') envBlast(x, y, radius, byPlayer, src, dmg);
 }
 
 // =====================================================================
