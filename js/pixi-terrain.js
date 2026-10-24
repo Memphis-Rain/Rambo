@@ -356,10 +356,18 @@ function renderPixiTerrain() {
   const pcx = Math.floor(centerWorld.x / cs);
   const pcy = Math.floor(centerWorld.y / cs);
 
-  // Generate visible chunks
-  for (let cy = pcy - chunkRange; cy <= pcy + chunkRange; cy++) {
-    for (let cx = pcx - chunkRange; cx <= pcx + chunkRange; cx++) {
-      generatePixiChunk(cx, cy);
+  // P3: bake nearest-first, ring by ring. The 3x3 around the camera covers
+  // the screen and always bakes; the outer ring is pre-baked off-screen
+  // within a per-frame budget, so walking never bakes a whole row at once
+  const t0 = performance.now();
+  bake:
+  for (let ring = 0; ring <= chunkRange; ring++) {
+    for (let cy = pcy - ring; cy <= pcy + ring; cy++) {
+      for (let cx = pcx - ring; cx <= pcx + ring; cx++) {
+        if (Math.max(Math.abs(cx - pcx), Math.abs(cy - pcy)) !== ring) continue;
+        if (ring > 1 && performance.now() - t0 > TERRAIN_BAKE_BUDGET_MS) break bake;
+        generatePixiChunk(cx, cy);
+      }
     }
   }
 
@@ -384,6 +392,8 @@ function renderPixiTerrain() {
     }
   }
 }
+
+const TERRAIN_BAKE_BUDGET_MS = 4; // P3: per-frame budget for pre-baking off-screen chunks
 
 /**
  * Animated water overlay - digital blue camo effect with slow movement
