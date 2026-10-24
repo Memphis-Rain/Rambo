@@ -207,10 +207,7 @@ function initPixiSprites() {
       _spDestroy(_sp.dec.recent);
       _spDestroy(_sp.dec.grow);
     }
-    if (_sp.envL) {
-      for (const c of _sp.envL.list) _spDestroy(c.g);
-      for (const g of _sp.envL.free) _spDestroy(g);
-    }
+    if (_sp.envL) _spEnvLayerClear(_sp.envL);
   }
   _sp.sprites = []; _sp.spriteN = 0; _sp.spritePrev = 0;
   _sp.gfx = []; _sp.gfxN = 0; _sp.gfxPrev = 0;
@@ -249,7 +246,7 @@ function initPixiSprites() {
   uiContainer.addChildAt(_sp.hurtG, 0);
 
   _spDecalInit();
-  _sp.envL = { version: -1, map: new Map(), list: [], free: [], rebuilds: 0 };
+  _sp.envL = _spEnvLayerNew();
   _sp.inited = true;
 }
 
@@ -1959,12 +1956,23 @@ function _spRenderEnv() {
     if (sx < x0 || sx > x1 || sy < y0 || sy > y1) continue;
     // M8: state record (null = never affected); also picks up persisted state
     const rec = eos !== null ? eos(obj) : null;
+    // Destroyed objects vanish (debris / remains replace them; the exploded-
+    // barrel wreck stays, it is the remains). Baked trees are replaced by
+    // their stump + log in the env remains layer (E10) - but the fallen
+    // sprite stays until the layer has drawn the log (no gap while a dirty
+    // chunk waits for its rebuild). Checked BEFORE building, so an object
+    // first seen already destroyed / felled (off-screen at the time, or
+    // after its chunk regenerated) never shows a ghost standing sprite.
+    // A splintered log (E11 logGone) leaves only its stump (layer).
+    if (rec !== null && ((rec.state === 'destroyed' && obj.type !== 'barrel') ||
+        (rec.baked && rec._drawnInLayer === true) || rec.logGone === true)) continue;
     let g = _sp.env.get(obj);
     const st = _spEnvState(obj);
     if (g === undefined) {
       g = _spBuildEnv(obj);
       _sp.env.set(obj, g);
       if (g) {
+        g.visible = false; // shown below only if it passes every check
         g._st = st;
         g.position.set(_spSnap(sx), _spSnap(sy));
         const flat = obj.type === 'flowers' || (obj.type === 'barrel' && obj.exploded);
@@ -1978,16 +1986,12 @@ function _spRenderEnv() {
       if (obj.type === 'barrel' && obj.exploded) g.zIndex = SP_Z_GROUND + 1;
     }
     if (!g) continue;
-    if (rec !== null) {
-      // M8: destroyed objects vanish (debris / remains replace them); the
-      // exploded-barrel wreck stays (it is the remains). Baked trees are
-      // replaced by their stump + log in the env remains layer (E10).
-      if (rec.state === 'destroyed' && obj.type !== 'barrel') continue;
-      if (rec.baked) continue;
-    }
     g.visible = true;
     vis.push(g);
-    if (g._spr) _spTreeXf(g, obj, rec);
+    if (g._spr) {
+      _spTreeXf(g, obj, rec);
+      if (g._tree) _spCanopyFade(g, obj, rec, sx, sy, f);
+    }
   }
   // periodic sweep of graphics whose env object was unloaded
   if ((f % 120) === 0) {
@@ -2011,17 +2015,32 @@ function _spTreeXf(g, obj, rec) {
     const th = Math.round(rec.fall * SP_FALL_STEPS) / SP_FALL_STEPS * (Math.PI / 2);
     const c = Math.cos(th), sn = Math.sin(th);
     const fx = rec.fallDirX, fy = rec.fallDirY;
+    // screen projection of the fall direction (per world unit)
+    // (screen-vertical part foreshortened like the baked log, see SP_LOG_VK)
+    const Px = fx - fy, Py = (fx + fy) * iso * SP_LOG_VK;
+    const Pl = Math.sqrt(Px * Px + Py * Py) || 1;
     // Y axis (image of local +y, base -> down): the top swings from straight
-    // up to the screen projection of the fall direction, scaled so the top
-    // lands where the log ends
-    const kL = (rec.logLen > 0 ? rec.logLen : 40) / g._top;
-    const Yx = -sn * (fx - fy) * kL;
-    let Yy = c - sn * (fx + fy) * iso * kL;
-    if (Yx * Yx + Yy * Yy < 0.04) Yy = Yy < 0 ? -0.2 : 0.2; // pointing at the camera: keep a sliver
-    // X axis: canopy width turns into the projected world perpendicular
-    let px = (-fy - fx) * 0.7071, py = (fx - fy) * iso * 0.7071;
-    if (px < 0) { px = -px; py = -py; } // never pass through zero width
-    const Xx = 1 - sn + sn * px, Xy = sn * py;
+    // up to the projected fall direction, scaled so the canopy lands where
+    // the baked crown will lie (log end + crown push + crown radius; E10)
+    const cr = obj.type === 'deadtree' ? 0 : (obj.radius || 0) * (CFG.ENV_CROWN_R || 0.75);
+    const reach = (rec.logLen > 0 ? rec.logLen : 40) + cr * (1 + (CFG.ENV_CROWN_PUSH || 0.35));
+    const kL = reach / g._top;
+    let Yx = -sn * Px * kL, Yy = c - sn * Py * kL;
+    // never let the trunk axis collapse (pointing at the camera): keep at
+    // least 0.3 of its length, along the final direction once past halfway
+    let Yl = Math.sqrt(Yx * Yx + Yy * Yy);
+    if (Yl < 0.3) {
+      if (Yl < 1e-3) { if (sn > 0.5) { Yx = -Px / Pl; Yy = -Py / Pl; } else { Yx = 0; Yy = 1; } Yl = 1; }
+      Yx *= 0.3 / Yl; Yy *= 0.3 / Yl; Yl = 0.3;
+    }
+    // X axis (canopy width): kept PERPENDICULAR on screen to the trunk axis
+    // (same handedness as at rest, so the sprite never mirrors or turns into
+    // a sliver), its width easing from 1 to the lying crown's projected
+    // width across the trunk (min 0.5)
+    const qx = (-fy - fx) * 0.7071, qy = (fx - fy) * iso * 0.7071;
+    const wEnd = Math.min(1, Math.max(0.5, Math.abs(qx * Py - qy * Px) / Pl));
+    const w = 1 - sn + sn * wEnd;
+    const Xx = Yy / Yl * w, Xy = -Yx / Yl * w;
     g.rotation = 0;
     g.skew.set(Math.atan2(Yx, Yy), Math.atan2(Xy, Xx));
     g.scale.set(Math.sqrt(Xx * Xx + Xy * Xy), Math.sqrt(Yx * Yx + Yy * Yy));
@@ -2041,6 +2060,43 @@ function _spTreeXf(g, obj, rec) {
   // record sway (+ = top leans to screen +x; skew.x > 0 leans it to -x)
   if (rec !== null && rec.sway !== 0) skx -= Math.round(rec.sway / SP_SWAY_Q) * SP_SWAY_Q;
   g.skew.x = skx;
+}
+
+// E11: canopy fade. A standing tree that covers the player (the player's
+// body, ~15 art px tall, overlaps the sprite's screen bounds above the trunk
+// base, and the tree sorts in front of the player) fades to 40% in stepped
+// alpha (1 -> 0.7 -> 0.4, one step per SP_FADE_STEP_F frames) and steps
+// back once the player leaves. Alpha only: no geometry or texture work.
+const _spFadeA = [1, 0.7, 0.4];
+const SP_FADE_STEP_F = 4;   // 2 steps x 4 frames ~ 0.13 s
+const SP_FADE_BODY = 15;    // player body height (art px)
+let _spFadeF = -1, _spFadePX = 0, _spFadePY = 0, _spFadePZ = 0, _spFadeOn = false;
+function _spCanopyFade(g, obj, rec, sx, sy, f) {
+  if (_spFadeF !== f) {
+    _spFadeF = f;
+    _spFadeOn = typeof player !== 'undefined' && player !== null && !player.dead;
+    if (_spFadeOn) {
+      _spFadePX = player.x - player.y; _spFadePY = (player.x + player.y) * CFG.ISO_SCALE;
+      _spFadePZ = depthKey(player.x, player.y);
+    }
+  }
+  let want = 0;
+  const standing = rec === null || rec.state === 'standing' || rec.state === 'scorched';
+  // cheap reject first: only trees near the player and in front of it
+  if (standing && _spFadeOn && sy >= _spFadePY && sy - _spFadePY < 400 &&
+      sx - _spFadePX < 240 && _spFadePX - sx < 240 && g._z0 > _spFadePZ) {
+    const tex = g.texture;
+    const w = tex.width, h = tex.height;
+    const l = sx - g.anchor.x * w, r = l + w, top = sy - g.anchor.y * h;
+    const bodyTop = _spFadePY - SP_FADE_BODY * ART;
+    if (_spFadePX > l && _spFadePX < r && _spFadePY > top && bodyTop < sy) want = 2;
+  }
+  const lv = g._fade | 0;
+  if (lv === want) return;
+  if (f - (g._fadeF | 0) < SP_FADE_STEP_F) return;
+  const nl = lv + (want > lv ? 1 : -1);
+  g._fade = nl; g._fadeF = f;
+  g.alpha = _spFadeA[nl];
 }
 
 function _spEnvSweepFn(g, obj, map) {
@@ -2392,6 +2448,13 @@ function _spGLine(g, x0, y0, x1, y1, t, grow) {
   if (rw > 0) g.rect((rx - o) * A, (ry - o) * A, (rw + tt - 1) * A, tt * A);
 }
 
+// E10/C: a log lying toward / away from the camera projects to a vertical
+// screen segment that reads as a standing post. Its screen-vertical extent
+// (relative to the stump) is drawn foreshortened by this factor - the log,
+// its crown and the end of the topple animation alike - so it reads as
+// lying flat. (The collision capsule keeps the true world length.)
+const SP_LOG_VK = 0.7;
+
 // Fallen log lying on the ground from the stump side (ax, ay) to (bx, by)
 function _spDrawLog(g, r) {
   const A = ART, iso = CFG.ISO_SCALE;
@@ -2399,15 +2462,21 @@ function _spDrawLog(g, r) {
   const sc = _spRemScorch[Math.min(3, r.scorch | 0)];
   const bark = darkenColorHex(r.barkColor || 0x5a3a1e, sc);
   const cut = darkenColorHex(r.cutColor || 0xc8a070, sc);
-  const t = Math.max(2, Math.round((r.logR || 7) * 2 / A) - (variant === 1 ? 1 : 0));
-  const lift = t >> 1; // the trunk axis sits half a diameter above the ground
-  const X1 = Math.round((r.bx - r.by) / A), G1 = Math.round((r.bx + r.by) * iso / A);
+  // screen-vertical offsets from the stump are foreshortened (SP_LOG_VK)
+  const sb = (r.x + r.y) * iso;
+  const X1 = Math.round((r.bx - r.by) / A), G1 = Math.round((sb + ((r.bx + r.by) * iso - sb) * SP_LOG_VK) / A);
   // the base end starts a clear art px past the stump so the two read apart
-  const sdx = (r.bx - r.by) - (r.ax - r.ay), sdy = ((r.bx + r.by) - (r.ax + r.ay)) * iso;
+  const sdx = (r.bx - r.by) - (r.ax - r.ay), sdy = ((r.bx + r.by) - (r.ax + r.ay)) * iso * SP_LOG_VK;
   const sdl = Math.max(1e-6, Math.abs(sdx) > Math.abs(sdy) ? Math.abs(sdx) : Math.abs(sdy));
-  const X0 = Math.round((r.ax - r.ay) / A + sdx / sdl * 2), G0 = Math.round((r.ax + r.ay) * iso / A + sdy / sdl * 2);
+  const X0 = Math.round((r.ax - r.ay) / A + sdx / sdl * 2);
+  const G0 = Math.round((sb + ((r.ax + r.ay) * iso - sb) * SP_LOG_VK) / A + sdy / sdl * 2);
+  // a log lying toward / away from the camera (steep on screen) is drawn one
+  // art px wider and NOT lifted (a lifted vertical log reads as a post
+  // standing on its stump); flat logs sit half a diameter above the ground
+  const steep = Math.abs(G1 - G0) > Math.abs(X1 - X0);
+  const t = Math.max(2, Math.round((r.logR || 7) * 2 / A) - (variant === 1 ? 1 : 0)) + (steep ? 2 : 0);
+  const lift = steep ? 0 : t >> 1;
   const Y0 = G0 - lift, Y1 = G1 - lift;
-  const steep = Math.abs(Y1 - Y0) > Math.abs(X1 - X0);
   const o = (t - 1) >> 1;
   const seed = ((r.x * 73856093) ^ (r.y * 19349663)) | 0;
   const len = Math.max(Math.abs(X1 - X0), Math.abs(Y1 - Y0));
@@ -2416,9 +2485,12 @@ function _spDrawLog(g, r) {
   // perpendicular screen side of the stubs: up for flat logs, sideways for steep ones
   const pxs = steep ? 1 : 0, pys = steep ? 0 : 1;
 
-  // ground shadow: a 1-px strip below (flat) or right of (steep) the log
-  if (steep) _spGLine(g, X0 + t - o + 1, G0 + 1, X1 + t - o + 1, G1 + 1, 1, 0);
-  else _spGLine(g, X0 + 1, G0 + 2, X1 + 1, G1 + 2, 1, 0);
+  // ground shadow: a 1-px strip below (flat) or along both sides (steep:
+  // the log lies on the ground) of the log
+  if (steep) {
+    _spGLine(g, X0 + t - o + 1, G0 + 1, X1 + t - o + 1, G1 + 1, 1, 0);
+    _spGLine(g, X0 - o - 2, G0 + 1, X1 - o - 2, G1 + 1, 1, 0);
+  } else _spGLine(g, X0 + 1, G0 + 2, X1 + 1, G1 + 2, 1, 0);
   g.fill({ color: 0, alpha: 0.3 });
   // outline (log + stubs + end caps)
   _spGLine(g, X0, Y0, X1, Y1, t, 1);
@@ -2440,17 +2512,22 @@ function _spDrawLog(g, r) {
     _spGLine(g, sx, sy, sx + side * pxs * l + (steep ? 0 : (h & 512 ? 1 : -1)), sy - pys * l, 1, 0);
   }
   g.fill(bark);
-  // shaded underside (flat) / right side (steep)
+  // shaded underside (flat) / both flanks (steep: a cylinder lying along
+  // the view has its lit top surface in the middle, not a post's lit side)
   if (t > 2) {
-    if (steep) _spGLine(g, X0 + t - 1 - o, Y0, X1 + t - 1 - o, Y1, 1, 0);
-    else _spGLine(g, X0, Y0 + t - 1 - o, X1, Y1 + t - 1 - o, 1, 0);
+    if (steep) {
+      _spGLine(g, X0 + t - 1 - o, Y0, X1 + t - 1 - o, Y1, 1, 0);
+      _spGLine(g, X0 - o, Y0, X1 - o, Y1, 1, 0);
+    } else _spGLine(g, X0, Y0 + t - 1 - o, X1, Y1 + t - 1 - o, 1, 0);
     g.fill(darkenColorHex(bark, 0.68));
   }
-  // highlight along the top / left edge
-  if (steep) _spGLine(g, X0 - o, Y0, X1 - o, Y1, 1, 0);
+  // highlight along the top edge (flat) / the middle of the top (steep)
+  if (steep) _spGLine(g, X0 - o + ((t - 1) >> 1), Y0, X1 - o + ((t - 1) >> 1), Y1, 1, 0);
   else _spGLine(g, X0, Y0 - o, X1, Y1 - o, 1, 0);
   g.fill(darkenColorHex(bark, 1.3));
-  // bark grain: a few dark pixels along the trunk (+ char spots when scorched)
+  // bark grain: a few dark pixels along the trunk (+ char spots when
+  // scorched); on steep logs short bands ACROSS the trunk (a cylinder seen
+  // lying lengthwise, not a post)
   const nGrain = Math.max(2, len >> 2);
   for (let k = 0; k < nGrain; k++) {
     const h = _spHash(seed, k + 20);
@@ -2458,7 +2535,8 @@ function _spDrawLog(g, r) {
     const off = ((h >> 8) % Math.max(1, t - 1)) - o + (t > 2 ? 0 : 0);
     const gx = Math.round(X0 + (X1 - X0) * f) + (steep ? off : 0);
     const gy = Math.round(Y0 + (Y1 - Y0) * f) + (steep ? 0 : off);
-    g.rect(gx * A, gy * A, ((h >> 12) & 1) && !steep ? 2 * A : A, A);
+    if (steep) g.rect((Math.round(X0 + (X1 - X0) * f) - o + ((h >> 8) % Math.max(1, t - 2))) * A, gy * A, 2 * A, A);
+    else g.rect(gx * A, gy * A, ((h >> 12) & 1) ? 2 * A : A, A);
   }
   g.fill((r.scorch | 0) >= 2 ? 0x141010 : darkenColorHex(bark, 0.62));
   // snapped base end: splintered (dark notches + a light splinter), so it
@@ -2472,8 +2550,9 @@ function _spDrawLog(g, r) {
   g.fill(0x1a120a);
   g.rect((X0 - ex + (steep ? 0 : 0)) * A, (Y0 - ey) * A, A, A);
   g.fill(cut);
-  // cut-wood end cap with a ring at the far (crown) end
-  {
+  // cut-wood end cap with a ring at the far end (a felled tree that kept
+  // its crown has none: the trunk runs on into the fallen canopy)
+  if (!(r.crownR > 0)) {
     const cw = Math.max(1, t - 2), ch = Math.max(1, t - 1);
     const w = steep ? ch : cw, h = steep ? cw : ch;
     const lx = X1 + ex - (w >> 1), ly = Y1 + ey - (h >> 1);
@@ -2575,91 +2654,337 @@ function _spDrawRubble(g, r) {
   }
 }
 
+// Fallen crown (E10 polish): a felled tree keeps its canopy, lying
+// flattened on the ground just past the far end of its log (logic fields
+// crownX, crownY, crownR, crownColor, crownVariant). Broadleaf: an
+// iso-ellipse footprint (screen width ~2R, height ~1.2 R x ISO) of lumpy
+// leaf masses; pine: a narrower spiky cone lying along the fall direction,
+// with whorl lines. Outlined, 3 flat tones + light leaf clumps, a few loose
+// leaves. Blobs are merged into one span per row and pass (~4 rects/row).
+const SP_CR_ROWS = 64;
+const _spCrL = new Int16Array(SP_CR_ROWS), _spCrR = new Int16Array(SP_CR_ROWS);
+function _spCrownBlob(n, o, bx, by, brx, bry) {
+  const inv = 1 / (bry + 0.5);
+  for (let j = -bry; j <= bry; j++) {
+    const k = by + j + o;
+    if (k < 0 || k >= n) continue;
+    const t = j * inv;
+    const w = Math.round(brx * Math.sqrt(Math.max(0, 1 - t * t)));
+    if (bx - w < _spCrL[k]) _spCrL[k] = bx - w;
+    if (bx + w > _spCrR[k]) _spCrR[k] = bx + w;
+  }
+}
+function _spCrownHas(n, k) { return k >= 0 && k < n && _spCrL[k] <= _spCrR[k]; }
+
+function _spDrawCrown(g, r) {
+  const A = ART, iso = CFG.ISO_SCALE;
+  const pine = (r.crownVariant | 0) === 1;
+  const col = r.crownColor || 0x2f5a22;
+  const R = Math.min(r.crownR, 80);
+  const sb = (r.x + r.y) * iso; // stump base: vertical offsets foreshortened like the log
+  const cx = Math.round((r.crownX - r.crownY) / A), cy = Math.round((sb + ((r.crownX + r.crownY) * iso - sb) * SP_LOG_VK) / A);
+  const seed = ((r.crownX * 73856093) ^ (r.crownY * 19349663)) | 0;
+  // screen projection (art px per world unit) of the fall direction
+  let fx = r.fallDirX, fy = r.fallDirY;
+  if (!(fx * fx + fy * fy > 1e-6)) { fx = 1; fy = 0; }
+  const dsx = (fx - fy) / A, dsy = (fx + fy) * iso * SP_LOG_VK / A;
+  const rx = Math.max(3, Math.round(R / A)), ry = Math.max(2, Math.round(R * iso * 0.6 / A));
+  // silhouette: per-row spans [L, R] (art px relative to cx), rows -H..H
+  const H = Math.min((SP_CR_ROWS >> 1) - 2, pine ? Math.ceil(Math.abs(dsy) * R * 0.75 + ry) + 2 : ry + 2);
+  const n = 2 * H + 1, o = H;
+  _spCrL.fill(32767, 0, n); _spCrR.fill(-32768, 0, n);
+  const NT = 4; // pine tiers
+  if (pine) {
+    // a cone lying along the fall direction: tiers shrink toward the tip
+    for (let k = 0; k < NT; k++) {
+      const t = (-0.5 + k * 0.4) * R;
+      const w = Math.max(1, Math.round(R * (0.62 - 0.12 * k) / A));
+      _spCrownBlob(n, o, Math.round(dsx * t), Math.round(dsy * t), w, Math.max(1, Math.round(w * iso * 1.2)));
+    }
+    // needle spikes: rows alternately pushed out / pulled in
+    for (let k = 0; k < n; k++) {
+      if (_spCrL[k] > _spCrR[k]) continue;
+      const h = _spHash(seed, k + 5);
+      if (k & 1) { _spCrL[k] -= 1 + (h & 1); _spCrR[k] += 1 + ((h >> 1) & 1); }
+      else { _spCrL[k] += 1; _spCrR[k] -= 1; }
+      if (_spCrL[k] > _spCrR[k]) { _spCrL[k] = 32767; _spCrR[k] = -32768; }
+    }
+  } else {
+    // a lumpy canopy: a core ellipse plus a ring of leaf masses
+    _spCrownBlob(n, o, 0, 0, Math.round(rx * 0.6), Math.round(ry * 0.7));
+    const nb = 7;
+    for (let i = 0; i < nb; i++) {
+      const h = _spHash(seed, i + 9);
+      const a = (i + ((h & 255) / 255 - 0.5) * 0.6) * (Math.PI * 2 / nb);
+      const bx = Math.round(Math.cos(a) * rx * 0.6), by = Math.round(Math.sin(a) * ry * 0.56);
+      const s = 0.3 + ((h >> 8) & 255) / 255 * 0.2;
+      _spCrownBlob(n, o, bx, by, Math.max(1, Math.round(rx * s)), Math.max(1, Math.round(ry * (s + 0.16))));
+    }
+  }
+  const top = cy - o;
+  const light = darkenColorHex(col, 1.32), dark = darkenColorHex(col, 0.5);
+  // ground shadow (offset down-right)
+  for (let k = 0; k < n; k++) {
+    if (_spCrownHas(n, k)) g.rect((cx + _spCrL[k] + 1) * A, (top + k + 2) * A, (_spCrR[k] - _spCrL[k] + 1) * A, A);
+  }
+  g.fill({ color: 0, alpha: 0.28 });
+  // outline: the silhouette grown by one art px in every direction
+  for (let k = -1; k <= n; k++) {
+    let l = 32767, rr = -32768;
+    for (let d = -1; d <= 1; d++) {
+      if (_spCrownHas(n, k + d)) { l = Math.min(l, _spCrL[k + d]); rr = Math.max(rr, _spCrR[k + d]); }
+    }
+    if (l > rr) continue;
+    g.rect((cx + l - 1) * A, (top + k) * A, (rr - l + 3) * A, A);
+  }
+  g.fill(darkenColorHex(col, 0.38));
+  // shaded underside: the whole silhouette in the dark tone
+  for (let k = 0; k < n; k++) {
+    if (_spCrownHas(n, k)) g.rect((cx + _spCrL[k]) * A, (top + k) * A, (_spCrR[k] - _spCrL[k] + 1) * A, A);
+  }
+  g.fill(darkenColorHex(col, 0.7));
+  // lit body: silhouette minus a bottom rim and a 1-px right rim
+  const s = pine ? 1 : 2;
+  for (let k = 0; k < n; k++) {
+    if (!_spCrownHas(n, k) || !_spCrownHas(n, k + s)) continue;
+    const l = Math.max(_spCrL[k], _spCrL[k + s]), rr = Math.min(_spCrR[k], _spCrR[k + s]) - 1;
+    if (rr >= l) g.rect((cx + l) * A, (top + k) * A, (rr - l + 1) * A, A);
+  }
+  g.fill(col);
+  // dark pass: leaf-clump undersides / pine whorls (char when scorched)
+  const nc = Math.max(3, Math.round(rx * ry / (pine ? 6 : 5)));
+  if (pine) {
+    // whorl lines across the cone between tiers (perpendicular on screen)
+    const dl = Math.max(1e-6, Math.sqrt(dsx * dsx + dsy * dsy));
+    const px = -dsy / dl, py = dsx / dl;
+    for (let k = 0; k < NT - 1; k++) {
+      const t = (-0.3 + k * 0.4) * R;
+      const w = R * (0.5 - 0.12 * k) / A;
+      const mx = cx + dsx * t, my = cy + dsy * t;
+      _spGLine(g, Math.round(mx - px * w * 0.7), Math.round(my - py * w * 0.35),
+        Math.round(mx + px * w * 0.7), Math.round(my + py * w * 0.35), 1, 0);
+    }
+  } else {
+    for (let i = 0; i < nc; i++) {
+      const h = _spHash(seed, i + 30);
+      const k = 1 + (h % Math.max(1, n - 3));
+      if (!_spCrownHas(n, k + 2) || !_spCrownHas(n, k + 2 + s)) continue;
+      const l = Math.max(_spCrL[k + 2], _spCrL[k + 2 + s]) + 1, rr = Math.min(_spCrR[k + 2], _spCrR[k + 2 + s]) - 2;
+      if (rr <= l) continue;
+      g.rect((cx + l + ((h >>> 8) % (rr - l + 1))) * A, (top + k + 2) * A, 2 * A, A);
+    }
+  }
+  g.fill((r.scorch | 0) >= 2 ? 0x161410 : dark);
+  // light pass: rounded leaf clumps (broadleaf) / needle tufts (pine) on the
+  // lit body, plus a few loose leaves on the ground around the crown
+  for (let i = 0; i < nc; i++) {
+    const h = _spHash(seed, i + 30);
+    const k = 1 + (h % Math.max(1, n - 3));
+    if (pine) {
+      if (!_spCrownHas(n, k) || !_spCrownHas(n, k + s)) continue;
+      const l = Math.max(_spCrL[k], _spCrL[k + s]), rr = Math.min(_spCrR[k], _spCrR[k + s]) - 2;
+      if (rr <= l) continue;
+      g.rect((cx + l + ((h >>> 8) % (rr - l + 1))) * A, (top + k) * A, 2 * A, A);
+      continue;
+    }
+    if (!_spCrownHas(n, k + 2) || !_spCrownHas(n, k + 2 + s)) continue;
+    const l = Math.max(_spCrL[k + 2], _spCrL[k + 2 + s]) + 1, rr = Math.min(_spCrR[k + 2], _spCrR[k + 2 + s]) - 2;
+    if (rr <= l) continue;
+    const x = l + ((h >>> 8) % (rr - l + 1));
+    if (_spCrownHas(n, k) && x >= _spCrL[k] && x + 1 <= _spCrR[k]) g.rect((cx + x) * A, (top + k) * A, 2 * A, A);
+    if (x - 1 >= _spCrL[k + 1] && x + 1 <= _spCrR[k + 1]) g.rect((cx + x - 1) * A, (top + k + 1) * A, 3 * A, A);
+  }
+  const nl = 3 + (seed & 1);
+  for (let i = 0; i < nl; i++) {
+    const h = _spHash(seed, i + 90);
+    const a = (h & 1023) / 1024 * Math.PI * 2;
+    const k = Math.round(Math.sin(a) * (ry + 2 + ((h >> 10) & 1)));
+    const x = Math.round(Math.cos(a) * (rx + 2 + ((h >> 11) & 1)) + (pine ? dsx * R * 0.1 : 0));
+    g.rect((cx + x) * A, (cy + k + 1) * A, A, A);
+  }
+  g.fill(light);
+}
+
 function _spRemainDepth(r) { return r.x + r.y; }
 function _spRemainCmp(a, b) { return _spRemainDepth(a) - _spRemainDepth(b); }
 
-function _spEnvLayerBuild(c) {
-  const g = c.g;
-  g.clear();
+// Layer bookkeeping. envRemains only grows during a round (reset empties
+// it), so new entries are bucketed incrementally into persistent per-chunk
+// buckets (numeric key, no per-item allocs); only the touched chunk goes
+// dirty. A dirty chunk is rebuilt once its bakes have paused for
+// SP_ENVL_QUIET_N frames (or after SP_ENVL_MAX_LAG frames while bakes keep
+// trickling in), and never twice within SP_ENVL_REBUILD_N frames: a BFG's
+// burst of bakes costs a few rebuilds, not one per bake. Until
+// the layer has drawn a felled tree (r._drawnInLayer) its fallen sprite
+// stays visible, so a late rebuild never shows a gap. A chunk's Graphics
+// is destroyed when its terrain chunk unloads and rebuilt from its bucket
+// when it returns.
+const SP_ENVL_REBUILD_N = 6;     // frames between rebuilds of one chunk (~0.1 s)
+const SP_ENVL_QUIET_N = 6;       // rebuild once no remain was added for this many frames
+const SP_ENVL_MAX_LAG = 30;      // ...or once dirty this long (~0.5 s) while bakes continue
+const SP_ENVL_BUILDS_MAX = 2;    // chunk rebuilds per frame at most
+const SP_ENVL_SWEEP_N = 30;      // unload check at least every N frames
+function _spEnvKey(cx, cy) { return cx * 100003 + cy; }
+function _spRemainSig(r) {
+  let s = (r.x * 7 | 0) + (r.y * 13 | 0) + (r.remain === 'log' ? 1 : 2) + (r.scorch | 0) * 101 + (r.variant | 0) * 7919 +
+    (r.logGone === true ? 104729 : 0);
+  if (r.crownR > 0) s += (r.crownR * 17 | 0) + (r.crownColor | 0) + (r.crownX * 3 | 0) + (r.crownY * 5 | 0) + (r.crownVariant | 0);
+  return s | 0;
+}
+
+function _spEnvLayerNew() {
+  return { version: -1, map: new Map(), list: [], count: 0, first: null, last: null,
+    frame: 0, ccSize: -1, rebuilds: 0 };
+}
+
+function _spEnvLayerBuild(L, c) {
+  let g = c.g;
+  if (!g) {
+    g = new PIXI.Graphics();
+    g.zIndex = SP_Z_ENVL; g.visible = false;
+    worldContainer.addChild(g);
+    c.g = g;
+  } else g.clear();
   const items = c.items;
   if (items.length > 1) items.sort(_spRemainCmp);
   const iso = CFG.ISO_SCALE;
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   for (let i = 0; i < items.length; i++) {
     const r = items[i];
-    if (r.remain === 'log') {
+    if (r.remain === 'log' && r.logGone === true) {
+      _spDrawStump(g, r); // E11: the log was splintered; the stump stays
+    } else if (r.remain === 'log') {
       _spDrawLog(g, r);
+      // the crown overlaps the log's far end (the trunk runs into it)
+      if (r.crownR > 0) {
+        _spDrawCrown(g, r);
+        const kx = r.crownX - r.crownY, ky = (r.crownX + r.crownY) * iso;
+        x0 = Math.min(x0, kx - r.crownR); x1 = Math.max(x1, kx + r.crownR);
+        y0 = Math.min(y0, ky - r.crownR); y1 = Math.max(y1, ky + r.crownR);
+      }
       _spDrawStump(g, r);
       const ax = r.ax - r.ay, ay = (r.ax + r.ay) * iso, bx = r.bx - r.by, by = (r.bx + r.by) * iso;
       x0 = Math.min(x0, ax, bx); x1 = Math.max(x1, ax, bx); y0 = Math.min(y0, ay, by); y1 = Math.max(y1, ay, by);
-    } else if (r.remain === 'rubble') {
+    } else {
       _spDrawRubble(g, r);
     }
+    r._drawnInLayer = true;
     const sx = r.x - r.y, sy = (r.x + r.y) * iso;
     x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
   }
   // screen bounds (+ margin for outlines / rubble spread)
   c.x0 = x0 - 60; c.x1 = x1 + 60; c.y0 = y0 - 60; c.y1 = y1 + 60;
-  c.n = items.length;
-  c.sigBuilt = c.sig;
-  _sp.envL.rebuilds++;
+  c.dirty = false;
+  c.built = L.frame;
+  L.rebuilds++;
 }
 
-// Re-bucket envRemains by chunk; rebuild only chunks whose set changed
-function _spEnvLayerSync() {
-  const L = _sp.envL;
-  const cs = CFG.CHUNK_SIZE * CFG.TILE_SIZE;
-  for (let i = 0; i < L.list.length; i++) { const c = L.list[i]; c.items.length = 0; c.sig = 0; }
-  for (let i = 0; i < envRemains.length; i++) {
-    const r = envRemains[i];
-    if (r.remain !== 'log' && r.remain !== 'rubble') continue;
-    const key = Math.floor(r.x / cs) + ',' + Math.floor(r.y / cs);
-    let c = L.map.get(key);
-    if (!c) {
-      let g = L.free.pop();
-      if (!g) { g = new PIXI.Graphics(); worldContainer.addChild(g); }
-      g.clear(); g.zIndex = SP_Z_ENVL; g.visible = false;
-      c = { key, g, items: [], n: 0, sig: 0, sigBuilt: -1, x0: 0, x1: 0, y0: 0, y1: 0 };
-      L.map.set(key, c);
-      L.list.push(c);
-    }
-    c.items.push(r);
-    c.sig = (Math.imul(c.sig, 31) + (r.x * 7 | 0) + (r.y * 13 | 0) + (r.remain === 'log' ? 1 : 2) + (r.scorch | 0) * 101) | 0;
-  }
-  let w = 0;
+// Terrain chunk gone: free the GPU geometry, keep the bucket for its return
+function _spEnvLayerUnload(c) {
+  _spDestroy(c.g);
+  c.g = null;
+  c.dirty = true;
+  c.built = c.since = c.touched = -1e9; // rebuild as soon as it is back
+  for (let i = 0; i < c.items.length; i++) c.items[i]._drawnInLayer = false;
+}
+
+function _spEnvLayerClear(L) {
   for (let i = 0; i < L.list.length; i++) {
     const c = L.list[i];
-    if (c.items.length === 0) { // emptied (new round): release
-      c.g.clear(); c.g.visible = false; L.free.push(c.g);
-      L.map.delete(c.key);
-      continue;
-    }
-    if (c.items.length !== c.n || c.sig !== c.sigBuilt) _spEnvLayerBuild(c);
-    L.list[w++] = c;
+    if (c.g) _spDestroy(c.g);
+    for (let j = 0; j < c.items.length; j++) c.items[j]._drawnInLayer = false;
   }
-  L.list.length = w;
+  L.map.clear();
+  L.list.length = 0;
+  L.count = 0; L.first = null; L.last = null;
+}
+
+function _spEnvLayerAdd(L, r, cs) {
+  r._drawnInLayer = false;
+  if (r.remain !== 'log' && r.remain !== 'rubble') return;
+  const cx = Math.floor(r.x / cs), cy = Math.floor(r.y / cs);
+  const nk = _spEnvKey(cx, cy);
+  let c = L.map.get(nk);
+  if (c === undefined) {
+    c = { nk, skey: cx + ',' + cy, g: null, items: [], sig: 0, dirty: false, built: -1e9,
+      since: 0, touched: 0, x0: 0, x1: 0, y0: 0, y1: 0 };
+    L.map.set(nk, c);
+    L.list.push(c);
+  }
+  c.items.push(r);
+  c.sig = (c.sig + _spRemainSig(r)) | 0;
+  _spEnvLayerTouch(L, c);
+}
+
+function _spEnvLayerTouch(L, c) {
+  if (!c.dirty) { c.dirty = true; c.since = L.frame; }
+  c.touched = L.frame;
+}
+
+// Bring the buckets up to date with envRemains (incremental)
+function _spEnvLayerIngest(L) {
+  const n = envRemains.length;
+  // shrunk or replaced contents (new round): start over
+  if (n < L.count || (L.count > 0 && (envRemains[0] !== L.first || envRemains[L.count - 1] !== L.last))) {
+    _spEnvLayerClear(L);
+  }
+  if (n > L.count) {
+    const cs = CFG.CHUNK_SIZE * CFG.TILE_SIZE;
+    for (let i = L.count; i < n; i++) _spEnvLayerAdd(L, envRemains[i], cs);
+    L.count = n; L.first = envRemains[0]; L.last = envRemains[n - 1];
+    return;
+  }
+  // version bump without new entries: an existing remain changed (rare).
+  // Re-sign the buckets (numeric pass, no allocs) and dirty what differs.
+  for (let i = 0; i < L.list.length; i++) {
+    const c = L.list[i];
+    let sig = 0;
+    for (let j = 0; j < c.items.length; j++) sig = (sig + _spRemainSig(c.items[j])) | 0;
+    if (sig !== c.sig) { c.sig = sig; _spEnvLayerTouch(L, c); }
+  }
 }
 
 function _spRenderEnvLayer() {
   const L = _sp.envL;
   if (!L || typeof envRemains === 'undefined') return;
+  L.frame++;
   if (envRemainsVersion !== L.version) {
     L.version = envRemainsVersion;
-    _spEnvLayerSync();
+    _spEnvLayerIngest(L);
   }
   const hasCC = typeof chunkCache !== 'undefined';
+  // terrain chunks come and go: release the remains of unloaded ones
+  if (hasCC && (chunkCache.size !== L.ccSize || L.frame % SP_ENVL_SWEEP_N === 0)) {
+    L.ccSize = chunkCache.size;
+    for (let i = 0; i < L.list.length; i++) {
+      const c = L.list[i];
+      if (c.g && !chunkCache.has(c.skey)) _spEnvLayerUnload(c);
+    }
+  }
+  let budget = SP_ENVL_BUILDS_MAX;
   for (let i = 0; i < L.list.length; i++) {
     const c = L.list[i];
-    c.g.visible = (!hasCC || chunkCache.has(c.key)) &&
-      c.x1 > _sp.vx0 && c.x0 < _sp.vx1 && c.y1 > _sp.vy0 && c.y0 < _sp.vy1;
+    if (hasCC && !chunkCache.has(c.skey)) continue; // unloaded: no Graphics
+    if (c.dirty && budget > 0 && L.frame - c.built >= SP_ENVL_REBUILD_N &&
+        (L.frame - c.touched >= SP_ENVL_QUIET_N || L.frame - c.since >= SP_ENVL_MAX_LAG)) {
+      _spEnvLayerBuild(L, c);
+      budget--;
+    }
+    if (c.g) c.g.visible = c.x1 > _sp.vx0 && c.x0 < _sp.vx1 && c.y1 > _sp.vy0 && c.y0 < _sp.vy1;
   }
 }
 
-// Test hook (E10): env remains layer and its draw count right now
+// Test hook (E10): env remains layer. chunks = live per-chunk Graphics,
+// buckets = chunks holding remains (loaded or not), draws = visible now.
 function envLayerStats() {
   const L = _sp.envL;
-  if (!L) return { chunks: 0, draws: 0 };
-  let vis = 0;
-  for (let i = 0; i < L.list.length; i++) if (L.list[i].g.visible) vis++;
-  return { chunks: L.list.length, draws: vis, rebuilds: L.rebuilds };
+  if (!L) return { chunks: 0, buckets: 0, draws: 0, rebuilds: 0, dirty: 0 };
+  let vis = 0, live = 0, dirty = 0;
+  for (let i = 0; i < L.list.length; i++) {
+    const c = L.list[i];
+    if (c.g) { live++; if (c.g.visible) vis++; }
+    if (c.dirty) dirty++;
+  }
+  return { chunks: live, buckets: L.list.length, draws: vis, rebuilds: L.rebuilds, dirty };
 }
+
