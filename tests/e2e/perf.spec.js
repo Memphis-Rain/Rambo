@@ -58,6 +58,7 @@ const medianCpu = (seconds) => new Promise((resolve) => {
 
 test.describe('M7 / Q2a', () => {
   test('P1/Q2a: sustained gore keeps CPU frame time flat (minute 1.5 within 15% of minute 0.25)', async ({ game, page }, testInfo) => {
+    test.skip(!LANDED.P1, 'P1 not landed (tests/milestones.js)');
     test.setTimeout(180_000);
     await startCalm(game);
     await game.eval(GORE);
