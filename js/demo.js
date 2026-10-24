@@ -14,7 +14,7 @@ const DEMO_SHOWCASE = [1, 2, 5, 7, 8, 9, 10, 6, 4, 3, 0];
 const DEMO_MOUSE_THRESHOLD = 8;   // px of real mouse travel that counts as input (D1)
 const DEMO_ENGAGE_RANGE = 900;    // world units: consider enemies for targeting
 const DEMO_LEASH = 600;           // start biasing back toward the origin beyond this
-const DEMO_START_WAVE = 4;        // first demo wave (real play starts at 1)
+const DEMO_START_WAVE = 10;       // first demo wave (real play starts at 1)
 const DEMO_WAVE_GAP = 1.0;        // max seconds between waves in the demo (ramps faster, D4)
 const DEMO_PREF_DIST = {
   Pistol: 240, Uzi: 210, Shotgun: 130, M16: 260, Minigun: 230, RPG: 330,
@@ -547,10 +547,10 @@ function _demoGetOverlay() {
       "#demo-overlay{position:fixed;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:50;display:none;" +
       "font-family:'Press Start 2P',monospace;-webkit-font-smoothing:none;font-smooth:never;text-align:center}" +
       "#demo-overlay .demo-top{position:absolute;top:56px;left:0;right:0;font-size:32px;letter-spacing:8px;color:#ff2020;" +
-      "text-shadow:4px 4px 0 #000,-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000;animation:demo-blink 1s steps(1) infinite}" +
+      "text-shadow:4px 4px 0 #000,-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000;animation:demo-blink 0.8s steps(1) infinite}" +
       "#demo-overlay .demo-bottom{position:absolute;bottom:40px;left:0;right:0;font-size:14px;letter-spacing:2px;color:#ffe000;" +
-      "text-shadow:3px 3px 0 #000,-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000;animation:demo-blink 1.6s steps(1) infinite}" +
-      "@keyframes demo-blink{0%{opacity:1}50%{opacity:0}}";
+      "text-shadow:3px 3px 0 #000,-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000}" +
+      "@keyframes demo-blink{0%{opacity:1}75%{opacity:0}}";
     (document.head || document.documentElement).appendChild(st);
   }
   const ov = document.createElement('div');

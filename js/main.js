@@ -132,10 +132,17 @@ function updateCamera(dt) {
 // =====================================================================
 // NOTIFICATIONS
 // =====================================================================
+// H3: pixel-font banner with a bounce-in and a stepped colour cycle (CSS in
+// game.html); long messages use the smaller size so they fit the screen
 function showNotification(text, duration=2) {
   notifText = text;
   notifTimer = duration;
   notifEl.textContent = text;
+  notifEl.className = text.length > 18 ? 'notification small' : 'notification';
+  // Restart the bounce-in for every new message
+  notifEl.style.animation = 'none';
+  void notifEl.offsetWidth;
+  notifEl.style.animation = '';
   notifEl.style.opacity = 1;
 }
 
@@ -153,10 +160,12 @@ function updateNotification(dt) {
 // A real (human) input: ends the demo (swallowed) or resets the title idle timer.
 // Returns true when the event must not reach the game.
 let _swallowClicksUntil = 0;
-function _realInput() {
+function _realInput(pointer) {
   if (typeof demoActive !== 'undefined' && demoActive) {
     stopDemo();
-    _swallowClicksUntil = performance.now() + 400; // D6: the exit click must not hit START
+    // D6: the click that ends the demo must not also hit START (key exits
+    // have no click to swallow, so a quick real click still starts a game)
+    if (pointer) _swallowClicksUntil = performance.now() + 400;
     return true;
   }
   if (!gameStarted && typeof demoNoteInput === 'function') demoNoteInput();
@@ -188,7 +197,7 @@ function initInput() {
   });
   // Capture-phase listener so a click anywhere (title included) ends the demo
   window.addEventListener('mousedown', e => {
-    if (_realInput()) { e.preventDefault(); e.stopPropagation(); }
+    if (_realInput(true)) { e.preventDefault(); e.stopPropagation(); }
   }, true);
   window.addEventListener('click', e => {
     if (performance.now() < _swallowClicksUntil) { e.preventDefault(); e.stopPropagation(); }
@@ -367,7 +376,8 @@ function resetRound() {
     initPixiHUD();       // Initialize HUD elements
     _renderLayersReady = true;
   }
-  initPixiSprites();     // (Re)initialize sprite pools and caches
+  initPixiSprites();     // (Re)initialize sprite pools and caches (incl. decal layers)
+  resetDecalState();     // blood map + growing decals (D6: no trace between rounds)
 
   gameTime = 0;
   score = 0;
@@ -388,7 +398,7 @@ function resetRound() {
   shakeX = 0; shakeY = 0; shakeMag = 0;
   notifTimer = 0; notifEl.style.opacity = 0;
   paused = false;
-  hitStopTimer = 0;
+  resetHitStop();
   _pendingDamage.length = 0;
   enemies.length = 0;
   bullets.length = 0;
@@ -431,10 +441,15 @@ function startGame() {
 
 // Initialize (async for PixiJS)
 (async function init() {
+  const fontReady = loadHudFont(); // H1: fetch the pixel font while PixiJS starts
   await initPixiApp();
   initRetro();
+  // The HUD creates its Text on the first START/demo; the font must be ready by then
+  await fontReady;
   initInput();
   lastTime = performance.now();
   app.ticker.add(gameLoop, null, PIXI.UPDATE_PRIORITY.HIGH);
-  console.log('Game ready. Click START MISSION to begin.');
+  const startBtn = document.getElementById('start-btn');
+  if (startBtn) startBtn.disabled = false;
+  console.log('Game ready. Press START to begin.');
 })();

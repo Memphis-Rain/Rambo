@@ -26,11 +26,21 @@ function createPlayer() {
   };
 }
 
-// Hit-stop (G9): the main loop skips update() while this is above 0
+// Hit-stop (G9): the main loop skips update() while this is above 0.
+// Only boss kills and explosions with radius >= 100 trigger it; each stop
+// is <= HIT_STOP_MAX and a new one needs HIT_STOP_COOLDOWN of simulated
+// time after the previous one (gameTime is frozen during the stop itself).
+const HIT_STOP_MAX = 0.06, HIT_STOP_COOLDOWN = 0.3;
 let hitStopTimer = 0;
+let _hitStopReadyAt = 0;
 function addHitStop(sec) {
-  hitStopTimer = Math.min(0.1, Math.max(hitStopTimer, sec));
+  if (hitStopTimer > 0) return;
+  if (_hitStopReadyAt - gameTime > HIT_STOP_COOLDOWN) _hitStopReadyAt = 0; // new round: gameTime reset
+  if (gameTime < _hitStopReadyAt) return;
+  hitStopTimer = Math.min(HIT_STOP_MAX, sec);
+  _hitStopReadyAt = gameTime + HIT_STOP_COOLDOWN;
 }
+function resetHitStop() { hitStopTimer = 0; _hitStopReadyAt = 0; }
 
 // Damage sources (decide death style: corpse, gibs, disintegration)
 const SRC_BULLET = 0, SRC_EXPLOSIVE = 1, SRC_BFG = 2, SRC_RAIL = 3, SRC_DISINT = 4, SRC_SHOCK = 5;
@@ -428,7 +438,7 @@ function updateEnemies(dt) {
           });
         }
         e.recoilT = 0.06;
-        spawnMuzzleFlash(e.x + Math.cos(a)*10, e.y + Math.sin(a)*10, a, t.explosive ? 1.6 : 0.8, 14 * e.size);
+        spawnMuzzleFlash(e.x + Math.cos(a)*10, e.y + Math.sin(a)*10, a, t.explosive ? 1.6 : 0.8, 14 * e.size, e);
       }
     } else {
       // Melee enemy
@@ -563,6 +573,7 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
 
   const t = ENEMY_TYPES[e.type];
   const isBoss = e.isBoss;
+  if (isBoss) addHitStop(HIT_STOP_MAX);
 
   // Score
   const comboMult = 1 + combo * 0.1;
@@ -614,11 +625,9 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
     spawnBloodSpray(e.x, e.y, bulletAngle + Math.PI, 1.4, torsoZ);
     addDecal(DECAL_POOL, e.x, e.y, 4, BLOOD_COLORS[3], 0, randRange(16, 26) * e.size);
     addShake(4);
-    addHitStop(isBoss ? 0.08 : 0.04);
   } else {
     spawnBloodSpray(e.x, e.y, bulletAngle, 2.0, torsoZ);
     spawnBloodSpray(e.x, e.y, Math.random()*Math.PI*2, 1.0, torsoZ);
-    if (isBoss) addHitStop(0.08);
 
     // Corpse: knocked back along the shot, hops, falls over, then bleeds out
     if (bodies.length >= CFG.MAX_BODIES) bodies.shift();

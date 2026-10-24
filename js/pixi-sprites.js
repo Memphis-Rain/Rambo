@@ -290,6 +290,7 @@ function _spFrameGfx(z) {
   let g = _sp.gfx[_sp.gfxN];
   if (!g) {
     g = new PIXI.Graphics();
+    g.context.batchMode = 'batch'; // big puppets would otherwise each cost a draw call
     worldContainer.addChild(g);
     _sp.gfx.push(g);
   } else {
@@ -327,6 +328,7 @@ function _spEntGfx(cache, obj) {
     g = cache.free.pop();
     if (!g) {
       g = new PIXI.Graphics();
+      g.context.batchMode = 'batch'; // puppets exceed Pixi's auto-batch vertex limit
       worldContainer.addChild(g);
     }
     g.clear();
@@ -1288,8 +1290,11 @@ function _spRenderParticles() {
       s.scale.set(d / 16); s.tint = col;
     } else if (type === 'muzzle') {
       let mx = X, my = Y;
-      // player flashes snap to the drawn gun tip
-      if (_sp.pTipValid) {
+      // flashes snap to the drawn gun tip of whoever fired
+      const og = p.owner && p.owner._spG;
+      if (og && og._hasMuz && og.visible) {
+        mx = _spSnap(og.x + og._muzX * A); my = _spSnap(og.y + og._muzY * A);
+      } else if (!p.owner && _sp.pTipValid) {
         const dx = p.x - px, dy = p.y - py;
         if (dx * dx + dy * dy < 1600) { mx = _spSnap(_sp.pTipX); my = _spSnap(_sp.pTipY); }
       }
@@ -1671,15 +1676,29 @@ function _spBuildEnv(obj) {
     const key = typeof bucketKey === 'function' ? bucketKey(type, obj.radius, obj.height) : type + obj.radius + '_' + obj.height;
     let tpl = _sp.treeCtx.get(key);
     if (tpl === undefined) {
-      tpl = createTreeGraphics(type, obj.radius, obj.height) || null;
+      // Bake each tree shape (~15-20 buckets) to a texture once. Trees
+      // interleave with entities in depth order, so as Graphics each one
+      // split the batch (and batching their big meshes cost ~4 ms/frame);
+      // as Sprites they batch with everything else for free.
+      const tg = createTreeGraphics(type, obj.radius, obj.height);
+      tpl = null;
+      if (tg) {
+        const b = tg.getLocalBounds();
+        const tex = renderer.generateTexture({ target: tg, resolution: 1, antialias: false });
+        tex.source.scaleMode = 'nearest';
+        tpl = { tex, ax: -b.x / b.width, ay: -b.y / b.height };
+        tg.destroy();
+      }
       _sp.treeCtx.set(key, tpl);
     }
     if (!tpl) return null;
-    const g = new PIXI.Graphics(tpl.context);
+    const g = new PIXI.Sprite(tpl.tex);
+    g.anchor.set(tpl.ax, tpl.ay);
     g._tree = type === 'tree' || type === 'pine';
     return g;
   }
   const g = new PIXI.Graphics();
+  g.context.batchMode = 'batch';
   _spDrawEnv(g, obj);
   return g;
 }

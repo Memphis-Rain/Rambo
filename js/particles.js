@@ -70,6 +70,7 @@ function spawnParticle(x, y, vx, vy, life, size, color, type='default', opts=_NO
   p.bounce = opts.bounce || 0;
   p.splat = opts.splat || 0;
   p.shape = opts.shape || 0;
+  p.owner = null;
   return p;
 }
 
@@ -125,6 +126,13 @@ function addDecal(kind, x, y, size, color, angle=0, maxSize=0, color2=0) {
   if (kind === DECAL_POOL || (kind === DECAL_SPLAT && size >= 2.5)) markBloodAt(x, y, d.maxRadius);
   decalVersion++;
   return d;
+}
+
+// D6: forget all decal bookkeeping (the decal list itself is bloodPools)
+function resetDecalState() {
+  _bloodMap.clear();
+  _growingDecals.length = 0;
+  decalVersion++;
 }
 
 function updateDecals(dt) {
@@ -264,12 +272,14 @@ function spawnExplosion(x, y, radius=80) {
 // MUZZLE FLASH, SMOKE, SHELLS, LIGHTNING
 // =====================================================================
 // angle: world-space aim; scale: weapon-dependent size
-function spawnMuzzleFlash(x, y, angle, scale=1, z=20) {
+// owner: the enemy that fired (renderer snaps the flash to its drawn gun tip)
+function spawnMuzzleFlash(x, y, angle, scale=1, z=20, owner=null) {
   const c = Math.cos(angle), s = Math.sin(angle);
   const sAngle = Math.atan2((c + s) * CFG.ISO_SCALE, c - s);
   const p = spawnParticle(x, y, 0, 0, 0.034, 5 * scale, 0xffffff, 'muzzle', OPT_MUZZLE, z, 0);
   p.shape = (Math.random() * 3) | 0;
   p.rotation = sAngle;
+  p.owner = owner;
   for (let i = 0; i < 3; i++) {
     const a = angle + randRange(-0.35, 0.35);
     const sp = randRange(140, 260);

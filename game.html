@@ -3,19 +3,44 @@
 <head>
 <meta charset="UTF-8">
 <title>RAMBO: Endless Assault</title>
+<link rel="preload" href="assets/fonts/PressStart2P-Regular.ttf" as="font" type="font/ttf" crossorigin>
 <style>
+/* H1: Press Start 2P (SIL OFL 1.1, assets/fonts/OFL.txt), bundled locally */
+@font-face{font-family:'Press Start 2P';src:url('assets/fonts/PressStart2P-Regular.ttf') format('truetype');font-display:block}
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#000;overflow:hidden;cursor:crosshair;user-select:none;-webkit-user-select:none}
 canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh;image-rendering:auto;transform:translateZ(0);will-change:transform}
 #ui{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10}
-#start-screen{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,0.85);z-index:100;pointer-events:all}
-#start-screen h1{font-family:'Impact',sans-serif;font-size:72px;color:#e22;text-shadow:0 0 30px #f00,0 0 60px #a00,3px 3px 0 #000;letter-spacing:8px;margin-bottom:10px}
-#start-screen h2{font-family:'Arial',sans-serif;font-size:22px;color:#fa0;text-shadow:0 0 10px #f80;margin-bottom:40px;letter-spacing:4px}
-#start-screen .controls{color:#aaa;font-family:'Courier New',monospace;font-size:14px;line-height:2;text-align:center;margin-bottom:30px}
-#start-screen .controls span{color:#ff0}
-#start-btn{font-family:'Impact',sans-serif;font-size:28px;padding:15px 60px;background:linear-gradient(180deg,#c22,#800);color:#fff;border:2px solid #f44;cursor:pointer;letter-spacing:4px;text-shadow:1px 1px 2px #000;pointer-events:all;transition:all 0.2s}
-#start-btn:hover{background:linear-gradient(180deg,#e44,#a22);transform:scale(1.05);box-shadow:0 0 30px rgba(255,0,0,0.5)}
-.notification{position:absolute;top:30%;left:50%;transform:translateX(-50%);font-family:'Impact',sans-serif;font-size:36px;color:#ff0;text-shadow:0 0 20px #fa0,2px 2px 0 #000;opacity:0;transition:opacity 0.3s;pointer-events:none;white-space:nowrap}
+
+/* H4: retro title screen */
+#start-screen{position:absolute;top:0;left:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(ellipse at center,rgba(40,8,8,.86) 0%,rgba(0,0,0,.92) 70%);z-index:100;pointer-events:all;font-family:'Press Start 2P',monospace;-webkit-font-smoothing:none;font-smooth:never;text-align:center;padding:16px}
+#start-screen::after{content:'';position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.38) 2px,rgba(0,0,0,.38) 4px)}
+#start-screen h1{font-size:96px;line-height:1;letter-spacing:8px;margin:0 0 24px 8px;font-weight:normal;color:#e22;background:linear-gradient(to bottom,#ffe040 0,#ffe040 30%,#ff8a00 30%,#ff8a00 58%,#e81c1c 58%,#e81c1c 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;filter:drop-shadow(4px 0 0 #000) drop-shadow(-4px 0 0 #000) drop-shadow(0 4px 0 #000) drop-shadow(0 -4px 0 #000) drop-shadow(8px 8px 0 #5a0000)}
+#start-screen h2{font-size:24px;font-weight:normal;color:#fff;letter-spacing:4px;text-shadow:3px 3px 0 #a00;margin-bottom:40px}
+#start-screen .controls{display:grid;grid-template-columns:auto auto;gap:12px 48px;margin-bottom:12px;text-align:left}
+#start-screen .controls div{font-size:16px;color:#bfc6d4;white-space:nowrap;text-shadow:2px 2px 0 #000}
+#start-screen .controls span{color:#ffe000;display:inline-block;min-width:144px}
+#start-screen .showcase{margin:16px 0 8px;padding:12px 16px;border:2px solid;border-color:#8a99b8 #04060a #04060a #8a99b8;background:#1a2030}
+#start-screen .showcase div{font-size:16px;color:#bfc6d4;text-shadow:2px 2px 0 #000;line-height:1.6}
+#start-screen .showcase b{font-weight:normal;color:#40e0ff}
+#start-screen .notes{font-size:8px;color:#8890a4;line-height:2;margin:12px 0 28px}
+#start-btn{font-family:'Press Start 2P',monospace;font-size:32px;padding:16px 32px;background:none;border:none;color:#ffe000;cursor:pointer;letter-spacing:4px;text-shadow:4px 4px 0 #a00;pointer-events:all;animation:press-blink 1s steps(1,end) infinite}
+#start-btn:hover{color:#fff;animation:none}
+#start-btn:disabled{animation:none;opacity:.35;cursor:wait}
+@keyframes press-blink{0%{opacity:1}70%{opacity:0}}
+@media (max-width:760px),(max-height:640px){
+  #start-screen h1{font-size:48px;margin-bottom:16px}
+  #start-screen h2{font-size:16px;margin-bottom:20px}
+  #start-screen .controls div,#start-screen .showcase div{font-size:8px}
+  #start-screen .controls span{min-width:72px}
+  #start-btn{font-size:24px}
+}
+
+/* H3: kill-streak / wave banners */
+.notification{position:absolute;top:28%;left:16px;right:16px;text-align:center;font-family:'Press Start 2P',monospace;-webkit-font-smoothing:none;font-smooth:never;font-size:40px;line-height:1.5;color:#ffe000;text-shadow:-4px 0 0 #000,4px 0 0 #000,0 -4px 0 #000,0 4px 0 #000,-4px -4px 0 #000,4px -4px 0 #000,-4px 4px 0 #000,8px 8px 0 #000;opacity:0;pointer-events:none;white-space:normal;animation:notif-pop .45s ease-out both,notif-cycle .32s steps(1,end) infinite}
+.notification.small{font-size:24px;text-shadow:-3px 0 0 #000,3px 0 0 #000,0 -3px 0 #000,0 3px 0 #000,-3px -3px 0 #000,3px -3px 0 #000,-3px 3px 0 #000,6px 6px 0 #000}
+@keyframes notif-pop{0%{transform:scale(.2)}45%{transform:scale(1.35)}70%{transform:scale(.88)}85%{transform:scale(1.08)}100%{transform:scale(1)}}
+@keyframes notif-cycle{0%{color:#ffe000}25%{color:#ff8c00}50%{color:#ff2020}75%{color:#fff}}
 </style>
 </head>
 <body>
@@ -27,12 +52,25 @@ canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh;ima
   <h1>RAMBO</h1>
   <h2>ENDLESS ASSAULT</h2>
   <div class="controls">
-    <span>WASD</span> - Move &nbsp;|&nbsp; <span>MOUSE</span> - Aim &nbsp;|&nbsp; <span>LEFT CLICK</span> - Shoot<br>
-    <span>RIGHT CLICK</span> - Shockwave &nbsp;|&nbsp; <span>R</span> - Reload &nbsp;|&nbsp; <span>SPACE</span> - Dodge Roll<br>
-    <span>1-0</span> - Switch Weapon &nbsp;|&nbsp; <span>Q/E</span> - Prev/Next &nbsp;|&nbsp; <span>SHIFT</span> - Sprint<br>
-    <span>SHIELD</span> - Auto-recharges &nbsp;|&nbsp; <span>SHOCKWAVE</span> - Charges on kills
+    <div><span>WASD</span>MOVE</div>
+    <div><span>MOUSE</span>AIM</div>
+    <div><span>L-CLICK</span>SHOOT</div>
+    <div><span>R-CLICK</span>SHOCKWAVE</div>
+    <div><span>R</span>RELOAD</div>
+    <div><span>SPACE</span>DODGE ROLL</div>
+    <div><span>1-0</span>WEAPON</div>
+    <div><span>Q/E</span>PREV/NEXT</div>
+    <div><span>SHIFT</span>SPRINT</div>
+    <div><span>P</span>PAUSE</div>
   </div>
-  <button id="start-btn" onclick="startGame()">START MISSION</button>
+  <div class="showcase">
+    <div><b>F6</b> PIXEL SCALE &nbsp; <b>F7</b> DITHER &nbsp; <b>F8</b> CRT</div>
+  </div>
+  <div class="notes">
+    SHIELD AUTO-RECHARGES &nbsp;-&nbsp; SHOCKWAVE CHARGES ON KILLS<br>
+    F3 DEBUG OVERLAY &nbsp;-&nbsp; F4 PERF DUMP
+  </div>
+  <button id="start-btn" onclick="startGame()" disabled>PRESS START</button>
 </div>
 
 <!-- PixiJS v8 - WebGL Rendering Engine (local) -->
