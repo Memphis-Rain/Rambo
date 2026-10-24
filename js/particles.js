@@ -108,11 +108,15 @@ const _decalFree = [];
 
 function addDecal(kind, x, y, size, color, angle=0, maxSize=0, color2=0) {
   if (bloodPools.length >= CFG.MAX_BLOOD_POOLS) {
-    // Recycle the oldest in one chunk so the batched layer rebuilds rarely
-    // Recycle a multiple of 256 = the renderer's baked chunk size (32 x 8), so whole
+    // Recycle the oldest in one chunk so the batched layer rebuilds rarely: a
+    // multiple of 256 = the renderer's baked chunk size (32 x 8), so whole
     // chunks drop instead of a partly-emptied one being rebuilt (B10)
     const removed = bloodPools.splice(0, Math.min(bloodPools.length, Math.max(256, (CFG.MAX_BLOOD_POOLS >> 3) & ~255)));
-    for (const d of removed) { d.growing = false; _decalFree.push(d); }
+    for (const d of removed) { d.growing = false; d._inGrow = false; _decalFree.push(d); }
+    // B4: recycled decals must not linger in the growing list
+    let w = 0;
+    for (const d of _growingDecals) if (d._inGrow) _growingDecals[w++] = d;
+    _growingDecals.length = w;
   }
   const d = _decalFree.pop() || {};
   d.kind = kind; d.x = x; d.y = y;
@@ -124,8 +128,7 @@ function addDecal(kind, x, y, size, color, angle=0, maxSize=0, color2=0) {
   d.growing = maxSize > size;
   d._step = Math.floor(size / 3);
   bloodPools.push(d);
-  // A recycled decal may still sit in the growing list; never add it twice
-  if (d.growing && !d._inGrow) { d._inGrow = true; _growingDecals.push(d); }
+  if (d.growing) { d._inGrow = true; _growingDecals.push(d); }
   if (kind === DECAL_POOL || (kind === DECAL_SPLAT && size >= 2.5)) markBloodAt(x, y, d.maxRadius);
   decalVersion++;
   return d;
