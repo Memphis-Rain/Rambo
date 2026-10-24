@@ -58,6 +58,7 @@ uniform float uLevels;
 uniform float uContrast;
 uniform float uSaturation;
 uniform float uStrength;
+uniform vec2 uOffset; // world offset in low-res px: anchors the pattern to the world
 // Recursive Bayer matrix without arrays (portable across GLSL versions)
 float bayer2(vec2 a) {
   a = floor(a);
@@ -76,7 +77,7 @@ void main(void) {
   float steps = uLevels - 1.0;
   // Centred Bayer offset scaled by strength: flat areas round to one level,
   // only gradients near a level boundary pick up the pattern
-  float offset = 0.5 + (bayer4(gl_FragCoord.xy) + 0.5 / 16.0 - 0.5) * uStrength;
+  float offset = 0.5 + (bayer4(gl_FragCoord.xy - uOffset) + 0.5 / 16.0 - 0.5) * uStrength;
   col = floor(col * steps + offset) / steps;
   finalColor = vec4(clamp(col, 0.0, 1.0) * c.a, c.a);
 }`;
@@ -90,6 +91,7 @@ function _createDitherFilter() {
         uContrast: { value: 1.08, type: 'f32' },
         uSaturation: { value: 1.18, type: 'f32' },
         uStrength: { value: RETRO.DITHER_STRENGTH, type: 'f32' },
+        uOffset: { value: new Float32Array(2), type: 'vec2<f32>' },
       },
     },
     padding: 0,
@@ -202,6 +204,12 @@ function renderRetro() {
   const u = _retro.ditherFilter.resources.retroUniforms.uniforms;
   u.uStrength = clamp(RETRO.DITHER_STRENGTH, 0, 1);
   u.uLevels = RETRO.LEVELS;
+  // R2/R4: move the Bayer grid with the world so dither doesn't shimmer as
+  // the camera scrolls (mod 4 = the pattern period; measured: 100% of pixels
+  // stay put across a 1 low-res px pan at x3/x4, was ~20%)
+  const s = RETRO.PIXEL_SCALE;
+  u.uOffset[0] = ((Math.round((worldOffsetX || 0) / s) % 4) + 4) % 4;
+  u.uOffset[1] = ((Math.round((worldOffsetY || 0) / s) % 4) + 4) % 4;
   renderer.render({ container: _retro.root, target: _retro.worldRT, clear: true, clearColor: [0.16, 0.23, 0.16, 1] });
   if (RETRO.DITHER) {
     renderer.render({ container: _retro.ditherSprite, target: _retro.ditherRT, clear: true, clearColor: [0, 0, 0, 1] });
