@@ -41,4 +41,10 @@ describe('T3 retro (M1)', () => {
       }
     }
   });
+
+  test.skipIf(!LANDED.FU1)('R4a: RETRO.DITHER_STRENGTH defaults to 0.5 and is within 0..1', () => {
+    expect(g.RETRO.DITHER_STRENGTH).toBe(0.5);
+    expect(g.RETRO.DITHER_STRENGTH).toBeGreaterThanOrEqual(0);
+    expect(g.RETRO.DITHER_STRENGTH).toBeLessThanOrEqual(1);
+  });
 });
