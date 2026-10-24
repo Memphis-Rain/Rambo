@@ -74,6 +74,10 @@ The world is rendered at low resolution and upscaled with nearest-neighbour, so 
   - A custom Pixi v8 `Filter` on the low-res pass posterizes each RGB channel to `RETRO.LEVELS` levels.
   - It applies a 4×4 Bayer ordered dither before quantizing, plus a small contrast and saturation boost, for a VGA/SNES-era look.
   - The filter runs at low resolution, so the dither pattern is chunky. Toggle with `RETRO.DITHER`.
+- **R4a. Dither tuning (review of the first build).**
+  - At the current strength, flat terrain reads as grainy noise. Add `RETRO.DITHER_STRENGTH` (0..1, default **0.5**), which scales the Bayer offset.
+  - Dither should show mainly in gradients (water, shading, smoke, explosions), not as salt-and-pepper on flat grass and sand.
+  - Ralph judges the default visually.
 - **R5. CRT overlay.**
   - Full-resolution scanlines: darken the last screen row of every `PIXEL_SCALE` rows by about 25%, using a tiling texture, not a per-pixel shader.
   - Add a subtle vignette. Toggle with `RETRO.CRT`.
@@ -175,7 +179,7 @@ Classic 90s arcade behaviour: if nobody touches the game on the title screen for
   - Detours for health pickups when HP < 40%.
 - **D4. Showcase script.**
   - The demo starts with all weapons unlocked and cycles to the next weapon every ~8 s, so viewers see the whole arsenal: explosions, Tesla chains, railgun beams, gore.
-  - Waves ramp faster than in real play (e.g. it starts at wave 4) so the screen gets busy quickly.
+  - Waves ramp faster than in real play so the screen gets busy quickly. **Decision (Ralph, after the first build):** the demo starts at **wave 10**, so Berserkers, Bombers and Commandos are in play and the dodges, shockwave and bomber chains all get shown. Wave 4 was too calm.
   - The demo player takes 25% damage so it survives for a decent run.
 - **D5. Demo overlay.**
   - A blinking pixel-font `DEMO` banner at the top, plus `PRESS ANY KEY OR CLICK TO PLAY` at the bottom.
