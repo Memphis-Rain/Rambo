@@ -8,5 +8,7 @@ export const LANDED = {
   G11: true, // bomber chain: leftover pending damage carries over to the next frame
   M5: true, // retro HUD & title: pixel font from assets/fonts, PRESS START gated until ready
   REVIEW1: true, // review must-fixes (spec dfe6194): G9 rate/limits, D6 decal + HUD isolation, G4 draw bound
+  G12: false, // swept segment-vs-circle bullet hits for all bullets (spec 545f085)
+  G2A: false, // knockback cap 900, env collision still resolves after a push (spec 545f085)
   FU1: true, // follow-ups after the first build (spec 1c81384): R4a DITHER_STRENGTH, D4 wave 10, D5 overlay visible
 };
