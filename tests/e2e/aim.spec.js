@@ -47,6 +47,12 @@ async function setupArena(game, scale) {
   await game.start();
   await game.freezeWaves();
   await setPixelScale(game, scale);
+  // Post-FX (dither, CRT) don't affect aim mapping, picking or sprite bounds, but under
+  // software WebGL they are full-resolution passes at x1 and dominate the frame cost.
+  await game.eval(() => {
+    RETRO.DITHER = false; RETRO.CRT = false;
+    if (typeof _applyRetroToggles === 'function') _applyRetroToggles();
+  });
   await game.eval(() => {
     const dry = (x, y) => {
       for (const r of [0, 100, 200, 300, 400]) {
@@ -230,13 +236,17 @@ async function placeAndRender(game, target, dir, dist = DIST) {
 }
 
 /** Distance for this target/direction that keeps the whole sprite on screen (small CI viewport). */
+const fitCache = new Map(); // per target: the 'up' distance only depends on the sprite height
 async function fitDistance(game, target, dirName) {
   if (dirName !== 'up') return DIST;
+  if (fitCache.has(target)) return fitCache.get(target);
   const i = await placeAndRender(game, target, DIRS.up, 120);
   const { h, H: vh } = await game.eval((i) => ({ h: __g13.bounds(i).h, H }), i);
   // Feet at H/2 - d*sqrt2*ISO; keep the top >= 24 px below the screen edge
   const d = (vh / 2 - 24 - h) / (Math.SQRT2 * 0.55);
-  return Math.max(120, Math.min(DIST, Math.floor(d)));
+  const fit = Math.max(120, Math.min(DIST, Math.floor(d)));
+  fitCache.set(target, fit);
+  return fit;
 }
 
 const label = (t) => (t === BOSS ? 'boss' : `t${t}`);
