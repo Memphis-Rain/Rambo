@@ -187,6 +187,9 @@ Classic 90s arcade behaviour: if nobody touches the game on the title screen for
   - `startDemo()` and `stopDemo()`.
   - `demoState()` returns `{ active, elapsed, weaponIndex, targetId, idleTimer }`.
   - `CFG.DEMO_IDLE_SECONDS` is writable at runtime, so tests can shorten it.
+  - `CFG.DEMO_MAX_SECONDS` (default 60) replaces the hard-coded 60 s from D6 and is writable at runtime too.
+  - The aim-lead math is a pure function, `demoAimLead(sx, sy, tx, ty, tvx, tvy, bulletSpeed)`, which returns `{ x, y }`. Unit tests call it directly.
+  - `demoState().idleTimer` counts **up** from 0 in seconds.
 
 ---
 
