@@ -576,7 +576,19 @@ test('G13: the cursor on the top of a boss\'s drawn head picks the boss', async 
   // Screen down-right of the player (world +x), so even the Juggernaut boss fits on 960x540
   for (const base of [1, 2, 7, 11]) {
     const i = await placeBoss(game, base, 200, 0);
-    const b = await game.eval((i) => __g13.prepBounds(i), i);
+    // The idle bob moves a boss's drawn top by ~1 art pixel (~6 px at boss size, x3), so read
+    // the bounds over both bob phases (~1 s) and use the LOWER top: the cursor then sits on
+    // the head whichever phase is drawn when the pick happens.
+    const b = await game.eval((i) => new Promise((resolve) => {
+      let best = null;
+      const t0 = gameTime;
+      const tick = () => {
+        const q = __g13.prepBounds(i);
+        if (!best || q.y > best.y) best = q;
+        if (gameTime - t0 < 1) requestAnimationFrame(tick); else resolve(best);
+      };
+      requestAnimationFrame(tick);
+    }), i);
     const body = Math.min(b.y + b.h, b.footY) - b.y;
     // Top ~10% of the head: 3% of the drawn body height below the top edge, on the body axis
     const pt = { x: aimPoint(b, 0).x, y: Math.round(b.y + Math.max(2, body * 0.03)) };
