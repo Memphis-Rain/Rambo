@@ -375,7 +375,12 @@ describe('M8 environment physics (headless)', () => {
     stepEnv(0.6, () => { refPeak = Math.max(refPeak, Math.abs(g.envState(ref.id).sway)); });
     expect(peak, 'bullet sway < a weak blast sway').toBeLessThan(refPeak);
 
-    for (const name of ['Pistol', 'Uzi', 'Shotgun', 'M16', 'Minigun', 'Tesla', 'Plasma', 'Railgun', 'Disintegrator']) {
+    // E13 (M9) supersedes "small arms never fell trees": trunk HP is tested in trees.test.js.
+    if (LANDED.E13) return;
+    // Tesla is replaced by the flamethrower in M9 (F1): only test weapons that exist.
+    const smallArms = ['Pistol', 'Uzi', 'Shotgun', 'M16', 'Minigun', 'Tesla', 'Plasma', 'Railgun', 'Disintegrator']
+      .filter((n) => g.WEAPONS.some((w) => w.name === n));
+    for (const name of smallArms) {
       for (let i = 0; i < 60; i++) {
         shoot(name, t.x, t.y);
         g.updateBullets(DT); g.updateBullets(DT); g.updateEnv(DT);
