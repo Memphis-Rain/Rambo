@@ -1,4 +1,4 @@
-/* global __g13, __g13hp, pickEnemyAtScreen */
+/* global __g13, __g13hp */
 import { test, expect, T } from './fixtures.js';
 import { LANDED } from '../milestones.js';
 
@@ -514,16 +514,28 @@ test('G13: spread rounds along the iso screen-up line hit the FRONT enemy first'
   }
 });
 
-test('G13: an RPG aimed at an enemy\'s head detonates at the enemy, not beside it', async ({ game }, testInfo) => {
+// G13c (Ralph, spec fe846ac): a contact explosive that hits an enemy's body (foot circle or
+// column) explodes at the target's ground position (e.x, e.y), so the target takes full splash.
+test('G13/G13c: an RPG aimed at an enemy\'s head detonates at its feet and deals it full splash (all 4 directions)', async ({ game }, testInfo) => {
   test.setTimeout(T(180_000));
   await setupArena(game, 3);
-  await game.eval(() => __g13.weapon('RPG'));
+  await game.eval(() => {
+    __g13.weapon('RPG');
+    // Record every damage event per enemy (game code calls damageEnemy through the global).
+    window.__g13dmg = new Map();
+    const orig = window.damageEnemy;
+    window.damageEnemy = function (e, dmg, ...rest) {
+      if (!window.__g13dmg.has(e)) window.__g13dmg.set(e, []);
+      window.__g13dmg.get(e).push(dmg);
+      return orig.call(this, e, dmg, ...rest);
+    };
+  });
   const rows = [];
   for (const target of [0, 2, 10, 11]) {
     for (const [dirName, dir] of Object.entries(DIRS)) {
       const dist = await fitDistance(game, target, dirName);
       const i = await placeAndRender(game, target, dir, dist);
-      const b = await game.eval((i) => { __g13.explosions.length = 0; return __g13.prepBounds(i); }, i);
+      const b = await game.eval((i) => { __g13.explosions.length = 0; window.__g13dmg.clear(); return __g13.prepBounds(i); }, i);
       await fireAt(game, aimPoint(b, PARTS.head), i);
       await game.page.waitForFunction(() => __g13.explosions.length > 0 || !bullets.some((q) => q.owner === 'player'), null, { timeout: T(10_000) });
       const r = await game.eval(({ i, b }) => {
@@ -534,19 +546,26 @@ test('G13: an RPG aimed at an enemy\'s head detonates at the enemy, not beside i
         const ax = e.home.x, ay = e.home.y;
         let u = ((x.x - ax) * -k + (x.y - ay) * -k) / (2 * k * k);
         u = Math.max(0, Math.min(1, u));
-        return { feet: Math.hypot(x.x - ax, x.y - ay), axis: Math.hypot(x.x - (ax - k * u), x.y - (ay - k * u)), u, r: 15 * e.size };
+        const rpg = WEAPONS.find((w) => w.name === 'RPG');
+        // Let queued splash damage resolve, then take the target's splash event (<= 0.7 * dmg).
+        processPendingDamage();
+        const ev = (window.__g13dmg.get(e) || []).filter((d) => d <= rpg.dmg * 0.7 + 1e-6);
+        const splash = ev.length ? Math.max(...ev) : 0;
+        return { feet: Math.hypot(x.x - ax, x.y - ay), axis: Math.hypot(x.x - (ax - k * u), x.y - (ay - k * u)), u, r: 15 * e.size,
+          splashF: splash / (rpg.dmg * 0.7) };
       }, { i, b });
       rows.push({ who: `${label(target)} ${dirName}`, ...(r || { none: true }) });
     }
   }
   await game.eval(() => __g13.weapon('Railgun'));
   const text = rows.map((r) => (r.none ? `${r.who}: no detonation` :
-    `${r.who}: ${r.feet.toFixed(1)}u from the feet, ${r.axis.toFixed(1)}u from the column axis (u=${r.u.toFixed(2)}, r=${r.r.toFixed(0)})`));
+    `${r.who}: ${r.feet.toFixed(1)}u from the feet, ${r.axis.toFixed(1)}u from the column axis (u=${r.u.toFixed(2)}, r=${r.r.toFixed(0)}), target splash f=${r.splashF.toFixed(2)}`));
   testInfo.annotations.push({ type: 'G13 RPG detonation', description: text.join(' | ') });
   console.log(`G13 RPG at the head, explosion centre:\n${text.join('\n')}`);
   for (const r of rows) {
     expect(r.none, `${r.who}: the rocket detonates`).toBeUndefined();
-    expect(r.feet, `${r.who}: explosion centre within the enemy's hit circle (${r.r}u)`).toBeLessThanOrEqual(r.r + 3);
+    expect(r.feet, `${r.who}: G13c explosion within 3u of the target's ground position`).toBeLessThanOrEqual(3);
+    expect(r.splashF, `${r.who}: G13c target takes full splash (f ~ 1)`).toBeGreaterThanOrEqual(0.95);
   }
 });
 

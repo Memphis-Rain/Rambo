@@ -18,6 +18,6 @@ export const LANDED = {
   M8: true, // physical environment E0-E9 (spec 2a33306): no trees in water, blast response, persistence
   E11: true, // rulings on the M8 exploratory findings (spec E11): logs are hurdles, splintering, canopy fade
   M8R: true, // M8 review fixes (enemy log pathing, remains memory, topple starvation, bomber credit)
-  G13: false, // head-to-toe hits: aim picking on drawn bodies + body-column hitbox (spec G13)
+  G13: true, // head-to-toe hits: aim picking on drawn bodies + body-column hitbox (spec G13)
   FU1: true, // follow-ups after the first build (spec 1c81384): R4a DITHER_STRENGTH, D4 wave 10, D5 overlay visible
 };

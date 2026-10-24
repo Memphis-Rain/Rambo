@@ -213,9 +213,10 @@ test.describe('T11 attract mode', () => {
     expect(all, 'D5: bottom prompt').toMatch(/PRESS ANY KEY OR CLICK TO PLAY/);
   });
 
-  // D3a bar (spec ca242e3), over 3 x 30 s demo runs at wave 10. KILLS_BASELINE is the
-  // kill rate of the pre-D3a bot (87a27f1), measured with this same scenario.
-  const KILLS_BASELINE = Number(process.env.D3A_KILLS_BASELINE || 1.06); // kills per game-second, 87a27f1 (measured 1.06-1.07)
+  // D3a bar (spec ca242e3), over 3 x 30 game-s demo runs at wave 10.
+  // Post-M8 baseline (Ralph: M8 changed gameplay, so the pre-M8 1.06 is stale). Measured on
+  // 96168fd, 5 runs x 30 game-s in open terrain: 0.833 0.800 1.000 0.966 1.000 (mean 0.920).
+  const KILLS_BASELINE = Number(process.env.D3A_KILLS_BASELINE || 0.92); // kills per game-second
 
   test('D3a/B6: the demo bot reads as deliberate (few reversals, no jitter in place, kill rate kept)', { tag: '@perf' }, async ({ game }, testInfo) => {
     test.skip(!LANDED.D3A && !process.env.D3A_MEASURE, 'D3A not landed (tests/milestones.js)');
