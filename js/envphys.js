@@ -43,7 +43,6 @@
 // Decals (bloodPools, via addDecal; see particles.js for the kinds):
 //   DECAL_WOOD 7, DECAL_RUBBLE 8, DECAL_SAND 9, DECAL_LEAF 10: settled
 //     debris; x, y, radius = piece size, color, angle = rot.
-//   (DECAL_STUMP 11 / DECAL_LOG 12 are no longer emitted, see E10.)
 //
 // Structural remains (E10, world state; never gore decals): envRemains[] of
 // records, envRemainsVersion bumps on change. Bake them per chunk.
@@ -90,7 +89,6 @@ let _envFelled = 0;
 let _envBlastSeq = 0;
 let _envToppleFrameN = 0;      // topples started this frame (staggering)
 let _envLandFrameN = 0;        // landings processed this frame
-let _envCheckT = 0;
 // E6: set while a falling tree NOT caused by the player hurts enemies;
 // killEnemy() then awards no score / combo / kill / special charge
 let envNoCredit = false;
@@ -186,7 +184,6 @@ function _envRecord(o) {
     stumpR: dead ? CFG.ENV_STUMP_R * 0.8 : CFG.ENV_STUMP_R,
     ax: 0, ay: 0, bx: 0, by: 0,
     active: false, queued: false, blastSeq: 0,
-    stumpDecal: null, logDecal: null,
   };
   _envStore.set(r.id, r);
   o._env = r;
@@ -674,7 +671,6 @@ function resetEnvState() {
   _envFelled = 0;
   _envToppleFrameN = 0;
   _envLandFrameN = 0;
-  _envCheckT = 0;
   envNoCredit = false;
 }
 

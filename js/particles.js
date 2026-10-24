@@ -102,10 +102,9 @@ const OPT_DUST = { friction: 0.9, shrink: false, grow: true, growRate: 6, fadeSt
 // =====================================================================
 const DECAL_POOL = 0, DECAL_SPLAT = 1, DECAL_SCORCH = 2, DECAL_FOOT = 3,
       DECAL_SMEAR = 4, DECAL_GIB = 5, DECAL_ASH = 6;
-// M8 environment (envphys.js): settled debris and felled trees. See the data
-// contract at the top of envphys.js for the extra fields STUMP/LOG carry.
-const DECAL_WOOD = 7, DECAL_RUBBLE = 8, DECAL_SAND = 9, DECAL_LEAF = 10,
-      DECAL_STUMP = 11, DECAL_LOG = 12;
+// M8 environment (envphys.js): settled cosmetic debris. Stumps, logs and
+// rubble footprints are world state (envRemains, E10), not decals.
+const DECAL_WOOD = 7, DECAL_RUBBLE = 8, DECAL_SAND = 9, DECAL_LEAF = 10;
 let decalVersion = 0;          // bumped whenever the decal set's visuals change
 const _growingDecals = [];
 const _decalFree = [];
