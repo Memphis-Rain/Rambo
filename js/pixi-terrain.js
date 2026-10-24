@@ -382,8 +382,6 @@ function renderPixiTerrain() {
       const d = dist(envObjects[i].x, envObjects[i].y, player.x, player.y);
       if (d > 2500) envObjects.splice(i, 1);
     }
-    // Cleanup old blood pools
-    while (bloodPools.length > CFG.MAX_BLOOD_POOLS * 0.8) bloodPools.shift();
   }
 }
 
