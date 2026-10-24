@@ -51,6 +51,8 @@ let shieldRegenTimer = 0;
 
 // Camera
 const cam = { x: 0, y: 0, tx: 0, ty: 0 };
+// On-screen offset of the world after pixel snapping (retro.js); null before the first frame
+let worldOffsetX = null, worldOffsetY = null;
 
 // Input
 const keys = {};
@@ -76,6 +78,8 @@ const pickups = [];
 const envObjects = [];
 const envChunks = new Set();
 const shockwaveEffects = [];
+const gibs = [];          // flying body chunks (settle into decals)
+const dmgNumbers = [];    // pixel damage numbers
 
 // Terrain chunks cache (now stores PixiJS Sprites with RenderTextures)
 const chunkCache = new Map();
