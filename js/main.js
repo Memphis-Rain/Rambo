@@ -153,10 +153,12 @@ function updateNotification(dt) {
 // A real (human) input: ends the demo (swallowed) or resets the title idle timer.
 // Returns true when the event must not reach the game.
 let _swallowClicksUntil = 0;
-function _realInput() {
+function _realInput(pointer) {
   if (typeof demoActive !== 'undefined' && demoActive) {
     stopDemo();
-    _swallowClicksUntil = performance.now() + 400; // D6: the exit click must not hit START
+    // D6: the click that ends the demo must not also hit START (key exits
+    // have no click to swallow, so a quick real click still starts a game)
+    if (pointer) _swallowClicksUntil = performance.now() + 400;
     return true;
   }
   if (!gameStarted && typeof demoNoteInput === 'function') demoNoteInput();
@@ -188,7 +190,7 @@ function initInput() {
   });
   // Capture-phase listener so a click anywhere (title included) ends the demo
   window.addEventListener('mousedown', e => {
-    if (_realInput()) { e.preventDefault(); e.stopPropagation(); }
+    if (_realInput(true)) { e.preventDefault(); e.stopPropagation(); }
   }, true);
   window.addEventListener('click', e => {
     if (performance.now() < _swallowClicksUntil) { e.preventDefault(); e.stopPropagation(); }
