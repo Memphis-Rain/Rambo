@@ -13,7 +13,8 @@ const DEMO_KEYMAP = ['1','2','3','4','5','6','7','8','9','0','-'];
 const DEMO_SHOWCASE = [1, 2, 5, 7, 8, 9, 10, 6, 4, 3, 0];
 const DEMO_MOUSE_THRESHOLD = 8;   // px of real mouse travel that counts as input (D1)
 const DEMO_ENGAGE_RANGE = 900;    // world units: consider enemies for targeting
-const DEMO_LEASH = 600;           // start biasing back toward the origin beyond this
+const DEMO_LEASH = 600;           // fully pulled back toward the origin around here
+const DEMO_LEASH_SOFT = 450;      // the pull ramps in smoothly from here (no on/off edge)
 const DEMO_START_WAVE = 10;       // first demo wave (real play starts at 1)
 const DEMO_WAVE_GAP = 1.0;        // max seconds between waves in the demo (ramps faster, D4)
 const DEMO_PREF_DIST = {
@@ -98,7 +99,7 @@ function startDemo() {
   _demo.weaponTimer = Infinity; // press the first showcase weapon on frame 1
   _demo.wantWeapon = -1;
   _demo.target = null; _demo.targetId = -1;
-  _demo.moveIdx = -1;
+  _demo.moveIdx = -1; _demo.moveHold = 0; _demo.flipCd = 0;
   _demo.strafeDir = Math.random() < 0.5 ? -1 : 1;
   _demo.strafeTimer = 2;
   _demo.jx = _demo.jy = _demo.jtx = _demo.jty = 0; _demo.jitterTimer = 0;
@@ -310,15 +311,20 @@ function _demoBot(dt) {
   let cur = _demo.target;
   if (cur && (cur.dead || enemies.indexOf(cur) < 0)) cur = null;
   let best = null, bestS = Infinity, curS = Infinity;
+  let far = null, farD = Infinity;
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i];
     if (e.dead) continue;
     const d = dist(p.x, p.y, e.x, e.y);
-    if (d > DEMO_ENGAGE_RANGE) continue;
+    if (d > DEMO_ENGAGE_RANGE) { if (d < farD) { farD = d; far = e; } continue; }
     const s = d / _demoThreatWeight(e);
     if (e === cur) curS = s;
     if (s < bestS) { bestS = s; best = e; }
   }
+  // Nothing in range but the wave isn't over (e.g. a straggler stuck behind
+  // terrain): hunt the nearest one so the next wave can start
+  _demo.chasingFar = false;
+  if (!best && far) { best = far; _demo.chasingFar = true; }
   if (cur && curS < Infinity && best !== cur && bestS > curS * 0.7) best = cur;
   if (best !== _demo.target) {
     _demo.target = best;
@@ -340,7 +346,10 @@ function _demoBot(dt) {
     const tox = (tgt.x - p.x) / (tgtD || 1), toy = (tgt.y - p.y) / (tgtD || 1);
     let pref = DEMO_PREF_DIST[wep.name] || 250;
     if (ENEMY_TYPES[tgt.type].explodeOnDeath) pref = Math.max(pref, 230);
-    const radial = clamp((tgtD - pref) / 60, -1.2, 1);
+    // Deadband around the preferred range: without it the radial push flips
+    // sign every time the distance crosses pref and the bot see-saws
+    const off = tgtD - pref;
+    const radial = Math.abs(off) < 40 ? 0 : clamp((off - Math.sign(off) * 40) / 60, -1.2, 1);
     wantX = tox * radial + (-toy) * _demo.strafeDir * 0.9;
     wantY = toy * radial + tox * _demo.strafeDir * 0.9;
     wantW = 1.6;
@@ -356,7 +365,11 @@ function _demoBot(dt) {
   wantX /= wl; wantY /= wl;
 
   const dO = dist(p.x, p.y, _demo.originX, _demo.originY);
-  const leash = dO > DEMO_LEASH ? Math.min(3, (dO - DEMO_LEASH) / 150) : 0;
+  let leash = clamp((dO - DEMO_LEASH_SOFT) / (DEMO_LEASH - DEMO_LEASH_SOFT) * 3, 0, 4); // full pull by DEMO_LEASH
+  // Stragglers keep a wave from ending: hunt them past the leash. Only for an
+  // out-of-range target or the last couple of enemies (keying it on
+  // visibility toggled the pull at the screen edge)
+  if (tgt && (_demo.chasingFar || enemies.length <= 2)) leash = 0;
   const oX = dO > 0 ? (_demo.originX - p.x) / dO : 0, oY = dO > 0 ? (_demo.originY - p.y) / dO : 0;
 
   let pk = null, pkD = Infinity;
@@ -378,7 +391,7 @@ function _demoBot(dt) {
     _demoObs[obsN++] = o;
   }
 
-  let bestM = -1, bestScore = -Infinity;
+  let bestM = -1, bestScore = -Infinity, curScore = -Infinity;
   for (let mi = 0; mi < moves.length; mi++) {
     const m = moves[mi];
     let sc = wantW * (m.dx * wantX + m.dy * wantY);
@@ -401,9 +414,12 @@ function _demoBot(dt) {
       const o = _demoObs[oi];
       if (o.collision) {
         const r = o.collision + 16;
+        // Penalty grows with how deep the probe sits inside the obstacle, so
+        // it fades in smoothly instead of switching on at the probe edge
         for (let step = 22; step <= 66; step += 22) {
           const lx = p.x + m.dx * step - o.x, ly = p.y + m.dy * step - o.y;
-          if (lx * lx + ly * ly < r * r) { sc -= 1.5 * (88 - step) / 66; break; }
+          const d2 = lx * lx + ly * ly;
+          if (d2 < r * r) { sc -= 1.5 * (1 - Math.sqrt(d2) / r) * 2 * (88 - step) / 66; break; }
         }
       } else {
         const d = dist(p.x, p.y, o.x, o.y);
@@ -418,10 +434,19 @@ function _demoBot(dt) {
     // Health detour
     if (pk) sc += 2.4 * (m.dx * (pk.x - p.x) + m.dy * (pk.y - p.y)) / (pkD || 1);
     // Stickiness against flicker
-    if (mi === _demo.moveIdx) sc += 0.25;
+    if (mi === _demo.moveIdx) { sc += 0.25; curScore = sc; }
     if (sc > bestScore) { bestScore = sc; bestM = mi; }
   }
-  if (bestScore < -2.5 && tgt) _demo.strafeDir *= -1; // boxed in: try the other way next
+  // Boxed in: try the other strafe direction, at most once a second (flipping
+  // every frame made the bot reverse diagonals back and forth)
+  _demo.flipCd -= dt;
+  if (bestScore < -2.5 && tgt && _demo.flipCd <= 0) { _demo.strafeDir *= -1; _demo.flipCd = 1; }
+  // Commit to a move briefly unless something clearly better appears
+  _demo.moveHold -= dt;
+  if (_demo.moveIdx >= 0 && bestM !== _demo.moveIdx && _demo.moveHold > 0 && bestScore - curScore < 0.6) {
+    bestM = _demo.moveIdx;
+  }
+  if (bestM !== _demo.moveIdx) _demo.moveHold = 0.25;
   _demo.moveIdx = bestM;
 
   // --- Dodge roll (melee in range, bomber close, or a bullet about to hit) ---

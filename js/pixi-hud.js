@@ -251,7 +251,7 @@ function initPixiHUD() {
   // Weapon slot key labels (up to 11); the label never changes per slot
   for (let i = 0; i < 11; i++) {
     const slotText = hudText(8, 0x445566);
-    slotText.text = `[${i < 9 ? i + 1 : 0}]`;
+    slotText.text = `[${i < 9 ? i + 1 : i === 9 ? 0 : '-'}]`; // keys 1-9, 0, -
     slotText.anchor.set(0.5, 1);
     hudElements.slotTexts.push(slotText);
   }
@@ -459,7 +459,15 @@ function renderHudPlayerPanel(p, hpRatio, Wi, Hi) {
 
   const hpLit = hudSegsLit(hpRatio, HUD_HP_SEGS);
   const hpIdx = hpRatio > 0.6 ? 0 : hpRatio > 0.3 ? 1 : 2;
-  const maxVisible = Math.min(unlockedWeapons, 8);
+  // B8: show every unlocked slot that fits left of the minimap; on narrow
+  // screens the visible window scrolls so the selected weapon is always shown
+  const slotStep = HUD_SLOT_W + HUD_SLOT_GAP;
+  let fit = Math.floor((Wi - panX - 280) / slotStep);
+  // Not all fit: reserve room for the "+N (Q/E)" hint so it can't reach the minimap
+  if (unlockedWeapons > fit) fit = Math.floor((Wi - panX - 280 - 96) / slotStep);
+  fit = Math.max(4, fit);
+  const maxVisible = Math.min(unlockedWeapons, fit);
+  const slot0 = clamp(p.weapon - maxVisible + 1, 0, unlockedWeapons - maxVisible);
   const hasNext = unlockedWeapons < WEAPONS.length && !bossActive;
   let nextSegs = -1;
   if (hasNext) {
@@ -471,7 +479,7 @@ function renderHudPlayerPanel(p, hpRatio, Wi, Hi) {
   // --- Panel, HP bar, slots, unlock progress (rebuilt on change only) ---
   const k = c.panelKey;
   if (_hudKey(k, 0, Hi) | _hudKey(k, 1, hpLit) | _hudKey(k, 2, hpIdx) | _hudKey(k, 3, p.weapon) |
-      _hudKey(k, 4, maxVisible) | _hudKey(k, 5, nextSegs) | _hudKey(k, 6, 1)) {
+      _hudKey(k, 4, maxVisible) | _hudKey(k, 5, nextSegs) | _hudKey(k, 6, 1) | _hudKey(k, 7, slot0)) {
     const g = hudElements.healthBar;
     g.clear();
     hudPanel(g, panX, panY, HUD_PAN_W, HUD_PAN_H);
@@ -479,8 +487,8 @@ function renderHudPlayerPanel(p, hpRatio, Wi, Hi) {
     hudSegBar(g, barX, panY + 46, HUD_HP_SEGS, HUD_SEG_W, 12, hpLit, HUD_HP_COLORS[hpIdx], HUD_HP_HI[hpIdx], 0x2a1010);
 
     // Weapon slots
-    for (let i = 0; i < maxVisible; i++) {
-      const sx = panX + i * (HUD_SLOT_W + HUD_SLOT_GAP);
+    for (let i = slot0; i < slot0 + maxVisible; i++) {
+      const sx = panX + (i - slot0) * (HUD_SLOT_W + HUD_SLOT_GAP);
       if (i === p.weapon) {
         // Pressed-in gold slot
         hudBevel(g, sx, slotRowY, HUD_SLOT_W, HUD_SLOT_H, 0x3a2a08, 0.95, 0x806010, 0xffe060, 2);
@@ -571,18 +579,16 @@ function renderHudPlayerPanel(p, hpRatio, Wi, Hi) {
   hudElements.specialText.visible = true;
 
   // --- Slot key labels ---
-  for (let i = 0; i < maxVisible; i++) {
+  for (let i = 0; i < hudElements.slotTexts.length; i++) {
     const t = hudElements.slotTexts[i];
+    if (i < slot0 || i >= slot0 + maxVisible) { t.visible = false; continue; }
     _hudTint(t, i === p.weapon ? 0xffdd44 : 0x5a6a80);
-    t.x = panX + i * (HUD_SLOT_W + HUD_SLOT_GAP) + HUD_SLOT_W / 2;
+    t.x = panX + (i - slot0) * (HUD_SLOT_W + HUD_SLOT_GAP) + HUD_SLOT_W / 2;
     t.y = slotRowY + HUD_SLOT_H - 3;
     t.visible = true;
   }
-  for (let i = maxVisible; i < hudElements.slotTexts.length; i++) {
-    hudElements.slotTexts[i].visible = false;
-  }
 
-  // +N more hint
+  // +N more hint (unlocked slots that don't fit this screen)
   if (unlockedWeapons > maxVisible) {
     const more = unlockedWeapons - maxVisible;
     if (c.more !== more) {

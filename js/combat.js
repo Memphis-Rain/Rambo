@@ -35,11 +35,11 @@ let hitStopTimer = 0;
 let _hitStopReadyAt = 0;
 function addHitStop(sec) {
   if (hitStopTimer > 0) return;
-  if (_hitStopReadyAt - gameTime > HIT_STOP_COOLDOWN) _hitStopReadyAt = 0; // new round: gameTime reset
   if (gameTime < _hitStopReadyAt) return;
   hitStopTimer = Math.min(HIT_STOP_MAX, sec);
   _hitStopReadyAt = gameTime + HIT_STOP_COOLDOWN;
 }
+// resetRound() calls this (gameTime restarts at 0, so the cooldown must too)
 function resetHitStop() { hitStopTimer = 0; _hitStopReadyAt = 0; }
 
 // Damage sources (decide death style: corpse, gibs, disintegration)
@@ -280,7 +280,7 @@ function updatePlayer(dt) {
               explosive: wep.explosive, radius: wep.radius||0,
               glow: wep.glow, chain: wep.chain||0, chainRange: wep.chainRange||0,
               beam: wep.beam, disintegrate: wep.disintegrate,
-              bfg: wep.name === 'BFG',
+              bfg: wep.name === 'BFG', fresh: true,
             });
           }
         }
@@ -369,6 +369,7 @@ function updateEnemies(dt) {
       e.y += e.knockbackY * dt;
       e.knockbackX *= 0.9;
       e.knockbackY *= 0.9;
+      resolveEnvCollision(e, 8 * e.size); // G2a: a hard push must not embed it in a tree/rock
       continue;
     }
     const ex0 = e.x, ey0 = e.y;
@@ -553,7 +554,7 @@ function damageEnemy(e, dmg, bulletAngle, src=SRC_BULLET) {
   // G2: knockback scales with damage; heavies and bosses resist
   const heavy = t.name === 'Heavy' || t.name === 'Tank' || t.name === 'Juggernaut';
   const resist = e.isBoss ? 0.2 : heavy ? 0.4 : 1;
-  const kb = clamp(50 + dmg * 2.5, 60, 400) * resist / t.size;
+  const kb = clamp(50 + dmg * 2.5, 60, 900) * resist / t.size; // G2a: cap 900
   e.knockbackX = Math.cos(bulletAngle) * kb;
   e.knockbackY = Math.sin(bulletAngle) * kb;
 
@@ -743,6 +744,7 @@ function updateBullets(dt) {
     b.life -= dt;
     if(b.life<=0){ bullets.splice(i,1); continue; }
 
+    const px = b.x, py = b.y; // previous position for the swept hit test (G12)
     b.x += b.vx * dt;
     b.y += b.vy * dt;
 
@@ -759,89 +761,160 @@ function updateBullets(dt) {
         0.1, 2, b.color, 'trail', OPT_TRAIL, 18, 0);
     }
 
-    // Barrel collisions
+    // G12/G12b: swept segment-vs-circle tests from the previous to the
+    // current position, so fast rounds (Railgun: ~67 units/frame) can't tunnel
+    const sdx = b.x - px, sdy = b.y - py, len2 = sdx * sdx + sdy * sdy;
+    const minX = Math.min(px, b.x), maxX = Math.max(px, b.x);
+    const minY = Math.min(py, b.y), maxY = Math.max(py, b.y);
+    const step60 = Math.sqrt(b.vx * b.vx + b.vy * b.vy) / 60; // path per 60 Hz frame
+    const fresh = b.fresh; b.fresh = false;
+    let nearT = 2, nearE = null, nearB = null;
+
+    // Explosive barrels (G12b)
     for(const obj of envObjects){
-      if(obj.type==='barrel' && !obj.exploded){
-        const bd = dist(b.x, b.y, obj.x, obj.y);
-        if(bd < 14){
-          obj.hp -= b.dmg;
-          if(obj.hp <= 0){
-            obj.exploded = true;
-            // BIGGER barrel explosion (radius 220, damages enemies more)
-            spawnExplosion(obj.x, obj.y, 220);
-            for(let ei=enemies.length-1; ei>=0; ei--){
-              const e2 = enemies[ei];
-              if(e2.dead) continue;
-              const ed = dist(obj.x, obj.y, e2.x, e2.y);
-              if(ed < 220) _pendingDamage.push({ target: e2, dmg: 200*(1-ed/220), angle: Math.atan2(e2.y-obj.y, e2.x-obj.x), src: SRC_EXPLOSIVE });
-            }
-            const pd = dist(obj.x, obj.y, player.x, player.y);
-            if(pd < 220) damagePlayer(80*(1-pd/220));
-            score += 50;
-          }
-          if(!b.pierce && !b.explosive){ bullets.splice(i,1); break; }
-        }
+      if(obj.type !== 'barrel' || obj.exploded) continue;
+      if(obj.x + 14 < minX || obj.x - 14 > maxX || obj.y + 14 < minY || obj.y - 14 > maxY) continue;
+      if(b.pierce){
+        if(entersCircle(px, py, sdx, sdy, len2, obj.x, obj.y, 14, fresh))
+          hitBarrel(obj, b.dmg * pierceHits(px, py, sdx, sdy, len2, obj.x, obj.y, 14, step60));
+      } else {
+        const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, 14);
+        if(t >= 0 && t < nearT){ nearT = t; nearB = obj; }
       }
     }
-    if(!bullets[i] || bullets[i] !== b) continue;
 
-    // Player bullet -> enemy collision
     if(b.owner === 'player') {
       for(let j=enemies.length-1;j>=0;j--){
         const e = enemies[j];
-        const d = dist(b.x, b.y, e.x, e.y);
-        if(d < 15 * e.size) {
-          const bAngle = Math.atan2(b.vy, b.vx);
-          const src = b.disintegrate ? SRC_DISINT : b.explosive ? (b.bfg ? SRC_BFG : SRC_EXPLOSIVE) : b.beam ? SRC_RAIL : SRC_BULLET;
-
-          // === CHAIN LIGHTNING (Tesla) ===
-          if(b.chain > 0) {
-            damageEnemy(e, b.dmg, bAngle);
-            let chainFrom = {x: e.x, y: e.y};
-            let chainedSet = new Set([enemies.indexOf(e)]);
-            for(let c=0; c<b.chain; c++){
-              let closest = null, closestDist = b.chainRange;
-              for(let k=0;k<enemies.length;k++){
-                if(chainedSet.has(k)) continue;
-                const d2 = dist(chainFrom.x, chainFrom.y, enemies[k].x, enemies[k].y);
-                if(d2 < closestDist){ closest = k; closestDist = d2; }
-              }
-              if(closest !== null){
-                chainedSet.add(closest);
-                const ct = enemies[closest];
-                spawnLightning(chainFrom.x, chainFrom.y, ct.x, ct.y);
-                damageEnemy(ct, b.dmg * 0.5, Math.atan2(ct.y-chainFrom.y, ct.x-chainFrom.x));
-                chainFrom = {x: ct.x, y: ct.y};
-              }
-            }
-            bullets.splice(i,1); break;
-          }
-
-          // Disintegrator kills are handled in killEnemy (SRC_DISINT)
-          damageEnemy(e, b.dmg, bAngle, src);
-
-          if(b.explosive){
-            spawnExplosion(b.x, b.y, b.radius);
-            for(let ei=enemies.length-1; ei>=0; ei--){
-              const e2 = enemies[ei];
-              if(e2.dead) continue;
-              const d2 = dist(b.x, b.y, e2.x, e2.y);
-              if(d2 < b.radius){
-                _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: Math.atan2(e2.y-b.y, e2.x-b.x), src });
-              }
-            }
-          }
-          if(!b.pierce){ bullets.splice(i,1); break; }
+        if(e.dead) continue;
+        const r = 15 * e.size;
+        if(e.x + r < minX || e.x - r > maxX || e.y + r < minY || e.y - r > maxY) continue;
+        if(b.pierce){
+          // G12a: one hit per pass, worth as many hits as the old per-60Hz-frame
+          // overlap gave (chord / step), so balance holds at any frame rate
+          if(entersCircle(px, py, sdx, sdy, len2, e.x, e.y, r, fresh))
+            bulletHitEnemy(b, e, pierceHits(px, py, sdx, sdy, len2, e.x, e.y, r, step60));
+        } else {
+          const t = segCircleT(px, py, sdx, sdy, len2, e.x, e.y, r);
+          if(t >= 0 && t < nearT){ nearT = t; nearE = e; nearB = null; }
         }
       }
     } else {
-      // Enemy bullet -> player
-      const d = dist(b.x, b.y, player.x, player.y);
-      if(d < 16){
+      // Enemy bullet -> player (unless a barrel is nearer on its path)
+      const t = segCircleT(px, py, sdx, sdy, len2, player.x, player.y, 16);
+      if(t >= 0 && t < nearT){
+        b.x = px + sdx * t; b.y = py + sdy * t;
         damagePlayer(b.dmg);
         if(b.explosive) spawnExplosion(b.x, b.y, b.radius||60);
         bullets.splice(i,1);
         continue;
+      }
+    }
+
+    // Non-piercing: the nearest enemy or barrel on the path takes the hit
+    if(nearE || nearB){
+      b.x = px + sdx * nearT; b.y = py + sdy * nearT; // impact point
+      if(nearE) bulletHitEnemy(b, nearE, 1);
+      else hitBarrel(nearB, b.dmg);
+      bullets.splice(i,1);
+    }
+  }
+}
+
+// A piercing round counts a hit when its path ENTERS the circle; a round
+// that spawned inside one (point-blank) counts on its first update only
+function entersCircle(x0, y0, dx, dy, len2, cx, cy, r, fresh) {
+  const fx = x0 - cx, fy = y0 - cy;
+  if (fx * fx + fy * fy <= r * r) return !!fresh;
+  return segCircleT(x0, y0, dx, dy, len2, cx, cy, r) >= 0;
+}
+
+// G12a: how many 60 Hz frames the old code would have overlapped the circle:
+// max(1, round(chord / step)), chord = the path's length inside the circle
+function pierceHits(x0, y0, dx, dy, len2, cx, cy, r, step60) {
+  let chord = 2 * r;
+  if (len2 > 0) {
+    const fx = cx - x0, fy = cy - y0;
+    const proj = fx * dx + fy * dy;
+    const perp2 = fx * fx + fy * fy - proj * proj / len2;
+    chord = 2 * Math.sqrt(Math.max(0, r * r - perp2));
+  }
+  return step60 > 0 ? Math.max(1, Math.round(chord / step60)) : 1;
+}
+
+function hitBarrel(obj, dmg) {
+  obj.hp -= dmg;
+  if(obj.hp <= 0 && !obj.exploded){
+    obj.exploded = true;
+    // BIGGER barrel explosion (radius 220, damages enemies more)
+    spawnExplosion(obj.x, obj.y, 220);
+    for(let ei=enemies.length-1; ei>=0; ei--){
+      const e2 = enemies[ei];
+      if(e2.dead) continue;
+      const ed = dist(obj.x, obj.y, e2.x, e2.y);
+      if(ed < 220) _pendingDamage.push({ target: e2, dmg: 200*(1-ed/220), angle: Math.atan2(e2.y-obj.y, e2.x-obj.x), src: SRC_EXPLOSIVE });
+    }
+    const pd = dist(obj.x, obj.y, player.x, player.y);
+    if(pd < 220) damagePlayer(80*(1-pd/220));
+    score += 50;
+  }
+}
+
+// Smallest t in [0,1] where segment (x0,y0)+t*(dx,dy) enters the circle, or -1.
+// len2 = dx*dx + dy*dy. A segment starting inside the circle hits at t = 0.
+function segCircleT(x0, y0, dx, dy, len2, cx, cy, r) {
+  const fx = x0 - cx, fy = y0 - cy;
+  const c = fx * fx + fy * fy - r * r;
+  if (c <= 0) return 0;
+  if (len2 === 0) return -1;
+  const bb = fx * dx + fy * dy;
+  if (bb >= 0) return -1; // moving away from the centre
+  const disc = bb * bb - len2 * c;
+  if (disc < 0) return -1;
+  const t = (-bb - Math.sqrt(disc)) / len2;
+  return t <= 1 ? t : -1;
+}
+
+// Apply one player bullet hit (chain lightning, damage, explosion);
+// mult > 1 for a piercing pass through a big target (G12a)
+function bulletHitEnemy(b, e, mult = 1) {
+  const bAngle = Math.atan2(b.vy, b.vx);
+  const src = b.disintegrate ? SRC_DISINT : b.explosive ? (b.bfg ? SRC_BFG : SRC_EXPLOSIVE) : b.beam ? SRC_RAIL : SRC_BULLET;
+
+  // === CHAIN LIGHTNING (Tesla) ===
+  if(b.chain > 0) {
+    damageEnemy(e, b.dmg, bAngle);
+    let chainFrom = {x: e.x, y: e.y};
+    let chainedSet = new Set([enemies.indexOf(e)]);
+    for(let c=0; c<b.chain; c++){
+      let closest = null, closestDist = b.chainRange;
+      for(let k=0;k<enemies.length;k++){
+        if(chainedSet.has(k)) continue;
+        const d2 = dist(chainFrom.x, chainFrom.y, enemies[k].x, enemies[k].y);
+        if(d2 < closestDist){ closest = k; closestDist = d2; }
+      }
+      if(closest !== null){
+        chainedSet.add(closest);
+        const ct = enemies[closest];
+        spawnLightning(chainFrom.x, chainFrom.y, ct.x, ct.y);
+        damageEnemy(ct, b.dmg * 0.5, Math.atan2(ct.y-chainFrom.y, ct.x-chainFrom.x));
+        chainFrom = {x: ct.x, y: ct.y};
+      }
+    }
+    return;
+  }
+
+  // Disintegrator kills are handled in killEnemy (SRC_DISINT)
+  damageEnemy(e, b.dmg * mult, bAngle, src);
+
+  if(b.explosive){
+    spawnExplosion(b.x, b.y, b.radius);
+    for(let ei=enemies.length-1; ei>=0; ei--){
+      const e2 = enemies[ei];
+      if(e2.dead) continue;
+      const d2 = dist(b.x, b.y, e2.x, e2.y);
+      if(d2 < b.radius){
+        _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: Math.atan2(e2.y-b.y, e2.x-b.x), src });
       }
     }
   }

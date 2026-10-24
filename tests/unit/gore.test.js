@@ -206,3 +206,16 @@ describe('G9 hit-stop', () => {
     expect(g.hitStopTimer).toBe(0);
   });
 });
+
+describe('B4 growing decals', () => {
+  test.skipIf(!LANDED.BATCH2)('B4: recycling at the cap leaves no duplicate or stale entries in _growingDecals', () => {
+    const max = g.CFG.MAX_BLOOD_POOLS;
+    for (let i = 0; i < max + 250; i++) g.addDecal(g.DECAL_POOL, i % 100, Math.floor(i / 100), 3, 0x8a0a0a, 0, 30);
+    const growing = g._growingDecals;
+    expect(new Set(growing).size, 'no duplicates').toBe(growing.length);
+    const live = new Set(g.bloodPools);
+    expect(growing.every((d) => live.has(d)), 'every growing decal is a live decal').toBe(true);
+    expect(g.bloodPools.length).toBeLessThanOrEqual(max);
+  });
+});
+

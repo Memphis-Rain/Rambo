@@ -110,7 +110,8 @@ function renderDebugOverlay() {
 // CAMERA & SCREEN SHAKE
 // =====================================================================
 function addShake(mag) {
-  shakeMag = Math.max(shakeMag, mag);
+  // J5a: global cap keeps the screen readable whatever stacks up
+  shakeMag = Math.min(CFG.SHAKE_MAX, Math.max(shakeMag, mag));
 }
 
 function updateCamera(dt) {
@@ -123,7 +124,7 @@ function updateCamera(dt) {
   if(shakeMag > 0.1) {
     shakeX = (Math.random()-0.5) * shakeMag * 2;
     shakeY = (Math.random()-0.5) * shakeMag * 2;
-    shakeMag *= 0.85;
+    shakeMag *= Math.pow(0.85, dt * 60); // same decay time at any fps
   } else {
     shakeX = 0; shakeY = 0; shakeMag = 0;
   }
