@@ -19,10 +19,29 @@ function loadHudFont(timeoutMs = 3000) {
   const timeout = new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs));
   return Promise.race([load, timeout]).then((ok) => {
     if (ok) console.log('[PIXI-HUD] Pixel font ready');
-    else console.warn('[PIXI-HUD] Pixel font not loaded, using fallback font');
+    else {
+      console.warn('[PIXI-HUD] Pixel font not loaded yet, using fallback font');
+      // If it arrives after the timeout, re-measure and re-render the HUD text
+      load.then((late) => { if (late) refreshHudFonts(); });
+    }
     return ok;
   });
 }
+
+// Every Text made by hudText(), so a late font load can refresh them
+const _hudTexts = [];
+function refreshHudFonts() {
+  if (PIXI.CanvasTextMetrics && PIXI.CanvasTextMetrics.clearMetrics) PIXI.CanvasTextMetrics.clearMetrics();
+  for (const t of _hudTexts) {
+    if (!t.destroyed) t.style.update();
+  }
+  console.log('[PIXI-HUD] Pixel font arrived late; HUD text refreshed');
+}
+
+// Per-frame fill/stroke styles, hoisted so rendering allocates nothing
+const HUD_STYLE_MM_BOSS = { color: 0xff88ff, alpha: 0.8 };
+const HUD_STYLE_MM_DIR = { width: 2, color: 0x44ff44, alpha: 0.9 };
+const HUD_STYLE_INVINC = { color: 0xffff00, alpha: 0.15 };
 
 // 90s arcade / DOS palette
 const HUD_PAL = {
@@ -121,6 +140,7 @@ function hudText(size, color, extraStyle) {
   t.roundPixels = true;
   t.tint = color;
   t._hudTint = color;
+  _hudTexts.push(t);
   return t;
 }
 
@@ -857,7 +877,7 @@ function renderPixiMinimap() {
     // Boss: larger magenta block with a hollow frame
     g.rect(bossX - 4, bossY - 4, 8, 8).fill(0xff44ff);
     g.rect(bossX - 8, bossY - 8, 16, 1).rect(bossX - 8, bossY + 7, 16, 1)
-      .rect(bossX - 8, bossY - 7, 1, 14).rect(bossX + 7, bossY - 7, 1, 14).fill({ color: 0xff88ff, alpha: 0.8 });
+      .rect(bossX - 8, bossY - 7, 1, 14).rect(bossX + 7, bossY - 7, 1, 14).fill(HUD_STYLE_MM_BOSS);
   }
 
   // Player dot - green with direction indicator
@@ -865,7 +885,7 @@ function renderPixiMinimap() {
   const ang = player.angle;
   g.moveTo(mmCx, mmCy)
     .lineTo(mmCx + Math.cos(ang) * 9, mmCy + Math.sin(ang) * 9 * CFG.ISO_SCALE)
-    .stroke({ width: 2, color: 0x44ff44, alpha: 0.9 });
+    .stroke(HUD_STYLE_MM_DIR);
 }
 
 /**
@@ -901,14 +921,13 @@ function renderPixiVignettes(hpRatio) {
   // Invincibility flash
   hudElements.invincGraphics.clear();
   if (player && player.invincible > 0) {
-    hudElements.invincGraphics.rect(0, 0, W, H).fill({ color: 0xffff00, alpha: 0.15 });
+    hudElements.invincGraphics.rect(0, 0, W, H).fill(HUD_STYLE_INVINC);
     hudElements.invincGraphics.visible = true;
   } else {
     hudElements.invincGraphics.visible = false;
   }
 
   // Low health red vignette (stepped edge rings; strength 0..1)
-  hudElements.vignetteGraphics.clear();
   if (hpRatio < 0.3) {
     drawEdgeVignette(hudElements.vignetteGraphics, 0xb40000, 1 - hpRatio / 0.3);
     hudElements.vignetteGraphics.visible = true;
@@ -917,7 +936,6 @@ function renderPixiVignettes(hpRatio) {
   }
 
   // Shield break blue vignette
-  hudElements.shieldVignetteGraphics.clear();
   if (player && player.shield <= 0 && shieldRegenTimer < 0.5) {
     drawEdgeVignette(hudElements.shieldVignetteGraphics, 0x3250c8, (1 - shieldRegenTimer / 0.5) * 0.6);
     hudElements.shieldVignetteGraphics.visible = true;
@@ -927,15 +945,20 @@ function renderPixiVignettes(hpRatio) {
 }
 
 // Screen-edge vignette as 4 hard-edged rings (full-screen rect with an
-// elliptical hole), so the centre of the screen stays clear
+// elliptical hole), so the centre of the screen stays clear. The geometry
+// is built once per screen size; only the (stepped) alpha changes per frame.
 function drawEdgeVignette(g, color, strength) {
-  g.alpha = 1;
-  const steps = 4;
-  for (let i = 0; i < steps; i++) {
-    const t = (i + 1) / steps;
-    g.rect(0, 0, W, H).fill({ color, alpha: 0.09 * strength });
-    g.ellipse(W / 2, H / 2, W * (0.62 - 0.07 * t), H * (0.62 - 0.07 * t)).cut();
+  if (g._vw !== W || g._vh !== H || g._vc !== color) {
+    g._vw = W; g._vh = H; g._vc = color;
+    g.clear();
+    const ring = { color, alpha: 0.09 }; // only on resize
+    for (let i = 0; i < 4; i++) {
+      const t = (i + 1) / 4;
+      g.rect(0, 0, W, H).fill(ring);
+      g.ellipse(W / 2, H / 2, W * (0.62 - 0.07 * t), H * (0.62 - 0.07 * t)).cut();
+    }
   }
+  g.alpha = Math.ceil(clamp(strength, 0, 1) * 4) / 4;
 }
 
 /**

@@ -41,10 +41,14 @@ const _demo = {
 // at so a straight bullet meets the target, or the target's current
 // position if no intercept exists. No globals, no randomness.
 // ---------------------------------------------------------------------
-function demoAimLead(sx, sy, tx, ty, tvx, tvy, bulletSpeed) {
+// Optional `out` receives the result instead of a new object (the bot
+// passes a scratch object so its per-frame aim allocates nothing).
+function demoAimLead(sx, sy, tx, ty, tvx, tvy, bulletSpeed, out) {
+  const r = out || { x: 0, y: 0 };
+  r.x = tx; r.y = ty;
   const rx = tx - sx, ry = ty - sy;
   const s = bulletSpeed;
-  if (!(s > 0) || !isFinite(s) || !isFinite(tvx) || !isFinite(tvy)) return { x: tx, y: ty };
+  if (!(s > 0) || !isFinite(s) || !isFinite(tvx) || !isFinite(tvy)) return r;
   const a = tvx * tvx + tvy * tvy - s * s;
   const b = 2 * (rx * tvx + ry * tvy);
   const c = rx * rx + ry * ry;
@@ -60,8 +64,9 @@ function demoAimLead(sx, sy, tx, ty, tvx, tvy, bulletSpeed) {
       t = lo > 0 ? lo : hi > 0 ? hi : -1;
     }
   }
-  if (!(t > 0) || !isFinite(t)) return { x: tx, y: ty };
-  return { x: tx + tvx * t, y: ty + tvy * t };
+  if (!(t > 0) || !isFinite(t)) return r;
+  r.x = tx + tvx * t; r.y = ty + tvy * t;
+  return r;
 }
 
 // ---------------------------------------------------------------------
@@ -198,14 +203,18 @@ function _demoPress(k) {
 
 // Aim the virtual mouse at a world point (inverse of updatePlayer's mapping)
 function _demoAimAt(wx, wy) {
-  const s = toScreen(wx, wy);
+  const sx = wx - wy, sy = (wx + wy) * CFG.ISO_SCALE; // toScreen, inlined
   const hasOff = typeof worldOffsetX !== 'undefined' && worldOffsetX !== null &&
                  typeof worldOffsetY !== 'undefined' && worldOffsetY !== null;
   const ox = hasOff ? worldOffsetX : W / 2 - cam.x;
   const oy = hasOff ? worldOffsetY : H / 2 - cam.y;
-  mouseX = s.x + ox;
-  mouseY = s.y + oy;
+  mouseX = sx + ox;
+  mouseY = sy + oy;
 }
+
+// Per-frame scratch storage (the bot allocates nothing per frame)
+const _demoNearE = [], _demoNearD = [], _demoObs = [];
+const _demoAim = { x: 0, y: 0 };
 
 // The 8 WASD combos and the world direction updatePlayer turns each into
 let _demoMoves = null;
@@ -254,9 +263,10 @@ function _demoThreatWeight(e) {
 
 function _demoOnScreen(p, e) {
   // Relative to the player, who the camera follows; keep a margin
-  const sp = toScreen(e.x - p.x, e.y - p.y);
+  const dx = e.x - p.x, dy = e.y - p.y;
+  const sx = dx - dy, sy = (dx + dy) * CFG.ISO_SCALE; // toScreen, inlined
   const hw = (W || 1280) / 2 - 24, hh = (H || 720) / 2 - 24;
-  return Math.abs(sp.x) < hw && Math.abs(sp.y) < hh;
+  return Math.abs(sx) < hw && Math.abs(sy) < hh;
 }
 
 // ---------------------------------------------------------------------
@@ -284,14 +294,14 @@ function _demoBot(dt) {
   // --- Perception ---
   let nearestMelee = null, nearestMeleeD = Infinity;
   let inSpecial = 0, closeCount = 0;
-  const near = [];
+  let nearN = 0;
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i];
     if (e.dead) continue;
     const d = dist(p.x, p.y, e.x, e.y);
     if (d < CFG.SPECIAL_RADIUS) inSpecial++;
     if (d < 150) closeCount++;
-    if (d < 300) near.push({ e, d });
+    if (d < 300) { _demoNearE[nearN] = e; _demoNearD[nearN] = d; nearN++; }
     const t = ENEMY_TYPES[e.type];
     if (!t.shoots && d < nearestMeleeD) { nearestMelee = e; nearestMeleeD = d; }
   }
@@ -358,14 +368,14 @@ function _demoBot(dt) {
     }
   }
 
-  const obs = [];
+  let obsN = 0;
   for (let i = 0; i < envObjects.length; i++) {
     const o = envObjects[i];
     const isBarrel = o.type === 'barrel' && !o.exploded;
     if (!o.collision && !isBarrel) continue;
     const dx = o.x - p.x, dy = o.y - p.y;
     if (dx > 170 || dx < -170 || dy > 170 || dy < -170) continue;
-    obs.push(o);
+    _demoObs[obsN++] = o;
   }
 
   let bestM = -1, bestScore = -Infinity;
@@ -373,20 +383,22 @@ function _demoBot(dt) {
     const m = moves[mi];
     let sc = wantW * (m.dx * wantX + m.dy * wantY);
     // Crowd repulsion: rushers and bombers push hardest
-    for (const n of near) {
-      const t = ENEMY_TYPES[n.e.type];
+    for (let ni = 0; ni < nearN; ni++) {
+      const ne = _demoNearE[ni], nd = _demoNearD[ni];
+      const t = ENEMY_TYPES[ne.type];
       const R = t.explodeOnDeath ? 260 : !t.shoots ? 220 : 160;
-      if (n.d >= R || n.d <= 0) continue;
+      if (nd >= R || nd <= 0) continue;
       const danger = t.explodeOnDeath ? 2.6 : !t.shoots ? 1.6 : 0.5;
-      const prox = 1 - n.d / R;
-      const toward = (m.dx * (n.e.x - p.x) + m.dy * (n.e.y - p.y)) / n.d;
+      const prox = 1 - nd / R;
+      const toward = (m.dx * (ne.x - p.x) + m.dy * (ne.y - p.y)) / nd;
       if (toward > 0) sc -= danger * prox * prox * toward * 2.2;
     }
     // Water lookahead
     if (_demoIsWater(p.x + m.dx * 45, p.y + m.dy * 45)) sc -= 4;
     if (_demoIsWater(p.x + m.dx * 100, p.y + m.dy * 100)) sc -= 2;
     // Obstacles and barrels
-    for (const o of obs) {
+    for (let oi = 0; oi < obsN; oi++) {
+      const o = _demoObs[oi];
       if (o.collision) {
         const r = o.collision + 16;
         for (let step = 22; step <= 66; step += 22) {
@@ -480,7 +492,7 @@ function _demoBot(dt) {
   if (tgt) {
     const tvx = tgt.stunTimer > 0 ? (tgt.knockbackX || 0) : (tgt.vx || 0);
     const tvy = tgt.stunTimer > 0 ? (tgt.knockbackY || 0) : (tgt.vy || 0);
-    const aim = demoAimLead(p.x, p.y, tgt.x, tgt.y, tvx, tvy, wep.speed);
+    const aim = demoAimLead(p.x, p.y, tgt.x, tgt.y, tvx, tvy, wep.speed, _demoAim);
     _demoAimAt(aim.x + _demo.jx, aim.y + _demo.jy);
   } else {
     // Look where we're going
@@ -492,7 +504,8 @@ function _demoBot(dt) {
   if (fire) {
     // Don't shoot a barrel next to ourselves
     const ax = (tgt.x - p.x) / (tgtD || 1), ay = (tgt.y - p.y) / (tgtD || 1);
-    for (const o of obs) {
+    for (let oi = 0; oi < obsN; oi++) {
+      const o = _demoObs[oi];
       if (o.type !== 'barrel' || o.exploded) continue;
       const rx = o.x - p.x, ry = o.y - p.y;
       if (rx * rx + ry * ry > 150 * 150) continue;
