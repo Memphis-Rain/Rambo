@@ -128,11 +128,54 @@ describe('G9 hit-stop', () => {
     expect(g.hitStopTimer).toBeLessThanOrEqual(0.1);
   });
 
-  test.skipIf(todo)('G9: an explosive kill triggers hit-stop in 0.03-0.1 s', () => {
+  // Amended G9 (spec dfe6194): triggers only on boss kills and explosions with
+  // radius >= 100; every stop <= 0.06 s; ordinary overkill and gib deaths don't stop.
+  const review = !LANDED.REVIEW1;
+
+  test.skipIf(review)('G9: a single stop is at most 0.06 s, bosses included', () => {
+    g.addHitStop(5);
+    expect(g.hitStopTimer).toBeLessThanOrEqual(0.06);
+    g.hitStopTimer = 0;
+    g.bossActive = true;
+    g.bossTarget = 1;
+    const boss = g.spawnEnemy(0, 0, 0, { name: 'Test', hp: 100 });
+    g.damageEnemy(boss, 1000, 0, g.SRC_EXPLOSIVE);
+    expect(g.hitStopTimer).toBeGreaterThan(0);
+    expect(g.hitStopTimer).toBeLessThanOrEqual(0.06);
+  });
+
+  test.skipIf(review)('G9: ordinary overkill does not hit-stop', () => {
     g.hitStopTimer = 0;
     const e = militia();
-    g.damageEnemy(e, e.hp + 1, 0, g.SRC_EXPLOSIVE);
-    expect(g.hitStopTimer).toBeGreaterThanOrEqual(0.03);
-    expect(g.hitStopTimer).toBeLessThanOrEqual(0.1);
+    g.damageEnemy(e, e.hp * 3, 0);
+    expect(e.dead).toBe(true);
+    expect(g.hitStopTimer).toBe(0);
+  });
+
+  test.skipIf(review)('G9: a gib death from an explosive/rail source does not hit-stop by itself', () => {
+    for (const src of [g.SRC_EXPLOSIVE, g.SRC_RAIL, g.SRC_BFG]) {
+      const { g: r } = newRound();
+      r.player.x = 5000;
+      const e = r.spawnEnemy(0, 0, 0);
+      r.damageEnemy(e, e.hp + 1, 0, src);
+      expect(e.dead).toBe(true);
+      expect(r.hitStopTimer, `src ${src}`).toBe(0);
+    }
+  });
+
+  test.skipIf(review)('G9: explosions hit-stop only at radius >= 100', () => {
+    g.hitStopTimer = 0;
+    g.spawnExplosion(0, 0, 99);
+    expect(g.hitStopTimer).toBe(0);
+    g.spawnExplosion(0, 0, 100);
+    expect(g.hitStopTimer).toBeGreaterThan(0);
+    expect(g.hitStopTimer).toBeLessThanOrEqual(0.06);
+  });
+
+  test.skipIf(review)('G9: a regular (non-boss) corpse kill does not hit-stop', () => {
+    g.hitStopTimer = 0;
+    const e = militia();
+    g.damageEnemy(e, e.hp + 1, 0);
+    expect(g.hitStopTimer).toBe(0);
   });
 });
