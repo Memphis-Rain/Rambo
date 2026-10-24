@@ -154,7 +154,7 @@ const INSTALL_W2 = ({ h, site }) => {
 test.describe('W2 wading', () => {
   test.skip(!LANDED.W2, 'W2 not landed (tests/milestones.js)');
 
-  test('W2: the player, all 12 enemy types and a boss show <= 55% of their dry body height in water, and the waterline ramps in and out without popping (>= 0.2 game-s, 10-90%)', async ({ game }, testInfo) => {
+  test('W2: the player, all 12 enemy types and a boss show <= 55% of their dry body height in water, and the waterline ramps in and out without popping (10-90% >= 0.6 x WADE_RAMP, ramp >= 0.2 s)', async ({ game }, testInfo) => {
     test.setTimeout(T(300_000));
     await startCalm(game);
     await postFxOff(game);
@@ -162,7 +162,9 @@ test.describe('W2 wading', () => {
     expect(site, 'a 3x3 pond and 3x3 dry land 3-4 tiles apart').toBeTruthy();
     await parkAt(game, { x: (site.W.x + site.L.x) / 2, y: (site.W.y + site.L.y) / 2 });
     await game.eval(INSTALL_W2, { h: HOOKS, site });
-    const { scale, ramp } = await game.eval(() => ({ scale: retroState().scale, ramp: CFG.WADE_RAMP || 0.25 }));
+    const { scale, ramp } = await game.eval(() => ({ scale: retroState().scale, ramp: CFG.WADE_RAMP }));
+    // Guard: the transition bar scales with the ramp, so the ramp can't be shrunk to pass it.
+    expect(ramp, 'CFG.WADE_RAMP (spec ~0.25 s)').toBeGreaterThanOrEqual(0.2);
     const rows = [];
     for (const target of ['player', ...TARGETS]) {
       rows.push({ who: label(target), ...(await game.eval((t) => window.__m9w2.measure(t), target)) });
@@ -187,8 +189,9 @@ test.describe('W2 wading', () => {
           prev = x;
         }
         expect(mid, `${r.who} ${phase}: in-between heights (a ramp, not a pop)`).toBeGreaterThanOrEqual(2);
-        // Ralph: frame-rate proof. The transition from 10% to 90% of the cut takes >= 0.2 game-s,
-        // which also catches a "fast ramp" that per-frame bounds could miss at low fps.
+        // Ralph: frame-rate proof. The transition from 10% to 90% of the cut takes >= 0.6 x
+        // CFG.WADE_RAMP (accepts linear and eased ramps), which also catches a "fast ramp" that
+        // per-frame bounds could miss at low fps. CFG.WADE_RAMP itself must stay >= 0.2 s.
         const cut = to - from;
         const at10 = recs.find((x) => (x.h - from) / cut >= 0.1);
         const at90 = recs.find((x) => (x.h - from) / cut >= 0.9);
@@ -196,8 +199,8 @@ test.describe('W2 wading', () => {
         // Both crossings are sampled at frame boundaries, so the measured span can be short by up
         // to one frame: allow the largest frame step seen in this transition.
         const frameDt = Math.max(...recs.slice(1).map((x, k) => x.t - recs[k].t));
-        expect(at90.t - at10.t, `${r.who} ${phase}: 10% -> 90% of the cut takes >= 0.2 game-s (minus one frame, ${frameDt.toFixed(3)} s)`)
-          .toBeGreaterThanOrEqual(0.2 - frameDt - 1e-6);
+        expect(at90.t - at10.t, `${r.who} ${phase}: 10% -> 90% of the cut takes >= 0.6 x ${ramp} s (minus one frame, ${frameDt.toFixed(3)} s)`)
+          .toBeGreaterThanOrEqual(0.6 * ramp - frameDt - 1e-6);
       }
     }
   });
