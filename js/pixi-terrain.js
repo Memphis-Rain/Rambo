@@ -395,7 +395,8 @@ function renderPixiTerrain() {
 
   // Cleanup distant chunks (only when exceeding limit)
   if (chunkCache.size > 40) {
-    const dropped = new Set();
+    const dropped = _droppedChunkKeys;
+    dropped.clear();
     for (const [key, sprite] of chunkCache) {
       const [cx2, cy2] = key.split(',').map(Number);
       if (Math.abs(cx2 - pcx) > chunkRange + 2 || Math.abs(cy2 - pcy) > chunkRange + 2) {
@@ -419,7 +420,8 @@ function renderPixiTerrain() {
   }
 }
 
-const TERRAIN_BAKE_BUDGET_MS = 4; // P3: per-frame budget for pre-baking off-screen chunks
+const TERRAIN_BAKE_BUDGET_MS = 4;
+const _droppedChunkKeys = new Set(); // reused by the chunk cleanup (no per-frame alloc) // P3: per-frame budget for pre-baking off-screen chunks
 
 /**
  * Animated water overlay - digital blue camo blocks drifting over water tiles.
