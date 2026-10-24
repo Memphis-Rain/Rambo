@@ -100,6 +100,7 @@ npx playwright install chromium  # once, for the e2e tests
 | `npm run test:watch` | Unit tests in watch mode |
 | `npm run test:e2e` | Browser tests (Playwright, Chromium). Starts its own dev server on port 5173 (override with `PW_PORT=5174`; it never reuses a server that's already running) and fails on any console error. Screenshots go to `playwright-report/`; view them with `npx playwright show-report`. |
 | `npm run perf:sustained -- --gpu` | Manual Q2a check on a real GPU: 5 minutes of heavy gore at 1920x1080, then a JSON report in `test-results/` (sustained median, time below 60 fps, CPU budget). Without `--gpu` it uses software WebGL, which gives relative numbers only. |
+| `npm run perf:bfg -- --gpu` | Manual M8/Q2a check: BFG blasts in a dense forest (60+ trees); reports frames over 16.7 ms and trees felled, with a JSON report in `test-results/`. |
 | `npm run perf:demo` | Manual D3a check: demo kill rate over 5 x 60 s against the baseline (needs ≥ 90%), with a JSON report in `test-results/`. |
 | `npm run lint` | ESLint. Catches undefined and unused variables, not style. Cross-file globals are read from each `js/*.js` file's top-level declarations, so new globals need no config change. |
 
