@@ -14,7 +14,9 @@ const VIEWPORT = process.env.CI || process.env.E2E_SMALL ? { width: 960, height:
 export default defineConfig({
   testDir: 'tests/e2e',
   // testDir already keeps other agents' worktrees (under worktrees/) out of collection.
-  outputDir: 'test-results',
+  // A side run on another PW_PORT gets its own output dir: Playwright cleans outputDir at
+  // the start of every run, which would delete a running suite's artifacts.
+  outputDir: process.env.PW_PORT && process.env.PW_PORT !== '5173' ? `test-results-${process.env.PW_PORT}` : 'test-results',
   timeout: 60_000 * TIME_SCALE,
   expect: { timeout: 10_000 * TIME_SCALE },
   // Shard by TEST, not by file: per-file sharding left a @perf shard empty (6 tests in 4
