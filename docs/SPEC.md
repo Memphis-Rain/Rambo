@@ -222,6 +222,15 @@ Classic 90s arcade behaviour: if nobody touches the game on the title screen for
   - Reloads when the magazine is low and no enemy is close. Dodge-rolls when an enemy is inside its melee range, or a projectile is about to hit.
   - Uses the shockwave when charged and 5+ enemies are within `CFG.SPECIAL_RADIUS`.
   - Detours for health pickups when HP < 40%.
+- **D3a. Readable movement (decision, Ralph, after Anna's B6 metric).**
+  - The demo exists to show a human how the game is played, so movement must read as deliberate kiting, not twitching.
+  - The bot changes strafe direction about every 0.2–0.25 s in fights (1.5 reversals/s), which looks jittery even when it is real evasion.
+  - Rule: hold a chosen strafe direction for **≥ 0.4 s** unless a dodge roll triggers or an obstacle blocks the path.
+  - Acceptance, over 3 × 30 s at wave 10:
+    - ≤ **0.8 reversals/s** on average.
+    - ≤ **3** jitter-in-place windows per 90 s (≥ 3 reversals within 1 s, with net/path displacement < 0.3 and no dodge in the window).
+    - Kills stay ≥ 90% of the current rate (58–73 per 60 s).
+  - Priority: after M7 P1. It doesn't block a push.
 - **D4. Showcase script.**
   - The demo starts with all weapons unlocked and cycles to the next weapon every ~8 s, so viewers see the whole arsenal: explosions, Tesla chains, railgun beams, gore.
   - Waves ramp faster than in real play so the screen gets busy quickly. **Decision (Ralph, after the first build):** the demo starts at **wave 10**, so Berserkers, Bombers and Commandos are in play and the dodges, shockwave and bomber chains all get shown. Wave 4 was too calm.
