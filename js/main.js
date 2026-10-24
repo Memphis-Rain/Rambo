@@ -132,10 +132,17 @@ function updateCamera(dt) {
 // =====================================================================
 // NOTIFICATIONS
 // =====================================================================
+// H3: pixel-font banner with a bounce-in and a stepped colour cycle (CSS in
+// game.html); long messages use the smaller size so they fit the screen
 function showNotification(text, duration=2) {
   notifText = text;
   notifTimer = duration;
   notifEl.textContent = text;
+  notifEl.className = text.length > 18 ? 'notification small' : 'notification';
+  // Restart the bounce-in for every new message
+  notifEl.style.animation = 'none';
+  void notifEl.offsetWidth;
+  notifEl.style.animation = '';
   notifEl.style.opacity = 1;
 }
 
@@ -434,10 +441,15 @@ function startGame() {
 
 // Initialize (async for PixiJS)
 (async function init() {
+  const fontReady = loadHudFont(); // H1: fetch the pixel font while PixiJS starts
   await initPixiApp();
   initRetro();
+  // The HUD creates its Text on the first START/demo; the font must be ready by then
+  await fontReady;
   initInput();
   lastTime = performance.now();
   app.ticker.add(gameLoop, null, PIXI.UPDATE_PRIORITY.HIGH);
-  console.log('Game ready. Click START MISSION to begin.');
+  const startBtn = document.getElementById('start-btn');
+  if (startBtn) startBtn.disabled = false;
+  console.log('Game ready. Press START to begin.');
 })();
