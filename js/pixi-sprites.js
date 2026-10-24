@@ -2418,11 +2418,13 @@ function _spDrawDecal(g, d) {
 }
 
 // =====================================================================
-// ENV REMAINS LAYER (M8 E10): stumps, fallen logs and rubble footprints
-// are world state (envphys.js envRemains), NOT gore decals. They are
-// bucketed by terrain chunk (same key as chunkCache); each chunk with
-// remains owns one Graphics, rebuilt only when its remain set changes,
-// and shown only while its terrain chunk is loaded and in view.
+// ENV REMAINS LAYER (M8 E10 / E12): stumps, fallen logs and rubble
+// footprints are world state (envphys.js envRemains), NOT gore decals.
+// They are bucketed by terrain chunk (same key as chunkCache); each chunk
+// with remains is baked into its own RenderTexture (art-pixel resolution)
+// once per settle-batch and drawn as ONE Sprite, so the per-frame cost is
+// constant in the number of felled trees. Shown only while its terrain
+// chunk is loaded and in view.
 // =====================================================================
 const _spRemScorch = [1, 0.8, 0.62, 0.45];
 
@@ -2816,14 +2818,25 @@ function _spRemainCmp(a, b) { return _spRemainDepth(a) - _spRemainDepth(b); }
 // trickling in), and never twice within SP_ENVL_REBUILD_N frames: a BFG's
 // burst of bakes costs a few rebuilds, not one per bake. Until
 // the layer has drawn a felled tree (r._drawnInLayer) its fallen sprite
-// stays visible, so a late rebuild never shows a gap. A chunk's Graphics
-// is destroyed when its terrain chunk unloads and rebuilt from its bucket
-// when it returns.
+// stays visible, so a late rebuild never shows a gap. A chunk's baked
+// texture + sprite are destroyed when its terrain chunk unloads and
+// re-baked from its bucket when it returns.
+//
+// E12 bake: one shared build Graphics (never in the scene) is filled with
+// the chunk's remains, measured, and rendered once into the chunk's
+// RenderTexture, sized to the remains' screen bounds (+ padding) and
+// aligned to the art-pixel grid. The texture is at 1/ART resolution
+// (one texel per art pixel, nearest sampling): every remain rect lies on
+// the ART grid, so at x3 it is pixel-identical to drawing the Graphics
+// live, and at x1/x2/x4 it reads like any other art-pixel sprite.
 const SP_ENVL_REBUILD_N = 6;     // frames between rebuilds of one chunk (~0.1 s)
 const SP_ENVL_QUIET_N = 6;       // rebuild once no remain was added for this many frames
 const SP_ENVL_MAX_LAG = 30;      // ...or once dirty this long (~0.5 s) while bakes continue
 const SP_ENVL_BUILDS_MAX = 2;    // chunk rebuilds per frame at most
 const SP_ENVL_SWEEP_N = 30;      // unload check at least every N frames
+const SP_ENVL_RES = 1 / ART;     // bake resolution: one texel per art pixel
+const SP_ENVL_PAD = 2 * ART;     // padding around the measured remains bounds
+const SP_ENVL_RT_STEP = 32 * ART; // RT size granularity (re-bakes reuse the RT while it fits)
 function _spEnvKey(cx, cy) { return cx * 100003 + cy; }
 function _spRemainSig(r) {
   let s = (r.x * 7 | 0) + (r.y * 13 | 0) + (r.remain === 'log' ? 1 : 2) + (r.scorch | 0) * 101 + (r.variant | 0) * 7919 +
@@ -2837,18 +2850,12 @@ function _spEnvLayerNew() {
     frame: 0, ccSize: -1, rebuilds: 0 };
 }
 
-function _spEnvLayerBuild(L, c) {
-  let g = c.g;
-  if (!g) {
-    g = new PIXI.Graphics();
-    g.zIndex = SP_Z_ENVL; g.visible = false;
-    worldContainer.addChild(g);
-    c.g = g;
-  } else g.clear();
-  const items = c.items;
+// Shared bake source: one Graphics under an identity root, never in the
+// scene (created once, survives re-init like the textures).
+let _spEnvBakeRoot = null, _spEnvBakeG = null;
+
+function _spEnvLayerDrawItems(g, items) {
   if (items.length > 1) items.sort(_spRemainCmp);
-  const iso = CFG.ISO_SCALE;
-  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   for (let i = 0; i < items.length; i++) {
     const r = items[i];
     if (r.remain === 'log' && r.logGone === true) {
@@ -2856,33 +2863,77 @@ function _spEnvLayerBuild(L, c) {
     } else if (r.remain === 'log') {
       _spDrawLog(g, r);
       // the crown overlaps the log's far end (the trunk runs into it)
-      if (r.crownR > 0) {
-        _spDrawCrown(g, r);
-        const kx = r.crownX - r.crownY, ky = (r.crownX + r.crownY) * iso;
-        x0 = Math.min(x0, kx - r.crownR); x1 = Math.max(x1, kx + r.crownR);
-        y0 = Math.min(y0, ky - r.crownR); y1 = Math.max(y1, ky + r.crownR);
-      }
+      if (r.crownR > 0) _spDrawCrown(g, r);
       _spDrawStump(g, r);
-      const ax = r.ax - r.ay, ay = (r.ax + r.ay) * iso, bx = r.bx - r.by, by = (r.bx + r.by) * iso;
-      x0 = Math.min(x0, ax, bx); x1 = Math.max(x1, ax, bx); y0 = Math.min(y0, ay, by); y1 = Math.max(y1, ay, by);
     } else {
       _spDrawRubble(g, r);
     }
-    r._drawnInLayer = true;
-    const sx = r.x - r.y, sy = (r.x + r.y) * iso;
-    x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
   }
-  // screen bounds (+ margin for outlines / rubble spread)
-  c.x0 = x0 - 60; c.x1 = x1 + 60; c.y0 = y0 - 60; c.y1 = y1 + 60;
+}
+
+function _spEnvLayerFreeTex(c) {
+  if (c.sp) _spDestroy(c.sp);
+  if (c.rt && !c.rt.destroyed) c.rt.destroy(true);
+  c.sp = null; c.rt = null;
+}
+
+// Bake one chunk: build its remains into the shared Graphics, render that
+// once into the chunk's RenderTexture, show it through the chunk's Sprite.
+function _spEnvLayerBuild(L, c) {
+  if (_spEnvBakeG === null || _spEnvBakeG.destroyed) {
+    _spEnvBakeRoot = new PIXI.Container();
+    _spEnvBakeG = new PIXI.Graphics();
+    _spEnvBakeRoot.addChild(_spEnvBakeG);
+  }
+  const g = _spEnvBakeG;
+  g.clear();
+  const items = c.items;
+  _spEnvLayerDrawItems(g, items);
+  // measured screen bounds of everything drawn, snapped out to the art grid
+  const b = g.getLocalBounds();
+  const A = ART;
+  const x0 = Math.floor((b.minX - SP_ENVL_PAD) / A) * A, y0 = Math.floor((b.minY - SP_ENVL_PAD) / A) * A;
+  const x1 = Math.ceil((b.maxX + SP_ENVL_PAD) / A) * A, y1 = Math.ceil((b.maxY + SP_ENVL_PAD) / A) * A;
+  const w = Math.max(A, x1 - x0), h = Math.max(A, y1 - y0);
+  // reuse the chunk's RT while it fits (and is not far too big), else re-allocate
+  let rt = c.rt;
+  if (rt === null || rt.destroyed || rt.width < w || rt.height < h ||
+      rt.width > w + 4 * SP_ENVL_RT_STEP || rt.height > h + 4 * SP_ENVL_RT_STEP) {
+    const old = rt;
+    rt = PIXI.RenderTexture.create({
+      width: Math.ceil(w / SP_ENVL_RT_STEP) * SP_ENVL_RT_STEP,
+      height: Math.ceil(h / SP_ENVL_RT_STEP) * SP_ENVL_RT_STEP,
+      resolution: SP_ENVL_RES, scaleMode: 'nearest', antialias: false,
+    });
+    if (c.sp) c.sp.texture = rt;
+    if (old !== null && !old.destroyed) old.destroy(true);
+    c.rt = rt;
+  }
+  g.position.set(-x0, -y0);
+  renderer.render({ container: _spEnvBakeRoot, target: rt, clear: true, clearColor: [0, 0, 0, 0] });
+  g.clear(); // drop the source geometry: the RT holds the pixels
+  let sp = c.sp;
+  if (sp === null) {
+    sp = new PIXI.Sprite(rt);
+    sp.zIndex = SP_Z_ENVL; sp.visible = false;
+    sp.eventMode = 'none';
+    worldContainer.addChild(sp);
+    c.sp = sp;
+  }
+  sp.position.set(x0, y0);
+  // the baked texture now shows every remain of the chunk: hand off from
+  // the fallen tree sprites (no gap, no double draw)
+  for (let i = 0; i < items.length; i++) items[i]._drawnInLayer = true;
+  // screen bounds (view culling) = the sprite's extent
+  c.x0 = x0; c.x1 = x0 + rt.width; c.y0 = y0; c.y1 = y0 + rt.height;
   c.dirty = false;
   c.built = L.frame;
   L.rebuilds++;
 }
 
-// Terrain chunk gone: free the GPU geometry, keep the bucket for its return
+// Terrain chunk gone: free the texture + sprite, keep the bucket for its return
 function _spEnvLayerUnload(c) {
-  _spDestroy(c.g);
-  c.g = null;
+  _spEnvLayerFreeTex(c);
   c.dirty = true;
   c.built = c.since = c.touched = -1e9; // rebuild as soon as it is back
   for (let i = 0; i < c.items.length; i++) c.items[i]._drawnInLayer = false;
@@ -2891,7 +2942,7 @@ function _spEnvLayerUnload(c) {
 function _spEnvLayerClear(L) {
   for (let i = 0; i < L.list.length; i++) {
     const c = L.list[i];
-    if (c.g) _spDestroy(c.g);
+    _spEnvLayerFreeTex(c);
     for (let j = 0; j < c.items.length; j++) c.items[j]._drawnInLayer = false;
   }
   L.map.clear();
@@ -2906,7 +2957,7 @@ function _spEnvLayerAdd(L, r, cs) {
   const nk = _spEnvKey(cx, cy);
   let c = L.map.get(nk);
   if (c === undefined) {
-    c = { nk, skey: cx + ',' + cy, g: null, items: [], sig: 0, dirty: false, built: -1e9,
+    c = { nk, skey: cx + ',' + cy, sp: null, rt: null, items: [], sig: 0, dirty: false, built: -1e9,
       since: 0, touched: 0, x0: 0, x1: 0, y0: 0, y1: 0 };
     L.map.set(nk, c);
     L.list.push(c);
@@ -2958,33 +3009,34 @@ function _spRenderEnvLayer() {
     L.ccSize = chunkCache.size;
     for (let i = 0; i < L.list.length; i++) {
       const c = L.list[i];
-      if (c.g && !chunkCache.has(c.skey)) _spEnvLayerUnload(c);
+      if (c.sp && !chunkCache.has(c.skey)) _spEnvLayerUnload(c);
     }
   }
   let budget = SP_ENVL_BUILDS_MAX;
   for (let i = 0; i < L.list.length; i++) {
     const c = L.list[i];
-    if (hasCC && !chunkCache.has(c.skey)) continue; // unloaded: no Graphics
+    if (hasCC && !chunkCache.has(c.skey)) continue; // unloaded: no texture
     if (c.dirty && budget > 0 && L.frame - c.built >= SP_ENVL_REBUILD_N &&
         (L.frame - c.touched >= SP_ENVL_QUIET_N || L.frame - c.since >= SP_ENVL_MAX_LAG)) {
       _spEnvLayerBuild(L, c);
       budget--;
     }
-    if (c.g) c.g.visible = c.x1 > _sp.vx0 && c.x0 < _sp.vx1 && c.y1 > _sp.vy0 && c.y0 < _sp.vy1;
+    if (c.sp) c.sp.visible = c.x1 > _sp.vx0 && c.x0 < _sp.vx1 && c.y1 > _sp.vy0 && c.y0 < _sp.vy1;
   }
 }
 
-// Test hook (E10): env remains layer. chunks = live per-chunk Graphics,
-// buckets = chunks holding remains (loaded or not), draws = visible now.
+// Test hook (E10/E12): env remains layer. chunks = live per-chunk baked
+// sprites, buckets = chunks holding remains (loaded or not), draws =
+// visible now, rtBytes = GPU memory of the baked textures (estimate).
 function envLayerStats() {
   const L = _sp.envL;
-  if (!L) return { chunks: 0, buckets: 0, draws: 0, rebuilds: 0, dirty: 0 };
-  let vis = 0, live = 0, dirty = 0;
+  if (!L) return { chunks: 0, buckets: 0, draws: 0, rebuilds: 0, dirty: 0, rtBytes: 0 };
+  let vis = 0, live = 0, dirty = 0, bytes = 0;
   for (let i = 0; i < L.list.length; i++) {
     const c = L.list[i];
-    if (c.g) { live++; if (c.g.visible) vis++; }
+    if (c.sp) { live++; if (c.sp.visible) vis++; }
+    if (c.rt) bytes += c.rt.source.pixelWidth * c.rt.source.pixelHeight * 4;
     if (c.dirty) dirty++;
   }
-  return { chunks: live, buckets: L.list.length, draws: vis, rebuilds: L.rebuilds, dirty };
+  return { chunks: live, buckets: L.list.length, draws: vis, rebuilds: L.rebuilds, dirty, rtBytes: bytes };
 }
-
