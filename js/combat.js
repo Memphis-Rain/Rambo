@@ -172,6 +172,14 @@ function updatePlayer(dt) {
   const worldMouse = toWorld(mouseX - ox, mouseY - oy);
   mouseWorldX = worldMouse.x;
   mouseWorldY = worldMouse.y;
+  // G13: the cursor maps to the GROUND, so aiming at a head meant aiming at
+  // the ground behind the enemy. Over an enemy's drawn body, aim at that
+  // (front-most) enemy's ground centre instead. Not for the demo bot, which
+  // already aims at led ground points.
+  if (!(typeof demoActive !== 'undefined' && demoActive)) {
+    const picked = pickEnemyAtScreen(mouseX - ox, mouseY - oy);
+    if (picked) { mouseWorldX = picked.x; mouseWorldY = picked.y; }
+  }
   p.aimAngle = Math.atan2(mouseWorldY - p.y, mouseWorldX - p.x);
   const sp = toScreen(p.x, p.y);
   const smx = mouseX - ox - sp.x;
@@ -938,20 +946,24 @@ function updateBullets(dt) {
         const e = enemies[j];
         if(e.dead) continue;
         const r = 15 * e.size;
-        if(e.x + r < minX || e.x - r > maxX || e.y + r < minY || e.y - r > maxY) continue;
+        // G13: body column from the feet up along iso screen-up (head height)
+        const k = bodyColumnK(ENEMY_BODY_H * e.size);
+        if(e.x + r < minX || e.x - k - r > maxX || e.y + r < minY || e.y - k - r > maxY) continue;
+        const t = segCapsuleT(px, py, sdx, sdy, len2, e.x, e.y, e.x - k, e.y - k, r);
         if(b.pierce){
           // G12a: one hit per pass, worth as many hits as the old per-60Hz-frame
-          // overlap gave (chord / step), so balance holds at any frame rate
-          if(entersCircle(px, py, sdx, sdy, len2, e.x, e.y, r, fresh))
-            bulletHitEnemy(b, e, pierceHits(px, py, sdx, sdy, len2, e.x, e.y, r, step60));
-        } else {
-          const t = segCircleT(px, py, sdx, sdy, len2, e.x, e.y, r);
-          if(t >= 0 && t < nearT){ nearT = t; nearE = e; nearB = null; nearO = null; }
-        }
+          // overlap gave (chord / step, through a circle at the column point
+          // the path passes closest to), so balance holds at any frame rate
+          if(t >= 0 && (_capStartOutside || fresh)) {
+            capsuleLinePoint(px, py, sdx, sdy, e.x, e.y, e.x - k, e.y - k);
+            bulletHitEnemy(b, e, pierceHits(px, py, sdx, sdy, len2, _capCx, _capCy, r, step60));
+          }
+        } else if(t >= 0 && t < nearT){ nearT = t; nearE = e; nearB = null; nearO = null; }
       }
     } else {
       // Enemy bullet -> player (unless a barrel or trunk is nearer on its path)
-      const t = segCircleT(px, py, sdx, sdy, len2, player.x, player.y, 16);
+      const kp = bodyColumnK(PLAYER_BODY_H);
+      const t = segCapsuleT(px, py, sdx, sdy, len2, player.x, player.y, player.x - kp, player.y - kp, 16);
       if(t >= 0 && t < nearT){
         b.x = px + sdx * t; b.y = py + sdy * t;
         damagePlayer(b.dmg);
@@ -1033,6 +1045,72 @@ function hitBarrel(obj, dmg, byPlayer = true) {
     if(pd < 220) damagePlayer(80*(1-pd/220));
     score += 50;
   }
+}
+
+// G13: drawn body heights (screen units above the feet, size 1) and the
+// world-space length of a body column: screen-up (0, -h) is world
+// (-h / (2 ISO), -h / (2 ISO)), i.e. k along both axes.
+const ENEMY_BODY_H = 42, PLAYER_BODY_H = 44;
+function bodyColumnK(h) { return h / (2 * CFG.ISO_SCALE); }
+
+// G13: front-most enemy whose drawn body contains screen point (sx, sy)
+// (world-screen coordinates, i.e. toScreen space), or null
+function pickEnemyAtScreen(sx, sy) {
+  let best = null, bestDepth = -Infinity;
+  const iso = CFG.ISO_SCALE;
+  for (let i = 0; i < enemies.length; i++) {
+    const e = enemies[i];
+    if (e.dead) continue;
+    const ex = e.x - e.y, ey = (e.x + e.y) * iso;
+    const hw = 10 * e.size + 3;
+    if (sx < ex - hw || sx > ex + hw || sy > ey + 6 || sy < ey - ENEMY_BODY_H * e.size - 3) continue;
+    const depth = e.x + e.y; // larger depth draws on top
+    if (depth > bestDepth) { bestDepth = depth; best = e; }
+  }
+  return best;
+}
+
+// G13: earliest t in [0,1] where segment (x0,y0)+t*(dx,dy) comes within r of
+// the capsule axis A-B, or -1. Also sets _capCx/_capCy (closest axis point)
+// and _capStartOutside (the segment starts outside the capsule).
+let _capCx = 0, _capCy = 0, _capStartOutside = true;
+function segCapsuleT(x0, y0, dx, dy, len2, ax, ay, bx, by, r) {
+  const ex = bx - ax, ey = by - ay, el2 = ex * ex + ey * ey;
+  // start point inside?
+  let u0 = el2 > 0 ? ((x0 - ax) * ex + (y0 - ay) * ey) / el2 : 0;
+  u0 = u0 < 0 ? 0 : u0 > 1 ? 1 : u0;
+  const sx0 = x0 - (ax + ex * u0), sy0 = y0 - (ay + ey * u0);
+  _capStartOutside = sx0 * sx0 + sy0 * sy0 > r * r;
+  if (!_capStartOutside) { _capCx = ax + ex * u0; _capCy = ay + ey * u0; return 0; }
+  // closest points between the two segments (clamped)
+  const wx = x0 - ax, wy = y0 - ay;
+  const a = len2, b = dx * ex + dy * ey, c = el2, d = dx * wx + dy * wy, f = ex * wx + ey * wy;
+  const den = a * c - b * b;
+  let t = den > 1e-9 ? (b * f - c * d) / den : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  let u = c > 0 ? (b * t + f) / c : 0;
+  if (u < 0) { u = 0; t = a > 0 ? -d / a : 0; } else if (u > 1) { u = 1; t = a > 0 ? (b - d) / a : 0; }
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  _capCx = ax + ex * u; _capCy = ay + ey * u;
+  const qx = x0 + dx * t - _capCx, qy = y0 + dy * t - _capCy;
+  const dist2 = qx * qx + qy * qy;
+  if (dist2 > r * r) return -1;
+  // entry point: the swept circle test against the closest axis point
+  const te = segCircleT(x0, y0, dx, dy, len2, _capCx, _capCy, r);
+  return te >= 0 ? te : t;
+}
+
+// G12a with G13: the pierce chord is measured over the bullet's whole pass,
+// so take the column point closest to its infinite LINE (not this frame's
+// short segment). Result in _capCx/_capCy.
+function capsuleLinePoint(x0, y0, dx, dy, ax, ay, bx, by) {
+  const ex = bx - ax, ey = by - ay;
+  const a = dx * dx + dy * dy, b = dx * ex + dy * ey, c = ex * ex + ey * ey;
+  const wx = x0 - ax, wy = y0 - ay, d = dx * wx + dy * wy, f = ex * wx + ey * wy;
+  const den = a * c - b * b;
+  let u = den > 1e-9 ? (a * f - b * d) / den : 0;
+  u = u < 0 ? 0 : u > 1 ? 1 : u;
+  _capCx = ax + ex * u; _capCy = ay + ey * u;
 }
 
 // Smallest t in [0,1] where segment (x0,y0)+t*(dx,dy) enters the circle, or -1.
