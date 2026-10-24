@@ -33,6 +33,16 @@ const CFG = {
   MAX_GIBS: 160,
   MAX_DMG_NUMBERS: 60,
   SHAKE_MAX: 20, // J5a: screen px; addShake clamps to this
+  // M9 N1: grenades (F)
+  GRENADE_DMG: 200,            // RPG path: splash 0.7 x dmg x (1 - d/R), no direct hit
+  GRENADE_RADIUS: 140,
+  GRENADE_GEYSER_SCALE: 0.7,   // in water: geyser radius = R x this
+  GRENADE_FUSE: 1.8,           // s from the throw
+  GRENADE_RANGE: 420,
+  GRENADE_COOLDOWN: 0.5,
+  GRENADE_AMMO_START: 3,
+  GRENADE_AMMO_MAX: 6,
+  GRENADE_DROP_CHANCE: 0.06,
   // Physical environment (M8)
   ENV_TREE_DENSITY: 1.26, // E1: x original tree counts (= ~+30% placed trees)
   // E2-E8 blast response; f = 1 - d/R for an object at distance d from a blast of radius R

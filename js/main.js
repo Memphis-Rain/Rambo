@@ -260,6 +260,7 @@ function update(dt) {
   processPendingDamage();
   updateEnemies(dt);
   updateBullets(dt);
+  updateGrenades(dt);    // M9 N1
   updateEnv(dt);         // M8: env reactions, falling trees, debris
   processPendingDamage();
   updateWaves(dt);
@@ -430,6 +431,7 @@ function resetRound() {
   bodies.length = 0;
   shells.length = 0;
   pickups.length = 0;
+  resetGrenades();
   for (const sprite of chunkCache.values()) {
     terrainContainer.removeChild(sprite);
     sprite.destroy(true);

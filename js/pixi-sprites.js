@@ -63,6 +63,7 @@ const _sp = {
   vx0: 0, vx1: 0, vy0: 0, vy1: 0,
   // textures (created once, survive re-init)
   texWhite: null, texCircle: null, texMuzzle: [],
+  texGrenade: [], texGrenadeSink: [], texGrenadePk: null, // N1
   // pooled sprites (cursor reset every frame)
   sprites: [], spriteN: 0, spritePrev: 0,
   // pooled per-frame Graphics
@@ -166,15 +167,64 @@ function _spInitTextures() {
     }
   });
   const pal = { W: '#ffffff', Y: '#ffe050', O: '#ff9020' };
-  for (const rows of _spMuzzleShapes) {
-    _sp.texMuzzle.push(_spCanvasTex(rows[0].length, rows.length, (c) => {
-      for (let y = 0; y < rows.length; y++) for (let x = 0; x < rows[y].length; x++) {
-        const ch = rows[y][x];
-        if (pal[ch]) { c.fillStyle = pal[ch]; c.fillRect(x, y, 1, 1); }
-      }
-    }));
+  for (const rows of _spMuzzleShapes) _sp.texMuzzle.push(_spShapeTex(rows, pal));
+  // N1 grenades: 3 spin frames (+ the side frame mirrored) and the pickup
+  for (const rows of _spGrenadeShapes) _sp.texGrenade.push(_spShapeTex(rows, _spGrenadePal));
+  _sp.texGrenade.push(_spShapeTex(_spGrenadeShapes[1].map((r) => r.split('').reverse().join('')), _spGrenadePal));
+  _sp.texGrenadePk = _spShapeTex(_spGrenadePickup, _spGrenadePal);
+  // Sinking (water): the upright frame cropped to its top rows
+  const up = _sp.texGrenade[0];
+  for (const rows of [4, 2]) {
+    _sp.texGrenadeSink.push(new PIXI.Texture({ source: up.source, frame: new PIXI.Rectangle(0, 0, 5, rows) }));
   }
 }
+
+// Pixel shape (rows of palette chars, '.' = clear) -> nearest-sampled texture
+function _spShapeTex(rows, pal) {
+  return _spCanvasTex(rows[0].length, rows.length, (c) => {
+    for (let y = 0; y < rows.length; y++) for (let x = 0; x < rows[y].length; x++) {
+      const ch = rows[y][x];
+      if (pal[ch]) { c.fillStyle = pal[ch]; c.fillRect(x, y, 1, 1); }
+    }
+  });
+}
+
+// N1 grenade art. O outline, G olive, L highlight, D shade, S steel cap/lever, s steel shade
+const _spGrenadePal = { O: '#120c08', G: '#5a6a2c', L: '#8c9c4c', D: '#34401a', S: '#b4b4a8', s: '#62625a' };
+// Spin frames: upright, on its side (cap right), upside down; frame 3 = side mirrored.
+// [w, h, red-pixel x, y] per frame (the fuse blink sits mid-body)
+const _spGrenadeShapes = [
+  ['.SS..',
+   '.OOO.',
+   'OLGGO',
+   'OGGDO',
+   'OGDDO',
+   '.OOO.'],
+  ['.OOO..',
+   'OLGGOS',
+   'OGGDOS',
+   'OGDDO.',
+   '.OOO..'],
+  ['.OOO.',
+   'OLGGO',
+   'OGGDO',
+   'OGDDO',
+   '.OOO.',
+   '..SS.'],
+];
+const _spGrenadeFrm = [[5, 6, 2, 3], [6, 5, 2, 2], [5, 6, 2, 2], [6, 5, 3, 2]];
+const _spGrenadePickup = [
+  '...OOO...',
+  '..OSSSOO.',
+  '.OOsssOSO',
+  'OLLGGGOSO',
+  'OLGGGGDOO',
+  'OGGDGGDDO',
+  'OGGGGGGDO',
+  'OGDGGDGDO',
+  '.OGGGGDO.',
+  '..OOOOO..',
+];
 
 // ---------------------------------------------------------------------
 // Init / reset (called on every startGame / resetRound)
@@ -898,6 +948,7 @@ function renderPixiSprites() {
   const t3 = performance.now();
   _spRenderPickups();
   _spRenderBullets();
+  _spRenderGrenades();
   const t4 = performance.now();
   _spRenderParticles();
   _spRenderShells();
@@ -1168,6 +1219,14 @@ function _spRenderPickups() {
     const sg = _sp.groundG;
     sg.rect(X - 2 * A, Y, 5 * A, A);
     sg.fill({ color: 0, alpha: 0.3 });
+    if (pk.type === 'grenade') {
+      // N1: baked 9x10 pineapple grenade, same bob / blink / shadow as the others
+      const s = _spSprite(_sp.texGrenadePk, X - 4 * A, Y - 9 * A + bob, depthKey(pk.x, pk.y));
+      s.anchor.set(0, 0);
+      s.scale.set(A, A);
+      s.tint = 0xffffff;
+      continue;
+    }
     const g = _spFrameGfx(depthKey(pk.x, pk.y));
     g.position.set(X, Y - 4 * A + bob);
     if (pk.type === 'health') {
@@ -1244,6 +1303,74 @@ function _spRenderBullets() {
       f.scale.set(flick ? 2 * A : 3 * A, A * 2);
       f.rotation = ang; f.tint = flick ? 0xffd040 : 0xff7020;
     }
+  }
+}
+
+// =====================================================================
+// GRENADES (N1): pooled 3-frame spinning sprite, stepped ground shadow,
+// red fuse pixel blinking at 8 Hz in the last 0.6 s, sink + bubbles in water
+// =====================================================================
+const SP_GREN_BLINK = 0.6;
+function _spRenderGrenades() {
+  if (typeof grenades === 'undefined' || grenades.length === 0) return;
+  const iso = CFG.ISO_SCALE, A = ART, sg = _sp.groundG;
+  let shadows = 0;
+  for (let i = 0; i < grenades.length; i++) {
+    const gr = grenades[i];
+    const sx = gr.x - gr.y, gy = (gr.x + gr.y) * iso;
+    if (!_spInView(sx, gy)) continue;
+    const X = _spSnap(sx), GY = _spSnap(gy);
+    const zz = depthKey(gr.x, gr.y);
+    if (gr.inWater) { _spGrenadeSink(gr, X, GY, zz); continue; }
+    const z = gr.z > 0 ? gr.z : 0;
+    // Shadow: 3/5/3 pixel ellipse on the ground point, a 3x2 blob once high up
+    if (z < 40) {
+      sg.rect(X - A, GY - A, 3 * A, A);
+      sg.rect(X - 2 * A, GY, 5 * A, A);
+      sg.rect(X - A, GY + A, 3 * A, A);
+    } else {
+      sg.rect(X - A, GY - A, 3 * A, 2 * A);
+    }
+    shadows++;
+    // Body: frame = quarter turn of the spin (frame 3 is frame 1 mirrored)
+    const f = ((gr.spin / (Math.PI / 2)) | 0) & 3;
+    const fm = _spGrenadeFrm[f];
+    const x0 = X - (fm[0] >> 1) * A, y0 = _spSnap(gy - z) - fm[1] * A;
+    const s = _spSprite(_sp.texGrenade[f], x0, y0, zz);
+    s.anchor.set(0, 0);
+    s.scale.set(A, A);
+    s.tint = 0xffffff;
+    if (gr.t > gr.fuse - SP_GREN_BLINK && (((gr.t * 16) | 0) & 1) === 0) {
+      _spRectSprite(x0 + fm[2] * A, y0 + fm[3] * A, A, A, 0xff2010, zz + 0.001);
+    }
+  }
+  if (shadows) sg.fill({ color: 0, alpha: 0.5 }); // small: needs more weight than 0.35 to read on grass
+}
+
+// Landed in water: drops out of sight over 0.3 s (cropped top rows), a foam
+// pixel either side at the waterline, then a stepped bubble trail until the fuse
+function _spGrenadeSink(gr, X, GY, zz) {
+  const A = ART, st = gr.sinkT;
+  if (st < 0.2) {
+    const tex = _sp.texGrenadeSink[st < 0.1 ? 0 : 1];
+    const h = st < 0.1 ? 4 : 2;
+    const s = _spSprite(tex, X - 2 * A, GY - h * A, zz);
+    s.anchor.set(0, 0);
+    s.scale.set(A, A);
+    s.tint = 0xffffff;
+  }
+  if (st < 0.3) {
+    const o = st < 0.15 ? 3 : 4;
+    _spRectSprite(X - o * A, GY - A, A, A, 0xe8f4ff, zz + 0.001);
+    _spRectSprite(X + (o + 1) * A, GY - A, A, A, 0xe8f4ff, zz + 0.001);
+    return;
+  }
+  // Two bubbles rising 4 px in stepped hops, offset half a cycle
+  for (let k = 0; k < 2; k++) {
+    const ph = st * 3 + k * 0.5, cyc = ph | 0, r = ph - cyc;
+    const bx = X + (((_spHash(cyc, k) & 3) - 1) * A);
+    const by = GY - ((r * 4) | 0) * A;
+    _spRectSprite(bx, by, A, A, r < 0.75 ? 0xd8f0ff : 0x9cc8e8, zz + 0.001);
   }
 }
 
