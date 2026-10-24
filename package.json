@@ -15,7 +15,8 @@
     "lint": "eslint .",
     "perf:sustained": "node tests/perf/sustained.mjs",
     "perf:demo": "node tests/perf/demo-killrate.mjs",
-    "perf:bfg": "node tests/perf/bfg-forest.mjs"
+    "perf:bfg": "node tests/perf/bfg-forest.mjs",
+    "perf:m9": "node tests/perf/m9.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
