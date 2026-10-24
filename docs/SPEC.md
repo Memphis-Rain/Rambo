@@ -122,6 +122,11 @@ Because of M1, art must read at 1/3 resolution:
   - Josh adds `let hitStopTimer = 0` in `combat.js`. It is set to 0.03–0.06 s on big kills or explosions.
   - The main loop skips `update()` while it's above 0, but still renders.
   - It never stacks above 0.1 s.
+- **G11. Bomber chain carry-over (bug fix, found by Anna in T3).**
+  - Today `processPendingDamage()` runs at most 3 rounds per frame, then `_pendingDamage.length = 0` throws away the damage still queued. A long bomber chain dies out after about 6 links.
+  - Keep the 3-rounds-per-frame anti-recursion cap, but **carry the leftover queue to the next frame** instead of discarding it.
+  - Long chains then ripple across frames as a cascade of explosions, which is intentional and fun. Every bomber in a connected chain ends up dead.
+  - Q4 exception: the chain still applies the same per-explosion damage. It just no longer drops queued damage.
 - **G10. Player damage feedback**: a red flash plus blood drops at the screen edges, with intensity driven by HP lost.
 
 ## M4: Explosions & juice (Josh)
