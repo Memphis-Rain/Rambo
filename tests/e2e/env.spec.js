@@ -471,3 +471,76 @@ test.describe('E11e canopy fade', () => {
     expect(after, 'E11e: restored after the player leaves').toBeGreaterThanOrEqual(0.95);
   });
 });
+
+// Final M8 review regression (Ralph): a log splintered in the SAME frame another remain
+// lands must leave the chunk's baked remains texture.
+test.describe('M8R same-frame splinter rebake', () => {
+  test.skip(!(LANDED.M8 && LANDED.M8R && LANDED.E11), 'M8R/E11 not landed (tests/milestones.js)');
+
+  test('M8R: a log splintered in the same frame a new remain lands is rebaked out of the chunk layer', async ({ game }, testInfo) => {
+    test.setTimeout(T(90_000));
+    await game.boot();
+    await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1e9; });
+    await game.start();
+    await game.freezeWaves();
+    await game.eval(() => { player.invincible = 1e9; });
+    // A tree and a boulder in the same chunk, near the player (on screen).
+    await game.eval(() => {
+      const cs = CFG.CHUNK_SIZE * CFG.TILE_SIZE;
+      const cx = Math.floor((player.x + 200) / cs), cy = Math.floor(player.y / cs);
+      const x0 = cx * cs + cs * 0.3, y0 = cy * cs + cs * 0.4;
+      const tree = { x: x0, y: y0, type: 'tree', radius: 40, height: 100, collision: 8, createdAt: -1, id: 'm8r-tree' };
+      const rock = { x: x0 + 90, y: y0 + 40, type: 'boulder', radius: 22, collision: 14, createdAt: -1, id: 'm8r-rock' };
+      envObjects.push(tree, rock);
+      player.x = x0 - 120; player.y = y0 + 120;
+      // Fell the tree away from the boulder (blast from the boulder's side, small radius).
+      spawnExplosion(x0 + 15, y0 + 8, 60, true, SRC_EXPLOSIVE);
+    });
+    // Wait until the log is baked and drawn by the chunk remains layer.
+    await game.page.waitForFunction(() => {
+      const r = envObjState(envObjects.find((o) => o.id === 'm8r-tree'));
+      return r && r.baked && r._drawnInLayer === true && envLogs.some((l) => l.id === 'm8r-tree');
+    }, null, { timeout: T(15_000) });
+    const before = await game.eval(() => {
+      const r = envObjState(envObjects.find((o) => o.id === 'm8r-tree'));
+      const L = _sp.envL;
+      const c = L.list.find((ch) => ch.items.includes(r));
+      const n0 = envRemains.length;
+      const rebuilds0 = envLayerStats().rebuilds;
+      // ONE frame: a BFG between the log's middle and the boulder splinters the log
+      // (f > 0.5) and shatters the boulder (a new rubble remain in the same chunk).
+      const log = envLogs.find((l) => l.id === 'm8r-tree');
+      const mx = (log.ax + log.bx) / 2, my = (log.ay + log.by) / 2;
+      const rock = envObjects.find((o) => o.id === 'm8r-rock');
+      spawnExplosion((mx + rock.x) / 2, (my + rock.y) / 2, WEAPONS.find((w) => w.name === 'BFG').radius, true, SRC_BFG);
+      return { inLayer: !!c, n0, nSameFrame: envRemains.length, rebuilds0, logGone: r.logGone === true };
+    });
+    expect(before.inLayer, 'log baked into a layer chunk before the event').toBe(true);
+    // Let the layer re-sign and rebuild.
+    await game.page.waitForFunction(() => {
+      const r = envObjState(envObjects.find((o) => o.id === 'm8r-tree'));
+      const c = _sp.envL.list.find((ch) => ch.items.includes(r));
+      return r.logGone === true && c && !c.dirty;
+    }, null, { timeout: T(15_000) });
+    await game.advance(0.5);
+    const after = await game.eval(() => {
+      const r = envObjState(envObjects.find((o) => o.id === 'm8r-tree'));
+      const c = _sp.envL.list.find((ch) => ch.items.includes(r));
+      let sig = 0;
+      for (const it of c.items) sig = (sig + _spRemainSig(it)) | 0;
+      return { capsule: envLogs.some((l) => l.id === 'm8r-tree'), logGone: r.logGone === true, sigBaked: c.sig, sigNow: sig,
+        dirty: c.dirty, rebuilds: envLayerStats().rebuilds, remains: envRemains.length,
+        rock: (envObjState(envObjects.find((o) => o.id === 'm8r-rock')) || {}).state };
+    });
+    const summary = `remains ${before.n0} -> ${before.nSameFrame} (same frame) -> ${after.remains}; rock ${after.rock}; rebuilds ${before.rebuilds0} -> ${after.rebuilds}; sig baked ${after.sigBaked} vs now ${after.sigNow}`;
+    console.log(`[M8R splinter] ${summary}`);
+    testInfo.annotations.push({ type: 'M8R splinter', description: summary });
+    await game.snap(testInfo, 'M8R-splinter-rebake.png');
+    expect(after.logGone, 'log splintered').toBe(true);
+    expect(after.capsule, 'capsule removed').toBe(false);
+    expect(after.remains, 'a new remain landed (boulder rubble)').toBeGreaterThan(before.n0);
+    expect(after.sigBaked, 'chunk layer re-signed after the splinter (log no longer baked in)').toBe(after.sigNow);
+    expect(after.dirty).toBe(false);
+    expect(after.rebuilds, 'chunk layer rebuilt after the event').toBeGreaterThan(before.rebuilds0);
+  });
+});
