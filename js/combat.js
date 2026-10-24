@@ -35,11 +35,11 @@ let hitStopTimer = 0;
 let _hitStopReadyAt = 0;
 function addHitStop(sec) {
   if (hitStopTimer > 0) return;
-  if (_hitStopReadyAt - gameTime > HIT_STOP_COOLDOWN) _hitStopReadyAt = 0; // new round: gameTime reset
   if (gameTime < _hitStopReadyAt) return;
   hitStopTimer = Math.min(HIT_STOP_MAX, sec);
   _hitStopReadyAt = gameTime + HIT_STOP_COOLDOWN;
 }
+// resetRound() calls this (gameTime restarts at 0, so the cooldown must too)
 function resetHitStop() { hitStopTimer = 0; _hitStopReadyAt = 0; }
 
 // Damage sources (decide death style: corpse, gibs, disintegration)
