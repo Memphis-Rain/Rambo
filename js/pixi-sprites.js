@@ -202,6 +202,7 @@ function initPixiSprites() {
       for (const c of _sp.dec.chunks) _spDestroy(c.g);
       for (const g of _sp.dec.freeG) _spDestroy(g);
       _spDestroy(_sp.dec.recent);
+      _spDestroy(_sp.dec.grow);
     }
   }
   _sp.sprites = []; _sp.spriteN = 0; _sp.spritePrev = 0;
@@ -1907,13 +1908,27 @@ function _spDecalInit() {
   const recent = new PIXI.Graphics();
   recent.zIndex = SP_Z_DECAL_RECENT;
   worldContainer.addChild(recent);
+  const grow = new PIXI.Graphics();
+  grow.zIndex = SP_Z_DECAL_RECENT;
+  worldContainer.addChild(grow);
   _sp.dec = {
     gen: (_sp.dec ? _sp.dec.gen : 0) + 1,
     head: 0, len: 0, front: null, frontSeed: 0,
     version: -1, sealedEnd: 0,
-    chunks: [], freeG: [], recent: recent,
+    chunks: [], freeG: [], recent: recent, grow: grow,
     rebuilds: 0,
   };
+}
+
+// Test hook (P4/G4): decal layers and their draw count right now
+function decalStats() {
+  const D = _sp.dec;
+  if (!D) return { chunks: 0, dynamic: 0, draws: 0 };
+  let chunks = 0;
+  for (const c of D.chunks) if (c.g.visible !== false) chunks++;
+  // recent + grow layers; an empty Graphics issues no draw
+  const dynamic = (D.recent.context.instructions.length ? 1 : 0) + (D.grow.context.instructions.length ? 1 : 0);
+  return { chunks, dynamic, draws: chunks + dynamic };
 }
 
 function _spDecChunkG() {
@@ -1929,21 +1944,24 @@ function _spDecChunkG() {
   return g;
 }
 
+// P4: chunks and the recent layer draw SETTLED decals only; still-growing
+// pools are drawn by the dynamic grow layer, so they never block merging
 function _spDecDrawRange(g, from, to) {
   const D = _sp.dec;
   for (let v = from; v < to; v++) {
     const d = bloodPools[v - D.head];
-    if (d) _spDrawDecal(g, d);
+    if (d && !d.growing) _spDrawDecal(g, d);
   }
 }
 
-// Sum of visual size steps of still-growing decals in a chunk (-1: none growing)
+// Number of still-growing decals in a chunk (-1: none). When it changes, a
+// pool settled and must now be baked into the chunk.
 function _spDecGrowSig(from, to) {
   const D = _sp.dec;
   let sig = -1;
   for (let v = from; v < to; v++) {
     const d = bloodPools[v - D.head];
-    if (d && d.growing) sig = (sig < 0 ? 0 : sig) + 1 + Math.floor(d.radius / 3);
+    if (d && d.growing) sig = (sig < 0 ? 0 : sig) + 1;
   }
   return sig;
 }
@@ -1962,6 +1980,7 @@ function _spDecalReset() {
   D.gen++;
   D.head = 0; D.len = 0; D.front = null; D.frontSeed = 0; D.sealedEnd = 0;
   D.recent.clear();
+  D.grow.clear();
   D.version = -1;
 }
 
@@ -2013,11 +2032,13 @@ function _spRenderDecals() {
     if (D.sealedEnd < head) D.sealedEnd = head;
   }
 
-  // small chunks holding still-growing pools: redraw only when a size step changed
-  for (let i = 0; i < D.chunks.length; i++) {
+  // chunks whose growing pools settled: bake them in (<= 2 rebuilds per frame;
+  // the rest are picked up on later frames since their signature still differs)
+  let settleBudget = 2;
+  for (let i = 0; i < D.chunks.length && settleBudget > 0; i++) {
     const c = D.chunks[i];
     if (c.sig < 0) continue;
-    if (_spDecGrowSig(c.start, c.end) !== c.sig) _spDecBuildChunk(c);
+    if (_spDecGrowSig(c.start, c.end) !== c.sig) { _spDecBuildChunk(c); settleBudget--; }
   }
 
   // seal the oldest recent decals into small chunks
@@ -2034,7 +2055,7 @@ function _spRenderDecals() {
       const c = D.chunks[i];
       // Big chunks start on a 256-decal boundary so addDecal's 256-aligned
       // recycling drops whole chunks instead of cutting (and rebuilding) one
-      if (!c.big && c.sig < 0 && (run > 0 || c.start % (SP_DEC_SMALL * SP_DEC_MERGE) === 0)) {
+      if (!c.big && (run > 0 || c.start % (SP_DEC_SMALL * SP_DEC_MERGE) === 0)) {
         if (run === 0) runStart = i;
         run++;
         if (run === SP_DEC_MERGE) { found = runStart; break; }
@@ -2051,6 +2072,12 @@ function _spRenderDecals() {
   // recent layer
   D.recent.clear();
   _spDecDrawRange(D.recent, D.sealedEnd, end);
+  // dynamic grow layer: every still-growing pool at its current size
+  D.grow.clear();
+  for (let i = 0; i < _growingDecals.length; i++) {
+    const d = _growingDecals[i];
+    if (d.growing) _spDrawDecal(D.grow, d);
+  }
   D.version = decalVersion;
 }
 
