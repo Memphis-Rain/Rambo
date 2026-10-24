@@ -199,67 +199,67 @@ test.describe('T11 attract mode', () => {
     expect(all, 'D5: bottom prompt').toMatch(/PRESS ANY KEY OR CLICK TO PLAY/);
   });
 
-  test('B6: the bot does not oscillate while its target sits just off-screen', async ({ game }, testInfo) => {
-    test.skip(!LANDED.B6M, 'B6 metric thresholds pending a decision (tests/milestones.js)');
-    test.setTimeout(150_000);
+  // D3a bar (spec ca242e3), over 3 x 30 s demo runs at wave 10. KILLS_BASELINE is the
+  // kill rate of the pre-D3a bot (87a27f1), measured with this same scenario.
+  const KILLS_BASELINE = Number(process.env.D3A_KILLS_BASELINE || 1.06); // kills per game-second, 87a27f1 (measured 1.06-1.07)
+
+  test('D3a/B6: the demo bot reads as deliberate (few reversals, no jitter in place, kill rate kept)', async ({ game }, testInfo) => {
+    test.skip(!LANDED.D3A && !process.env.D3A_MEASURE, 'D3A not landed (tests/milestones.js)');
+    test.setTimeout(180_000);
     await bootTitle(game, 1e9);
     const runs = [];
     for (let run = 0; run < 3; run++) {
       await game.eval(() => { CFG.DEMO_MAX_SECONDS = 1e9; startDemo(); });
       runs.push(await game.eval((seconds) => new Promise((resolve) => {
-        // Sample the bot's movement keys every frame. A reversal is a new direction
-        // pointing against the last non-zero direction (dot < 0) within 0.4 s.
-        const dirOf = () => {
-          const x = (keys.d ? 1 : 0) - (keys.a ? 1 : 0), y = (keys.s ? 1 : 0) - (keys.w ? 1 : 0);
-          return x || y ? { x, y, t: performance.now() / 1000 } : null;
-        };
-        let last = null, start = null, offTime = 0, prevT = null;
-        const reversals = [], offReversals = [];
-        const offscreenTarget = () => {
-          const id = demoState().targetId;
-          const e = id >= 0 && enemies.find((en) => en._demoId === id);
-          if (!e) return false;
-          const sp = toScreen(e.x, e.y);
-          const x = sp.x + worldOffsetX, y = sp.y + worldOffsetY, m = 150;
-          const out = x < 0 || y < 0 || x > W || y > H;
-          return out && x > -m && y > -m && x < W + m && y < H + m;
-        };
-        const tick = () => {
-          const now = performance.now() / 1000;
+        const samples = [];
+        let start = null;
+        const kills0 = kills, gt0 = gameTime;
+        const tick = (now) => {
           if (start === null) start = now;
-          const off = offscreenTarget();
-          if (off && prevT !== null) offTime += now - prevT;
-          prevT = now;
-          const d = dirOf();
-          if (d) {
-            if (last && d.x * last.x + d.y * last.y < 0 && d.t - last.t < 0.4) {
-              reversals.push(d.t);
-              if (off) offReversals.push(d.t);
-            }
-            last = d;
-          }
-          if (now - start < seconds && demoState().active) requestAnimationFrame(tick);
+          const x = (keys.d ? 1 : 0) - (keys.a ? 1 : 0), y = (keys.s ? 1 : 0) - (keys.w ? 1 : 0);
+          samples.push({ t: (now - start) / 1000, x, y, px: player.x, py: player.y, dodge: !!player.dodging });
+          if (now - start < seconds * 1000 && demoState().active) requestAnimationFrame(tick);
           else {
-            // Oscillation window: 3+ reversals within 1 s.
-            const windows = reversals.filter((t, i) => i >= 2 && t - reversals[i - 2] <= 1).length;
-            resolve({ secs: now - start, reversals: reversals.length, offTime, offReversals: offReversals.length, windows });
+            // Reversal: a new direction against the last non-zero one (dot < 0) within 0.4 s.
+            const rev = [];
+            let last = null;
+            for (const q of samples) {
+              if (!q.x && !q.y) continue;
+              if (last && q.x * last.x + q.y * last.y < 0 && q.t - last.t < 0.4) rev.push(q.t);
+              last = q;
+            }
+            // Jitter in place: >= 3 reversals within 1 s, net/path displacement < 0.3, no dodge in that second.
+            let jitter = 0, lastWindowEnd = -1;
+            for (let k = 2; k < rev.length; k++) {
+              if (rev[k] - rev[k - 2] > 1 || rev[k - 2] < lastWindowEnd) continue;
+              const w = samples.filter((q) => q.t >= rev[k - 2] && q.t <= rev[k]);
+              let path = 0;
+              for (let m = 1; m < w.length; m++) path += Math.hypot(w[m].px - w[m - 1].px, w[m].py - w[m - 1].py);
+              const net = Math.hypot(w[w.length - 1].px - w[0].px, w[w.length - 1].py - w[0].py);
+              if (!w.some((q) => q.dodge) && path > 0 && net / path < 0.3) { jitter++; lastWindowEnd = rev[k]; }
+            }
+            resolve({ secs: samples[samples.length - 1].t, gameSecs: gameTime - gt0, reversals: rev.length, jitter, kills: kills - kills0 });
           }
         };
         requestAnimationFrame(tick);
       }), 30));
       await game.eval(() => stopDemo());
     }
-    const total = runs.reduce((a, r) => ({ secs: a.secs + r.secs, reversals: a.reversals + r.reversals,
-      offTime: a.offTime + r.offTime, offReversals: a.offReversals + r.offReversals, windows: a.windows + r.windows }),
-    { secs: 0, reversals: 0, offTime: 0, offReversals: 0, windows: 0 });
-    const summary = `secs=${total.secs.toFixed(1)} reversals=${total.reversals} (${(total.reversals / total.secs).toFixed(2)}/s) targetJustOffscreen=${total.offTime.toFixed(1)}s reversalsThen=${total.offReversals} oscillationWindows=${total.windows}`;
-    console.log(`[B6] ${summary}`);
-    testInfo.annotations.push({ type: 'B6', description: summary });
-    expect(total.windows, 'B6: no 3-reversals-in-1-s oscillation windows').toBeLessThanOrEqual(1);
-    if (total.offTime > 2) {
-      expect(total.offReversals / total.offTime, 'B6: reversals/s while the target is just off-screen').toBeLessThan(0.5);
+    const sum = (k) => runs.reduce((a, r) => a + r[k], 0);
+    // Kill rate per game-second, so a slow software-GL frame rate doesn't skew it.
+    const secs = sum('secs'), revRate = sum('reversals') / secs, jitter = sum('jitter'), killRate = sum('kills') / sum('gameSecs');
+    const summary = `secs=${secs.toFixed(1)} reversals=${sum('reversals')} (${revRate.toFixed(2)}/s) jitterWindows=${jitter} kills=${sum('kills')} (${killRate.toFixed(2)}/game-s, baseline ${KILLS_BASELINE || 'n/a'})`;
+    console.log(`[D3a] ${summary}`);
+    testInfo.annotations.push({ type: 'D3a', description: summary });
+    expect(revRate, 'D3a: average reversals per second').toBeLessThanOrEqual(0.8);
+    expect(jitter, 'D3a: jitter-in-place windows per 90 s').toBeLessThanOrEqual(3);
+    // D3a (b): a 90 s sample has ~±10% Poisson noise, so fail only when the rate is
+    // significantly below 90% of baseline (rate + 2 standard errors < bar). The plain
+    // >= 90% bar over 5 x 60 s runs in the manual `npm run perf:demo`.
+    if (KILLS_BASELINE) {
+      const upper = killRate + (2 * Math.sqrt(sum('kills'))) / sum('gameSecs');
+      expect(upper, `D3a: kill rate ${killRate.toFixed(3)} (+2 SE = ${upper.toFixed(3)}) vs 90% of ${KILLS_BASELINE}`).toBeGreaterThanOrEqual(0.9 * KILLS_BASELINE);
     }
-    expect(total.reversals / total.secs, 'B6: overall reversal rate').toBeLessThan(0.5);
   });
 });
 

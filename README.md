@@ -99,6 +99,8 @@ npx playwright install chromium  # once, for the e2e tests
 | `npm test` | Unit tests (Vitest). `tests/helpers/load-game.js` evaluates the game scripts in `node:vm` with PIXI/DOM stubs, so game logic runs without a browser. |
 | `npm run test:watch` | Unit tests in watch mode |
 | `npm run test:e2e` | Browser tests (Playwright, Chromium). Starts its own dev server on port 5173 (override with `PW_PORT=5174`; it never reuses a server that's already running) and fails on any console error. Screenshots go to `playwright-report/`; view them with `npx playwright show-report`. |
+| `npm run perf:sustained -- --gpu` | Manual Q2a check on a real GPU: 5 minutes of heavy gore at 1920x1080, then a JSON report in `test-results/` (sustained median, time below 60 fps, CPU budget). Without `--gpu` it uses software WebGL, which gives relative numbers only. |
+| `npm run perf:demo` | Manual D3a check: demo kill rate over 5 x 60 s against the baseline (needs ≥ 90%), with a JSON report in `test-results/`. |
 | `npm run lint` | ESLint. Catches undefined and unused variables, not style. Cross-file globals are read from each `js/*.js` file's top-level declarations, so new globals need no config change. |
 
 Test names start with their ID from `docs/SPEC.md` (e.g. `T3: ...`, `R6/R7: ...`). Tests for features that haven't landed yet are skipped until their hooks exist. In e2e, `PERF_MIN_FPS` (default 50) sets the fps bar for the T6 perf test; it is only enforced on a hardware GPU.
