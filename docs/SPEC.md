@@ -52,7 +52,8 @@ The primary sessions keep their context for coordination and decisions:
 - **Q1.** No uncaught errors or `console.error` from boot through 60 s of play. Allowed noise: the `favicon.ico` 404 and `[RAMBO PERF]` warnings during the first second.
 - **Q2.** Performance: with 40+ enemies on screen and heavy gore, the F4 dump shows a CPU frame time under 12 ms on the dev machine, and the game holds 60 fps.
   - **Q2a. Definition (Ralph, after Anna's perf pass).** "CPU frame time" means **all main-thread JS per displayed frame**: update, sprite/HUD build, the retro RT pass and `app.render`/submit. `perfLog.totalCpuMs` and F4 must measure exactly that.
-  - Budget on the reference machine (RTX 5090, 1920×1080, DPR 1):
+  - Budget on the reference machine (RTX 5090, 1920×1080, DPR 1), **measured pinned to CCD0** per the P1(b) protocol. Unpinned numbers are recorded as informational.
+  - The remaining render cost is Pixi per-object work for ~2,400 visible objects. A particle/puppet atlas pass is deferred as **P5 (future)** and is out of scope now.
     - 40 enemies + continuous gore: median ≤ 8 ms, p99 ≤ 16.7 ms.
     - 80 enemies + gore: p99 ≤ 16.7 ms.
   - **Sustained:** over a 5-minute gore session, the median at minute 5 is within 15% of the median at minute 0.5, and fps never sits below 60 for more than 1 s.
@@ -202,6 +203,8 @@ Because of M1, art must read at 1/3 resolution:
   - **P1 decision (Ralph):**
     - (a) **Fix the biggest real cost anyway.** `renderPixiWaterOverlay` rebuilds ~3300 rects every frame (~3.7 ms of the 5.0 ms late-state total). Bake the camo per chunk once, and animate the drift with a stepped tiling or texture offset (≤ 10 Hz).
       - Target: water overlay ≤ 0.3 ms per frame, and totalCpuMs (40 + gore) median ≤ 3 ms **unpinned** at minute 2.
+      - **Corrected (Ralph):** the 3 ms figure came from pre-P2 accounting, which excluded the render pass. It now applies to `buildMs + updateMs` only, and is met at ~2.0 ms. Render-inclusive cost is governed by Q2a.
+      - **Result:** the overlay costs 0.01 ms per frame.
       - That makes the scheduler's slow-CCD penalty irrelevant on real machines.
     - (b) **Measurement protocol (Q2a):**
       - Sustained-ratio runs on the reference machine pin the browser to CCD0 (`ProcessorAffinity = 0xFFFF` after launch). They also record an unpinned run, which is informational.
