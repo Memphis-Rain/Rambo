@@ -27,7 +27,8 @@ function place(type, x, y) {
   g.envObjects.push(o);
   return o;
 }
-const hp = (o) => g.envState(o.id).hp;
+// Trunk HP is its own field; envState().hp stays the E2 blast HP (Josh).
+const hp = (o) => g.envState(o.id).trunkHp;
 const felled = (o) => ['falling', 'fallen'].includes(g.envState(o.id).state);
 const weaponIdx = (name) => g.WEAPONS.findIndex((w) => w.name === name);
 
@@ -67,7 +68,10 @@ function shootAt(name, wx, wy) {
 
 describe('E13 trunk HP', () => {
   test.skipIf(todo)('E13: trunk HP is 900 / 750 / 300 for tree / pine / dead tree', () => {
-    expect([hp(place('tree', 200, 0)), hp(place('pine', 200, 100)), hp(place('deadtree', 200, -100))]).toEqual([900, 750, 300]);
+    const ts = [place('tree', 200, 0), place('pine', 200, 100), place('deadtree', 200, -100)];
+    expect(ts.map(hp)).toEqual([900, 750, 300]);
+    expect(ts.map((o) => g.envState(o.id).trunkMax)).toEqual([900, 750, 300]);
+    expect(g.envState(ts[0].id).hp, 'E2 blast HP unchanged').toBe(100);
   });
 
   test.skipIf(todo)('E13: a non-pierce round stopped by a trunk applies its dmg; a pierce round x0.5 and passes', () => {
@@ -123,7 +127,7 @@ describe('E13 felling by sustained fire', () => {
 
   test.skipIf(todo)('E13: a notch shows once trunk HP is <= 50%', () => {
     const t = place('tree', 200, 0);
-    const notch = () => { const s = g.envState(t.id); return !!(s.notch ?? s.notchSide); };
+    const notch = () => g.envState(t.id).notch === true;
     while (hp(t) > 0.55 * 900) shootAt('M16', t.x, t.y);
     expect(notch(), 'no notch above 50%').toBe(false);
     while (hp(t) > 0.5 * 900) shootAt('M16', t.x, t.y);
