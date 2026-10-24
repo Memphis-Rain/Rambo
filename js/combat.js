@@ -185,10 +185,11 @@ function updatePlayer(dt) {
   const sp = toScreen(p.x, p.y);
   let smx = mouseX - ox - sp.x;
   let smy = mouseY - oy - sp.y;
-  if (_aimPicked) { // G13: point the gun where the shot goes (the picked torso)
+  if (_aimPicked) { // G13: point the gun where the shot goes (the picked torso),
+    // measured from the gun hand's height (8 art px up), not the feet
     const e = _aimPicked;
     smx = (e.x - e.y) - sp.x;
-    smy = (e.x + e.y) * CFG.ISO_SCALE - ENEMY_PICK_H * 0.45 * e.size - sp.y;
+    smy = (e.x + e.y) * CFG.ISO_SCALE - ENEMY_PICK_H * 0.45 * e.size - (sp.y - PLAYER_HAND_H);
   }
   p.angle = Math.atan2(smy, smx);
 
@@ -1060,7 +1061,8 @@ function hitBarrel(obj, dmg, byPlayer = true) {
 // (-h / (2 ISO), -h / (2 ISO)), i.e. k along both axes.
 // Column heights (the round cap adds ~0.78 r of screen height on top) and
 // the drawn sprite height used for cursor picking (head top + hat).
-const ENEMY_BODY_H = 36, PLAYER_BODY_H = 34, ENEMY_PICK_H = 48;
+const ENEMY_BODY_H = 36, PLAYER_BODY_H = 34, ENEMY_PICK_H = 48,
+  PLAYER_HAND_H = 24; // gun hand height above the feet (screen units)
 function bodyColumnK(h) { return h / (2 * CFG.ISO_SCALE); }
 
 // G13: front-most enemy whose drawn body contains screen point (sx, sy)
