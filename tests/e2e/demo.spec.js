@@ -50,6 +50,8 @@ test.describe('T11 attract mode', () => {
     await waitForDemo(game, true, 10_000);
     await page.keyboard.press('x');
     await waitForDemo(game, false, 2_000);
+    // The D6 loop would legitimately restart the demo after 1 s idle; stop that here.
+    await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1e9; });
     await expect(page.locator('#start-screen')).toBeVisible();
     await expect(page.locator('#start-btn')).toBeVisible();
     // The exit input must not also start a real game.
@@ -64,6 +66,7 @@ test.describe('T11 attract mode', () => {
     const { W: w, H: h } = await game.eval(() => ({ W, H }));
     await page.mouse.click(w / 2, h - 40);
     await waitForDemo(game, false, 2_000);
+    await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1e9; });
     await page.waitForTimeout(500);
     await expect(page.locator('#start-screen')).toBeVisible();
   });
