@@ -35,6 +35,42 @@ const CFG = {
   SHAKE_MAX: 20, // J5a: screen px; addShake clamps to this
   // Physical environment (M8)
   ENV_TREE_DENSITY: 1.26, // E1: x original tree counts (= ~+30% placed trees)
+  // E2-E8 blast response; f = 1 - d/R for an object at distance d from a blast of radius R
+  MAX_DEBRIS: 300,             // E8: flying debris pieces (oldest settle + bake first)
+  ENV_ACTIVE_MAX: 64,          // E8: objects simulated at once (the rest sleep / queue)
+  ENV_SCORCH_F: 0.35,          // f above which a canopy scorches one step (max 3)
+  ENV_TOPPLE_F: 0.6,           // f above which a tree/pine topples
+  ENV_DEADTREE_TOPPLE_F: 0.4,  // dead trees snap more easily
+  ENV_BREAK_F: 0.3,            // crates/sandbags break above this f
+  ENV_CRACK_F: 0.6,            // boulders/ruins crack above this f
+  ENV_SHATTER_F: 0.3,          // ...and shatter into rubble above this f under a BFG
+  ENV_BFG_RADIUS: 250,         // blasts this big count as BFG (shatter rock)
+  ENV_BLAST_DMG: 100,          // hp an object loses per blast = f * this (cumulative topple)
+  ENV_TREE_HP: 100,
+  ENV_DEADTREE_HP: 60,
+  ENV_BUSH_HP: 60,
+  ENV_CRATE_HP: 60,            // also takes bullet damage
+  ENV_SANDBAG_HP: 150,
+  ENV_FALL_ENEMY_DMG: 120,     // E6: once, when the trunk lands
+  ENV_FALL_PLAYER_DMG: 40,
+  ENV_FALL_MIN: 0.6,           // topple duration range (s)
+  ENV_FALL_MAX: 0.9,
+  ENV_FALL_SHAKE: 6,           // landing shake (J5a cap still applies)
+  ENV_LOG_LEN: 0.8,            // E5: log length = tree height x this (world units)
+  ENV_LOG_R: 7,                // log capsule radius (blocks movement, not bullets)
+  ENV_STUMP_R: 5,              // stump circle (blocks movement and bullets)
+  ENV_DEADTREE_R: 5,           // dead-tree trunk circle
+  ENV_CRATE_R: 10,             // crate circle (until destroyed)
+  ENV_SANDBAG_RF: 0.4,         // sandbag circle = width x this
+  ENV_SWAY_IMPULSE: 3,         // rad/s of lean velocity at f = 1
+  ENV_BULLET_SWAY: 0.3,        // rad/s per bullet hit on a trunk
+  ENV_SWAY_K: 56,              // sway spring stiffness (~1.2 Hz)
+  ENV_SWAY_DAMP: 5.2,          // sway damping (settles in ~1.5 s)
+  ENV_LEAF_BURST: 16,          // leaves at f = 1
+  ENV_SHOCK_SPEED: 1500,       // topple start delay = distance / this (s)
+  ENV_TOPPLE_STAGGER: 0.035,   // E8: extra delay per topple started in the same frame (s)
+  ENV_LAND_PER_FRAME: 3,       // E8: trunk landings processed per frame
+  ENV_BAKE_DELAY: 0.25,        // landed log rests this long before baking (s)
   WATER_CAMO_ALPHA_SCALE: 3.0, // W1 (Ralph: 3.0): water camo block alpha (1 = as designed; higher -> opaque). Baked: call rebakeWaterCamo()
   // Attract-mode demo (M6)
   DEMO_IDLE_SECONDS: 5,

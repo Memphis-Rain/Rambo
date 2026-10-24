@@ -102,6 +102,10 @@ const OPT_DUST = { friction: 0.9, shrink: false, grow: true, growRate: 6, fadeSt
 // =====================================================================
 const DECAL_POOL = 0, DECAL_SPLAT = 1, DECAL_SCORCH = 2, DECAL_FOOT = 3,
       DECAL_SMEAR = 4, DECAL_GIB = 5, DECAL_ASH = 6;
+// M8 environment (envphys.js): settled debris and felled trees. See the data
+// contract at the top of envphys.js for the extra fields STUMP/LOG carry.
+const DECAL_WOOD = 7, DECAL_RUBBLE = 8, DECAL_SAND = 9, DECAL_LEAF = 10,
+      DECAL_STUMP = 11, DECAL_LOG = 12;
 let decalVersion = 0;          // bumped whenever the decal set's visuals change
 const _growingDecals = [];
 const _decalFree = [];
@@ -112,7 +116,7 @@ function addDecal(kind, x, y, size, color, angle=0, maxSize=0, color2=0) {
     // multiple of 256 = the renderer's baked chunk size (32 x 8), so whole
     // chunks drop instead of a partly-emptied one being rebuilt (B10)
     const removed = bloodPools.splice(0, Math.min(bloodPools.length, Math.max(256, (CFG.MAX_BLOOD_POOLS >> 3) & ~255)));
-    for (const d of removed) { d.growing = false; d._inGrow = false; _decalFree.push(d); }
+    for (const d of removed) { d.growing = false; d._inGrow = false; d.envId = ''; _decalFree.push(d); }
     // B4: recycled decals must not linger in the growing list
     let w = 0;
     for (const d of _growingDecals) if (d._inGrow) _growingDecals[w++] = d;
@@ -122,6 +126,7 @@ function addDecal(kind, x, y, size, color, angle=0, maxSize=0, color2=0) {
   d.kind = kind; d.x = x; d.y = y;
   d.radius = size; d.maxRadius = Math.max(size, maxSize);
   d.color = color; d.color2 = color2; d.angle = angle;
+  d.envId = ''; // envphys.js tags its stump/log decals (E7 re-bake check)
   d.seed = (Math.random() * 0x7fffffff) | 0;
   d.createdAt = gameTime;
   d.alpha = 1;
@@ -222,7 +227,9 @@ function spawnBloodDrip(x, y, z) {
 // =====================================================================
 // EXPLOSIONS (J1-J3, J5)
 // =====================================================================
-function spawnExplosion(x, y, radius=80) {
+// byPlayer / src: who caused it and with what (M8: the environment reacts,
+// and trees felled by a player's explosion credit the player, E6)
+function spawnExplosion(x, y, radius=80, byPlayer=false, src=SRC_EXPLOSIVE) {
   const k = radius / 80;
   // White core flash (two frames)
   spawnParticle(x, y, 0, 0, 0.035, radius * 0.45, 0xffffff, 'flash', OPT_FLASH, 10, 0);
@@ -274,6 +281,8 @@ function spawnExplosion(x, y, radius=80) {
   addShake(Math.min(16, 3 + radius * 0.06));
   if (radius >= 100) addHitStop(radius >= 200 ? 0.06 : 0.04);
   playSound(radius > 150 ? 'big_explosion' : 'explosion', Math.min(1, radius / 100));
+  // Trees sway/scorch/topple, crates break, rocks crack (M8 E2/E4)
+  if (typeof envBlast === 'function') envBlast(x, y, radius, byPlayer, src);
 }
 
 // =====================================================================

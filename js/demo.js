@@ -223,7 +223,7 @@ function _demoAimAt(wx, wy) {
 }
 
 // Per-frame scratch storage (the bot allocates nothing per frame)
-const _demoNearE = [], _demoNearD = [], _demoObs = [];
+const _demoNearE = [], _demoNearD = [], _demoObs = [], _demoLogs = [];
 const _demoAim = { x: 0, y: 0 };
 const _demoPhys = new Float32Array(8);   // per-move water/obstacle penalty (D3a)
 const _demoScores = new Float32Array(8); // per-move total score this frame
@@ -409,6 +409,14 @@ function _demoBot(dt) {
     if (dx > 170 || dx < -170 || dy > 170 || dy < -170) continue;
     _demoObs[obsN++] = o;
   }
+  // E5: fallen-log capsules near us are obstacles too
+  let logN = 0;
+  for (let i = 0; i < envLogs.length; i++) {
+    const r = envLogs[i];
+    const m = 170 + r.logLen;
+    if (r.x - p.x > m || p.x - r.x > m || r.y - p.y > m || p.y - r.y > m) continue;
+    _demoLogs[logN++] = r;
+  }
 
   let bestM = -1, bestScore = -Infinity, curScore = -Infinity;
   for (let mi = 0; mi < moves.length; mi++) {
@@ -447,6 +455,14 @@ function _demoBot(dt) {
           const toward = (m.dx * (o.x - p.x) + m.dy * (o.y - p.y)) / d;
           if (toward > 0) sc -= 1.2 * (1 - d / 160) * toward;
         }
+      }
+    }
+    for (let li = 0; li < logN; li++) {
+      const r = _demoLogs[li];
+      const rr = r.logR + 16;
+      for (let step = 22; step <= 66; step += 22) {
+        const d2 = envSegDist2(p.x + m.dx * step, p.y + m.dy * step, r);
+        if (d2 < rr * rr) { sc -= 1.5 * (1 - Math.sqrt(d2) / rr) * 2 * (88 - step) / 66; break; }
       }
     }
     _demoPhys[mi] = sc - sc0; // water + obstacle penalty of this move
