@@ -376,6 +376,141 @@ Classic 90s arcade behaviour: if nobody touches the game on the title screen for
 
 ---
 
+## M9: Water, fire & grenades (Josh) *(user request 2026-10-24)*
+
+User: "when enemy or player enters water, only half the body should be visible (legs in water); blood over the water and dead bodies should sink and dissolve, and the water should turn progressively red as more blood mixes in… I like the bloody footprints… add grenades on F… intensive shooting into trees should cut the tree down… replace the electric gun with a flamethrower (burning trees, and burning enemies running in panic)."
+
+- Q4 is waived for M9 items only.
+- Q2a, P1(a) (buildMs ≤ 3) and the sustained ratio ≤ 1.15 still apply.
+- Every M9 item gets its own LANDED flag.
+- Keep the 90s look: colour changes are **stepped and dithered**, with no smooth alpha gradients. Same rule as J1.
+
+### Water
+
+- **W2. Wading.**
+  - An entity whose ground position is on a rendered water tile (the same tile test as the water slowdown in combat.js) is drawn **submerged**: the lower 45% of its drawn body is hidden below a waterline. Entities are the player, all 12 enemy types and bosses.
+  - At the waterline: a 1–2 px light ripple ellipse that animates (2–3 frames). Moving entities also leave a V-shaped wake of fading ripple pixels.
+  - Depth ramps over ~0.25 s on entering and leaving, so the waterline never pops. The ground shadow is hidden while submerged.
+  - Implementation: crop the sprite or texture frame, or split by draw order. **No per-entity masks or filters**, because of the P-series budget.
+  - Gameplay: movement and collision don't change.
+    - G13 aim picking uses the **visible** bounds only.
+    - The G13 body column is shortened to match: hits below the waterline go into the water and make a splash, not a hit.
+    - The foot circle shrinks to keep things fair: hits register if the path crosses the visible column or the foot circle's waterline ring at r × 0.6. Josh proposes the exact geometry; Anna verifies "aim at the visible torso/head → hit".
+- **W3. Blood in water.**
+  - Blood particles, drips and gibs that land on a water tile make **no ground decal**. Each one makes a **blood cloud** instead: a dithered red blob that expands to ~2× over 4 s and fades in steps over ~8 s, drifting slightly.
+  - G7 bloody footprints are **kept unchanged on land** (the user likes them).
+  - Footprints never print on water, and wading **washes the feet**: leaving water resets the footprint timer.
+- **W4. Bodies sink and dissolve.**
+  - A corpse whose ground position is in water floats for ~0.5 s, then sinks over ~2.5 s (its waterline rises to cover it), then dissolves in a dither-fade over ~1.5 s, releasing a big blood cloud and a few bubbles.
+  - Gibs in water sink over ~1 s.
+  - Corpses in water are **never baked** into the chunk.
+  - Corpse-count limits still apply.
+- **W5. Water reddens with blood.**
+  - Each water tile has a blood concentration c ∈ [0, 1]. Events add to the tiles nearby, with linear falloff:
+    - hit: +0.02 within 1 tile;
+    - gib: +0.05 within 2 tiles;
+    - corpse dissolve or kill: +0.15 within 3 tiles.
+  - Concentration slowly diffuses into connected neighbouring water tiles and decays with a **half-life of 180 s**.
+  - Rendering:
+    - A tint overlay from water colour towards dark blood red, drawn in **4 discrete bands**, dithered, up to ~75% coverage at c = 1.
+    - A pond after a big fight should read as clearly red.
+  - Performance:
+    - Updates run at ≤ 4 Hz and only for dirty tiles.
+    - The baked water camo (P-series) must **not** be rebaked per frame; use an overlay layer.
+    - Tiles with c < 0.02 are pruned.
+  - State is per tile key for the session; `resetRound` clears it.
+
+### Grenades
+
+- **N1. Grenades on F (new; none exist today).**
+  - Press F to throw a grenade toward the cursor's ground point (Q5 mapping, so G13 picking is irrelevant here). Max range is 420u; farther targets clamp.
+  - Flight:
+    - A visible arc with a z-height of ~0.3 × distance and a flight time of 0.6–0.9 s, with a spinning 2–3 frame pixel sprite and a shadow.
+    - On landing it bounces once or twice with friction, and trunks, crates and obstacles bounce it.
+  - The fuse is **1.8 s from the throw**, and a blinking red pixel shows in the last 0.6 s.
+  - Explosion:
+    - Damage 200, radius 140, through the same explosion path as the RPG: splash falloff, J1 fireball, J2 scorch, J3 debris, envBlast (trees react, E2), and the same self-damage rule as the RPG.
+    - In water it sinks and blows a **water geyser** (a white and blue column, a ring of ripples and spray) with radius × 0.7, no scorch, and W5 is unaffected.
+  - Ammo:
+    - 3 at round start, max 6, plus 1 at each wave start.
+    - Enemies drop a grenade pickup with 6% chance.
+    - Throw cooldown 0.5 s.
+  - HUD: grenade icons next to the ammo (H-series style).
+  - Demo bot: throws when ≥ 4 enemies are within 140u of a point inside the throw range and the player is outside that radius; at most once per 4 s.
+  - Audio: a pin/throw click, bounce ticks, the boom (reuse the RPG boom pitched up), and a muffled boom for the geyser.
+
+### Trees
+
+- **E13. Sustained fire cuts trees down.** This supersedes the E3 line "small arms never fell trees".
+  - Each tree has trunk HP: tree 900, pine 750, dead tree 300.
+  - A non-pierce bullet stopped by a trunk applies its dmg. A pierce round passing through applies dmg × 0.5. Explosions add their damage too, with the E2 thresholds still on top.
+  - Visuals:
+    - Bark chips (E3) grow denser as HP drops.
+    - At ≤ 50% HP a pixel **notch** appears on the trunk side facing the dominant shot direction.
+  - At 0 HP the tree **topples away from the dominant recent shot direction**, using the E2 topple, E6 falling damage and kill credit, E10 remains and E7 persistence.
+  - Rough timings, for reference only: a minigun fells a tree in ~3–5 s of sustained fire, an M16 in ~4 s, and a pistol needs ~9 s.
+  - Trunk HP persists with E7.
+
+### Flamethrower
+
+- **F1. Flamethrower replaces Tesla.**
+  - Slot 7 and unlock 25000 don't change. Tesla chain lightning is removed, along with its sound and HUD icon.
+  - Stats, which Josh may tune ±20% with evidence:
+    - rate 0.05, contact dmg 10 per tick, fuel mag 100, reload 2.0, infinite ammo, range ~260u.
+  - The stream:
+    - A cone of pixel flame particles (white → yellow → orange → red → smoke bands, J1 palette) with ±0.12 rad spread, that roll and lick and slow down at the end of their range.
+    - It doesn't pierce. A trunk stops the stream, and the trunk catches fire (F3).
+    - It lights a short-lived ground-fire decal where it lands (scorch afterwards, J2).
+  - Heat haze or glow is allowed only if it stays inside the P budget.
+- **F2. Burning enemies panic.**
+  - A flame hit ignites the enemy: **burn DoT 25 dmg/s for 4 s**, refreshed by further hits. Bosses take the DoT but **don't panic**.
+  - Panicking enemies:
+    - stop attacking;
+    - run erratically, changing direction every 0.3–0.7 s and biased away from the player;
+    - flail (a dedicated 2–4 frame animation, with arms up);
+    - trail flames and smoke;
+    - scream (audio, rate-limited).
+  - Touching another enemy for ≥ 0.3 s ignites it with 50% chance (cap: 30 burning at once).
+  - Running into water **extinguishes** the burn instantly, with a steam puff.
+  - Burn death leaves a **charred black corpse** with smoking pixels and an ash puff, plus less blood (stylistic). The G-series gore stays for other deaths.
+  - The player is never ignited in M9.
+- **F3. Burning trees.**
+  - Flame on a trunk or canopy builds heat. At the threshold (~0.8 s of stream) the tree ignites:
+    - canopy flames, embers and smoke for ~6 s;
+    - fire spreads to trees within 90u with 35% chance per second (cap: 24 burning trees);
+    - when it burns out, it leaves a **charred bare tree** (it becomes a dead-tree type with 300 HP, E13, and can fall).
+  - Burning trees damage enemies under the canopy at 10 dmg/s and ignite them (F2).
+  - Burnt state persists (E7) and is baked once static.
+  - Rain and other weather are out of scope.
+- **F4.** Demo bot (D-series): replace the Tesla entry in its weapon table with the flamethrower (preferred range ~180u).
+  - D3a still applies, so Anna re-baselines kills only if the weapon pick changes the mean, with evidence.
+
+### Order and acceptance
+
+- Suggested landing order: N1 → E13 → W2 → W3/W4/W5 → F1–F4. Each step is a separate reviewable SHA, or squashed per sub-milestone.
+- Acceptance (Anna proposes the exact tests; these are the minimum):
+  - **W2:** player and every enemy type in water show ≤ 55% of their drawn body height, and aim at the visible head or torso hits (≥ 95%).
+  - **W3/W5:** blood in water creates no decals; after 20 kills in a pond its tiles reach the ≥ 2nd tint band, and after 180 s idle c has halved (±10%).
+  - **W4:** a corpse in water is fully gone within 5 s, with no baked remains.
+  - **N1:**
+    - F throws; ammo 3/6/+1 per wave.
+    - The fuse is 1.8 s ± 1 frame at 30, 60 and 144 fps.
+    - Damage and falloff match the RPG path.
+    - In water: the geyser and radius × 0.7.
+  - **E13:**
+    - A tree under sustained minigun fire falls within 3–5 s.
+    - It falls away from the shooter (±45°).
+    - The notch shows at ≤ 50% HP.
+    - Persistence survives a chunk reload.
+  - **F1–F3:**
+    - Tesla is gone; slot 7 = Flamethrower.
+    - Ignite → DoT 25/s; non-boss enemies panic; water extinguishes.
+    - A tree ignites after ~0.8 s of stream, spreads, ends charred.
+    - The caps hold.
+  - **Perf:** a sustained fight with 20 burning enemies, 10 burning trees and a red pond stays within Q2a, with buildMs ≤ 3 and a sustained ratio ≤ 1.15.
+
+---
+
 ## T: Dev environment & testing (Anna)
 
 - **T1.** `npm install` works on a clean clone. `node_modules/`, `test-results/` and `playwright-report/` are git-ignored.
