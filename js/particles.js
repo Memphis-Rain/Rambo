@@ -109,7 +109,9 @@ const _decalFree = [];
 function addDecal(kind, x, y, size, color, angle=0, maxSize=0, color2=0) {
   if (bloodPools.length >= CFG.MAX_BLOOD_POOLS) {
     // Recycle the oldest in one chunk so the batched layer rebuilds rarely
-    const removed = bloodPools.splice(0, Math.max(1, CFG.MAX_BLOOD_POOLS >> 3));
+    // Recycle a multiple of 256 = the renderer's baked chunk size (32 x 8), so whole
+    // chunks drop instead of a partly-emptied one being rebuilt (B10)
+    const removed = bloodPools.splice(0, Math.min(bloodPools.length, Math.max(256, (CFG.MAX_BLOOD_POOLS >> 3) & ~255)));
     for (const d of removed) { d.growing = false; _decalFree.push(d); }
   }
   const d = _decalFree.pop() || {};
