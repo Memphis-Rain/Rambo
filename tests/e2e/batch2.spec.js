@@ -171,3 +171,34 @@ test.describe('B7/J5a shake cap', () => {
     expect(hi < 0.2 || lo / hi > 0.8, `30 fps: ${r.at30.toFixed(3)}, 60 fps: ${r.at60.toFixed(3)}`).toBe(true);
   });
 });
+
+test.describe('B8 weapon slots', () => {
+  const visibleSlots = (game) => game.eval(() => hudElements.slotTexts
+    .map((t, i) => ({ i, text: t.text, visible: t.visible !== false && t.worldAlpha !== 0 }))
+    .filter((s) => s.visible));
+
+  test('B8: all 11 weapon slots are shown at 1280 px', async ({ game }) => {
+    await startCalm(game);
+    await game.eval(() => { unlockedWeapons = WEAPONS.length; player.weapon = WEAPONS.length - 1; });
+    await game.advance(0.2);
+    const vis = await visibleSlots(game);
+    expect(vis.map((s) => s.i)).toEqual([...Array(11).keys()]);
+    expect(vis[9].text).toBe('[0]');
+    expect(vis[10].text).toBe('[-]');
+  });
+
+  test('B8: on a narrow screen the slot window scrolls to keep the selected weapon visible', async ({ game, page }) => {
+    await startCalm(game);
+    await page.setViewportSize({ width: 800, height: 600 });
+    await game.eval(() => { unlockedWeapons = WEAPONS.length; });
+    for (const w of [0, 5, 10]) {
+      await game.eval((i) => { player.weapon = i; }, w);
+      await game.advance(0.2);
+      const vis = (await visibleSlots(game)).map((s) => s.i);
+      expect(vis.length, `weapon ${w}: some slots hidden at 800 px`).toBeLessThan(11);
+      expect(vis, `weapon ${w}: selected slot visible`).toContain(w);
+      // Visible slots form one contiguous window.
+      expect(vis[vis.length - 1] - vis[0] + 1).toBe(vis.length);
+    }
+  });
+});
