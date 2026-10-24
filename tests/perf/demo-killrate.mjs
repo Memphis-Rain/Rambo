@@ -1,11 +1,13 @@
 // D3a (a) manual check: demo kill rate over 5 x 60 s against the pre-D3a baseline (plain >= 90% bar).
-//   npm run perf:demo -- [--runs 5] [--seconds 60] [--baseline 1.06] [--gpu] [--port 5178]
+//   npm run perf:demo -- [--runs 5] [--seconds 60] [--baseline 1.06] [--gpu] [--no-pin] [--port 5178]
+// The renderer is pinned to CCD0 unless --no-pin (Q2a protocol; see pin.mjs).
 // Writes test-results/perf-demo-<timestamp>.json.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
+import { pinRenderersToCcd0 } from './pin.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const arg = (name, def) => {
@@ -14,6 +16,7 @@ const arg = (name, def) => {
 };
 const runs = Number(arg('runs', 5)), seconds = Number(arg('seconds', 60));
 const baseline = Number(arg('baseline', 1.06)), gpu = arg('gpu', false) === true, port = Number(arg('port', 5178));
+const pin = arg('no-pin', false) !== true;
 
 const server = spawn(process.execPath, [path.join(ROOT, 'node_modules/vite/bin/vite.js'), '--port', String(port), '--strictPort'],
   { cwd: ROOT, env: { ...process.env, BROWSER: 'none' }, stdio: 'ignore' });
@@ -28,6 +31,8 @@ const browser = await chromium.launch(gpu
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   await page.goto(url);
+  const pinning = pin ? pinRenderersToCcd0(browser) : { pinned: false, reason: '--no-pin' };
+  console.log(`renderer pinning: ${JSON.stringify(pinning)}`);
   await page.waitForFunction(() => !document.getElementById('start-btn').disabled, null, { timeout: 30_000 });
   const results = [];
   for (let r = 0; r < runs; r++) {
@@ -42,7 +47,7 @@ try {
   }
   const kills = results.reduce((a, x) => a + x.kills, 0), gameSecs = results.reduce((a, x) => a + x.gameSecs, 0);
   const rate = kills / gameSecs;
-  const out = { date: new Date().toISOString(), runs: results, rate, baseline, ratio: rate / baseline, pass: rate >= 0.9 * baseline };
+  const out = { date: new Date().toISOString(), pinning, runs: results, rate, baseline, ratio: rate / baseline, pass: rate >= 0.9 * baseline };
   fs.mkdirSync(path.join(ROOT, 'test-results'), { recursive: true });
   const file = path.join(ROOT, 'test-results', `perf-demo-${Date.now()}.json`);
   fs.writeFileSync(file, JSON.stringify(out, null, 2));

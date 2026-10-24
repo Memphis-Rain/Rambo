@@ -1,5 +1,6 @@
-import { test, expect } from './fixtures.js';
+import { test, expect, T } from './fixtures.js';
 import { LANDED } from '../milestones.js';
+import { pinRenderersToCcd0 } from '../perf/pin.mjs';
 
 // M7 performance hardening (P1-P4, Q2a). Skipped until M7 is marked landed.
 // CI runs on SwiftShader, so only relative criteria are asserted here; the absolute
@@ -57,10 +58,15 @@ const medianCpu = (seconds) => new Promise((resolve) => {
 });
 
 test.describe('M7 / Q2a', () => {
-  test('P1/Q2a: sustained gore keeps CPU frame time flat (minute 1.5 within 15% of minute 0.25)', async ({ game, page }, testInfo) => {
+  // On the 2-CCD Ryzen dev box Windows can migrate the renderer to the busier CCD after
+  // ~60 s (Josh's P1 root cause), so the renderer is pinned to CCD0 there (Q2a protocol).
+  // GitHub runners have no CCD split; pinning is a no-op off Windows.
+  test('P1/Q2a: sustained gore keeps CPU frame time flat (minute 1.5 within 15% of minute 0.25)', { tag: '@perf' }, async ({ game, page, browser }, testInfo) => {
     test.skip(!LANDED.P1, 'P1 not landed (tests/milestones.js)');
-    test.setTimeout(180_000);
+    test.setTimeout(T(180_000));
     await startCalm(game);
+    const pinning = pinRenderersToCcd0(browser);
+    testInfo.annotations.push({ type: 'pinning', description: JSON.stringify(pinning) });
     await game.eval(GORE);
     await page.waitForTimeout(10_000);
     const early = await game.eval(medianCpu, 15);  // ~10-25 s
@@ -114,8 +120,9 @@ test.describe('M7 / Q2a', () => {
     testInfo.annotations.push({ type: 'P2 cross-check', description: `total ${total.toFixed(2)} vs update+render() ${parts.toFixed(2)}` });
   });
 
-  test('P3: walking for 30 s causes no terrain-driven frame over 16.7 ms', async ({ game, page }, testInfo) => {
-    test.setTimeout(90_000);
+  test('P3: walking for 30 s causes no terrain-driven frame over 16.7 ms', { tag: '@perf' }, async ({ game, page }, testInfo) => {
+    test.skip(!!process.env.CI, 'absolute ms budget: dev/reference machine only (Q2a)');
+    test.setTimeout(T(90_000));
     await startCalm(game);
     await game.eval(() => {
       window.__walk = { frames: 0, maxTerrain: 0, bad: [], chunks0: chunkCache.size };
@@ -147,8 +154,8 @@ test.describe('M7 / Q2a', () => {
     expect(w.maxTerrain, 'P3: per-frame terrain time within the bake budget').toBeLessThanOrEqual(8);
   });
 
-  test('P4: decal draw calls stay <= 16 during continuous gore at MAX_BLOOD_POOLS', async ({ game, page }, testInfo) => {
-    test.setTimeout(90_000);
+  test('P4: decal draw calls stay <= 16 during continuous gore at MAX_BLOOD_POOLS', { tag: '@perf' }, async ({ game, page }, testInfo) => {
+    test.setTimeout(T(90_000));
     await startCalm(game);
     await game.eval(() => {
       // Prefill with growing pools so the cap is hit while new pools keep growing.
