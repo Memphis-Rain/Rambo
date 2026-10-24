@@ -566,17 +566,32 @@ describe('M10 aim assist', () => {
   const A0 = 37; // a non-axis ray, degrees (world)
   const ray = () => [g.player.x, g.player.y, Math.cos(A0 * DEG), Math.sin(A0 * DEG)];
 
-  test.skipIf(todo)('M10: padAssistTarget returns an enemy inside +-5 deg and 420u, null outside', () => {
+  // Spec C3: assist applies "if an enemy's BODY lies within +-5 deg of the aim ray", so the
+  // cone is widened by the body's angular half-width: angle - atan(15 * size / t) <= 5 deg,
+  // t = distance along the ray (Josh's implementation; e.g. ~9.3 deg at 200u for size 1).
+  test.skipIf(todo)('M10: padAssistTarget picks an enemy whose body is within +-5 deg and 420u, null outside', () => {
     const [px, py, dx, dy] = ray();
-    for (const [dist, off, inside] of [
-      [300, 0, true], [300, 4.5, true], [300, -4.5, true], [410, 4, true], [60, 4.5, true],
-      [300, 5.5, false], [300, -5.5, false], [300, 30, false], [430, 0, false], [300, 180, false],
-    ]) {
+    const MARGIN = 0.75; // degrees either side of the boundary
+    for (const dist of [60, 200, 300, 410]) {
+      for (const sign of [1, -1]) {
+        // Boundary for a size-1 enemy at this range (t ~ dist * cos(angle); solve iteratively).
+        let bound = 5;
+        for (let k = 0; k < 6; k++) bound = 5 + Math.atan(15 / (dist * Math.cos(bound * DEG))) / DEG;
+        for (const [off, inside] of [[0, true], [bound - MARGIN, true], [bound + MARGIN, false]]) {
+          g.enemies.length = 0;
+          const e = enemyAt(dist, A0 + sign * off);
+          expect(e.size, 'size-1 enemy').toBe(1);
+          const got = hook.assist(px, py, dx, dy, 420, 5);
+          const what = `${dist}u at ${(sign * off).toFixed(2)} deg (boundary ${bound.toFixed(2)})`;
+          if (inside) expect(got, `${what}: picked`).toBe(e);
+          else expect(got, `${what}: not picked`).toBeNull();
+        }
+      }
+    }
+    for (const [dist, off] of [[430, 0], [300, 180], [300, 30]]) {
       g.enemies.length = 0;
-      const e = enemyAt(dist, A0 + off);
-      const got = hook.assist(px, py, dx, dy, 420, 5);
-      if (inside) expect(got, `${dist}u at ${off} deg: picked`).toBe(e);
-      else expect(got, `${dist}u at ${off} deg: not picked`).toBeNull();
+      enemyAt(dist, A0 + off);
+      expect(hook.assist(px, py, dx, dy, 420, 5), `${dist}u at ${off} deg: not picked`).toBeNull();
     }
   });
 
