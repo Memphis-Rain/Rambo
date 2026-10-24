@@ -441,7 +441,7 @@ User: "when enemy or player enters water, only half the body should be visible (
     - Damage uses literal RPG-path reuse: a pseudo-round with dmg 200 and R 140 goes through the same explode code, with no direct hit. So splash = 0.7 × 200 × (1 − d/R), which is 140 at the centre.
     - Geyser: same dmg, R 98.
     - No self-damage (as RPG). Kill source SRC_EXPLOSIVE.
-    - A pickup gives +1, capped at 6, and bosses drop at 6% too. The wave +1 is capped at 6.
+    - A pickup gives +1, capped at 6, and bosses drop at 6% too. The wave +1 is capped at 6 and applies **from wave 2 onward**, not wave 1. The demo, which starts at wave 10, gets 3 at its start and +1 per later wave.
     - F throws on key-down, once per press. The target is the raw ground point, before the G13 pick.
   - Audio: a pin/throw click, bounce ticks, the boom (reuse the RPG boom pitched up), and a muffled boom for the geyser.
 
