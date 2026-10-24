@@ -621,8 +621,18 @@ function resolveEnvCollision(entity, entityRadius) {
     if (d2 < minDist * minDist && d2 > 0) {
       const d = Math.sqrt(d2);
       const push = (minDist - d);
-      entity.x += (dx / d) * push;
-      entity.y += (dy / d) * push;
+      const nx = dx / d, ny = dy / d;
+      entity.x += nx * push;
+      entity.y += ny * push;
+      // Walking (almost) dead-centre into a round obstacle cancels out
+      // exactly and pins the entity: nudge it sideways so it slides around
+      const vx = entity.vx || 0, vy = entity.vy || 0;
+      const vl = Math.sqrt(vx * vx + vy * vy);
+      if (vl > 1 && (nx * vx + ny * vy) / vl < -0.92) {
+        const side = (nx * vy - ny * vx) >= 0 ? 1 : -1; // keep the side we're already drifting to
+        entity.x += -ny * side * push * 0.6;
+        entity.y += nx * side * push * 0.6;
+      }
     }
   }
 }
