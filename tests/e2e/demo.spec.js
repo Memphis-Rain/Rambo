@@ -225,14 +225,14 @@ test.describe('T11 attract mode', () => {
     for (let run = 0; run < 3; run++) {
       await game.eval(() => { CFG.DEMO_MAX_SECONDS = 1e9; startDemo(); });
       runs.push(await game.eval((seconds) => new Promise((resolve) => {
+        // GAME time from demo start: on a slow CI runner 30 wall-seconds is only a few
+        // game-seconds, mostly wave 10's walk-in (no kills yet), which skewed the kill rate.
         const samples = [];
-        let start = null;
         const kills0 = kills, gt0 = gameTime;
-        const tick = (now) => {
-          if (start === null) start = now;
+        const tick = () => {
           const x = (keys.d ? 1 : 0) - (keys.a ? 1 : 0), y = (keys.s ? 1 : 0) - (keys.w ? 1 : 0);
-          samples.push({ t: (now - start) / 1000, x, y, px: player.x, py: player.y, dodge: !!player.dodging });
-          if (now - start < seconds * 1000 && demoState().active) requestAnimationFrame(tick);
+          samples.push({ t: gameTime - gt0, x, y, px: player.x, py: player.y, dodge: !!player.dodging });
+          if (gameTime - gt0 < seconds && demoState().active) requestAnimationFrame(tick);
           else {
             // Reversal: a new direction against the last non-zero one (dot < 0) within 0.4 s.
             const rev = [];
@@ -261,8 +261,14 @@ test.describe('T11 attract mode', () => {
     }
     const sum = (k) => runs.reduce((a, r) => a + r[k], 0);
     // Kill rate per game-second, so a slow software-GL frame rate doesn't skew it.
-    const secs = sum('secs'), revRate = sum('reversals') / secs, jitter = sum('jitter'), killRate = sum('kills') / sum('gameSecs');
-    const summary = `secs=${secs.toFixed(1)} reversals=${sum('reversals')} (${revRate.toFixed(2)}/s) jitterWindows=${jitter} kills=${sum('kills')} (${killRate.toFixed(2)}/game-s, baseline ${KILLS_BASELINE || 'n/a'})`;
+    const secs = sum('gameSecs'), revRate = sum('reversals') / secs, jitter = sum('jitter'), killRate = sum('kills') / secs;
+    // Terrain around the demo origin (E11d: the kill-rate bar applies in normal terrain).
+    const terrain = await game.eval(() => {
+      const ox = typeof _demo !== 'undefined' ? _demo.originX || 0 : 0, oy = typeof _demo !== 'undefined' ? _demo.originY || 0 : 0;
+      const trees = envObjects.filter((o) => ['tree', 'pine', 'deadtree'].includes(o.type) && Math.hypot(o.x - ox, o.y - oy) < 400).length;
+      return { trees400: trees, fps: perfLog.fps };
+    });
+    const summary = `trees within 400 of origin=${terrain.trees400} fps~${terrain.fps} secs=${secs.toFixed(1)} gameSecs=${sum('gameSecs').toFixed(1)} reversals=${sum('reversals')} (${revRate.toFixed(2)}/s) jitterWindows=${jitter} kills=${sum('kills')} (${killRate.toFixed(2)}/game-s, baseline ${KILLS_BASELINE || 'n/a'})`;
     console.log(`[D3a] ${summary}`);
     testInfo.annotations.push({ type: 'D3a', description: summary });
     expect(revRate, 'D3a: average reversals per second').toBeLessThanOrEqual(0.8);
@@ -270,7 +276,10 @@ test.describe('T11 attract mode', () => {
     // D3a (b): a 90 s sample has ~±10% Poisson noise, so fail only when the rate is
     // significantly below 90% of baseline (rate + 2 standard errors < bar). The plain
     // >= 90% bar over 5 x 60 s runs in the manual `npm run perf:demo`.
-    if (KILLS_BASELINE) {
+    // E11d: the kill-rate bar applies in normal terrain; forest-heavy starts are recorded only.
+    const forestHeavy = terrain.trees400 > 20;
+    testInfo.annotations.push({ type: 'D3a terrain', description: forestHeavy ? 'forest-heavy start: kill rate informational' : 'normal terrain' });
+    if (KILLS_BASELINE && !forestHeavy) {
       const upper = killRate + (2 * Math.sqrt(sum('kills'))) / sum('gameSecs');
       expect(upper, `D3a: kill rate ${killRate.toFixed(3)} (+2 SE = ${upper.toFixed(3)}) vs 90% of ${KILLS_BASELINE}`).toBeGreaterThanOrEqual(0.9 * KILLS_BASELINE);
     }

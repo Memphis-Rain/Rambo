@@ -46,12 +46,13 @@ const GORE = () => {
 };
 
 /** Median perfLog.totalCpuMs sampled every frame for `seconds`. */
-const medianCpu = (seconds) => new Promise((resolve) => {
+/** Median perfLog.totalCpuMs over the GAME-time window [from, to) seconds after `t0`. */
+const medianCpu = ({ t0, from, to }) => new Promise((resolve) => {
   const xs = [];
-  const t0 = performance.now();
-  const tick = (now) => {
-    xs.push(perfLog.totalCpuMs);
-    if (now - t0 < seconds * 1000) requestAnimationFrame(tick);
+  const tick = () => {
+    const el = gameTime - t0;
+    if (el >= from) xs.push(perfLog.totalCpuMs);
+    if (el < to) requestAnimationFrame(tick);
     else { xs.sort((a, b) => a - b); resolve({ median: xs[xs.length >> 1], p99: xs[Math.floor(xs.length * 0.99)], n: xs.length }); }
   };
   requestAnimationFrame(tick);
@@ -79,10 +80,11 @@ test.describe('M7 / Q2a', () => {
     await game.eval(GORE);
     // Corpses fade after CFG.BODY_FADE_END (25 s), so the body count only reaches steady
     // state after ~25 s of gore; measure the early window after that.
-    await page.waitForTimeout(30_000);
-    const early = await game.eval(medianCpu, 15);  // ~30-45 s, before the old ~60 s step-up
-    await page.waitForTimeout(30_000);
-    const late = await game.eval(medianCpu, 15);   // ~75-90 s, past it
+    // Windows in GAME time: a slow CI runner covers few game-seconds per wall-second, and
+    // wall windows then landed before the corpse/decal load reached steady state.
+    const t0 = await game.eval(() => gameTime);
+    const early = await game.eval(medianCpu, { t0, from: 30, to: 45 }); // before the old ~60 s step-up
+    const late = await game.eval(medianCpu, { t0, from: 75, to: 90 });  // past it
     await game.eval(() => { window.__gore.stop = true; });
     const ratio = late.median / early.median;
     const summary = `early median=${early.median.toFixed(2)}ms p99=${early.p99.toFixed(2)} late median=${late.median.toFixed(2)}ms p99=${late.p99.toFixed(2)} ratio=${ratio.toFixed(3)}`;
