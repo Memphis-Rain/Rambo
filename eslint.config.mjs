@@ -77,7 +77,7 @@ export default [
     rules: bugRules,
   })),
   {
-    files: ['tests/**/*.js', '*.config.{js,mjs}'],
+    files: ['tests/**/*.{js,mjs}', '*.config.{js,mjs}'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
@@ -87,7 +87,7 @@ export default [
   },
   {
     // page.evaluate() callbacks run in the browser against the game's globals.
-    files: ['tests/e2e/**/*.js'],
+    files: ['tests/e2e/**/*.js', 'tests/perf/**/*.mjs'],
     languageOptions: {
       globals: {
         ...globals.browser,
@@ -101,7 +101,7 @@ export default [
           'decalVersion', 'DECAL_POOL', 'DECAL_SPLAT', 'DECAL_SCORCH', 'DECAL_FOOT', 'DECAL_SMEAR', 'DECAL_GIB', 'DECAL_ASH',
           'dmgNumbers', 'DMG_NORMAL', 'DMG_CRIT', 'DMG_SHIELD',
           'hitStopTimer', 'addHitStop',
-          'startDemo', 'stopDemo', 'demoState', 'demoAimLead',
+          'startDemo', 'stopDemo', 'demoState', 'demoAimLead', 'decalStats', 'envCanopyAlpha', 'envLayerStats',
         ].map((name) => [name, 'readonly'])),
       },
     },

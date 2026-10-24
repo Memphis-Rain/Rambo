@@ -144,6 +144,9 @@ function updatePlayer(dt) {
     }
   }
 
+  // E11: climbing over a fallen log (a hurdle, not a wall) is slow
+  if (envLogs.length) { const ls = envLogSlow(p.x, p.y, 10); p.vx *= ls; p.vy *= ls; }
+
   p.x += p.vx * dt;
   p.y += p.vy * dt;
 
@@ -459,6 +462,10 @@ function updateEnemies(dt) {
       }
     }
 
+    // E11: round a log's near end, or climb straight over it
+    if (envLogs.length && (e.vx || e.vy)) _enemyLogAvoid(e, 8 * e.size, d, dt);
+    else e.logAvoid = null;
+
     // Separation
     for(let j=0;j<enemies.length;j++){
       if(i===j) continue;
@@ -485,8 +492,10 @@ function updateEnemies(dt) {
       }
     }
 
-    e.x += e.vx * dt;
-    e.y += e.vy * dt;
+    // E11: climbing over a log is slow
+    const ls = envLogs.length ? envLogSlow(e.x, e.y, 8 * e.size) : 1;
+    e.x += e.vx * ls * dt;
+    e.y += e.vy * ls * dt;
 
     // Collision with trees, rocks, boulders
     resolveEnvCollision(e, 8 * e.size);
@@ -495,22 +504,135 @@ function updateEnemies(dt) {
   }
 }
 
-// Resolve collisions between an entity and nearby solid env objects
+// E11: logs are hurdles. An enemy whose straight path (toward the player, or
+// along its velocity) would run over a log close to one of its ends
+// (crossing point within CFG.ENV_LOG_END_DETOUR x the log width of the end)
+// walks round that end, hugging the log; anywhere else it climbs straight
+// over (slowed by envLogSlow). Decided afresh each frame: walking toward the
+// end keeps the crossing point near it, so the choice is stable, and it
+// stops as soon as the straight path clears the log.
+// e.logAvoid = log being walked round (null when going straight), e.logSide,
+// e.logDetT (detour time), e.logClimbT (climb-straight time left).
+let _xT = 0; // param along the log of the last _pathLogHit()
+// Does the segment (x0,y0)-(x1,y1) come within R of log r's axis? Sets _xT
+// to where along the log (0..1) it crosses or comes closest.
+function _pathLogHit(x0, y0, x1, y1, r, R) {
+  const px = x1 - x0, py = y1 - y0, ax = r.bx - r.ax, ay = r.by - r.ay;
+  const den = px * ay - py * ax;
+  const qx = r.ax - x0, qy = r.ay - y0;
+  if (den !== 0) {
+    const s = (qx * ay - qy * ax) / den, t = (qx * py - qy * px) / den;
+    if (s >= 0 && s <= 1 && t >= 0 && t <= 1) { _xT = t; return true; }
+  }
+  // no crossing: closest approach is at an endpoint of one of the segments
+  const R2 = R * R, l2 = ax * ax + ay * ay, p2 = px * px + py * py;
+  let best = Infinity, bt = 0;
+  for (let k = 0; k < 2; k++) { // path endpoints vs the log
+    const ex = k ? x1 : x0, ey = k ? y1 : y0;
+    let t = l2 > 0 ? ((ex - r.ax) * ax + (ey - r.ay) * ay) / l2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const dx = r.ax + ax * t - ex, dy = r.ay + ay * t - ey, d2 = dx * dx + dy * dy;
+    if (d2 < best) { best = d2; bt = t; }
+  }
+  for (let k = 0; k < 2; k++) { // log ends vs the path
+    const ex = k ? r.bx : r.ax, ey = k ? r.by : r.ay;
+    let s = p2 > 0 ? ((ex - x0) * px + (ey - y0) * py) / p2 : 0;
+    s = s < 0 ? 0 : s > 1 ? 1 : s;
+    const dx = x0 + px * s - ex, dy = y0 + py * s - ey, d2 = dx * dx + dy * dy;
+    if (d2 < best) { best = d2; bt = k; }
+  }
+  _xT = bt;
+  return best < R2;
+}
+
+function _enemyLogAvoid(e, er, dp, dt) {
+  const near = CFG.ENV_LOG_AVOID_NEAR;
+  // a detour that drags on (logs end to end, target right at an end): just
+  // climb over for a while
+  if (e.logClimbT > 0) { e.logClimbT -= dt; e.logAvoid = null; return; }
+  if (e.logAvoid) e.logDetT = (e.logDetT || 0) + dt;
+  else if (e.logDetT > 0) e.logDetT = Math.max(0, e.logDetT - dt * 0.5);
+  const n = envLogsNear(e.x, e.y, er + near + CFG.ENV_LOG_R);
+  const prevL = e.logAvoid;
+  e.logAvoid = null;
+  if (!n) return;
+  const sp = Math.sqrt(e.vx * e.vx + e.vy * e.vy);
+  const ux = e.vx / sp, uy = e.vy / sp;
+  // target of the straight path: the player when heading for them
+  let tx = player.x, ty = player.y;
+  if (dp <= 0 || (ux * (tx - e.x) + uy * (ty - e.y)) < 0.7 * dp) {
+    tx = e.x + ux * 60; ty = e.y + uy * 60;
+  } else if (dp > CFG.ENV_LOG_AVOID_LOOK) {
+    tx = e.x + (tx - e.x) * CFG.ENV_LOG_AVOID_LOOK / dp; ty = e.y + (ty - e.y) * CFG.ENV_LOG_AVOID_LOOK / dp;
+  }
+  let best = null, bestD = Infinity, bestT = 0;
+  for (let i = 0; i < n; i++) {
+    const r = envLogHits[i];
+    const R = er + r.logR;
+    const ds2 = envSegDist2(e.x, e.y, r);
+    if (ds2 < (R - 1) * (R - 1) || ds2 > (R + near) * (R + near)) continue; // already climbing / not close yet
+    if (!_pathLogHit(e.x, e.y, tx, ty, r, R - 0.5)) continue;
+    const len = Math.sqrt((r.bx - r.ax) * (r.bx - r.ax) + (r.by - r.ay) * (r.by - r.ay));
+    const toEnd = (_xT < 0.5 ? _xT : 1 - _xT) * len;
+    if (toEnd >= CFG.ENV_LOG_END_DETOUR * 2 * r.logR) continue; // mid-log: climb over
+    if (ds2 < bestD) { bestD = ds2; best = r; bestT = _xT; }
+  }
+  if (!best) return;
+  if (e.logDetT > (60 + 4 * (er + best.logR)) / Math.max(10, sp) + 0.5) { e.logDetT = 0; e.logClimbT = 1.5; return; }
+  // hug the capsule toward that end and round it
+  const L = best;
+  const ax = L.bx - L.ax, ay = L.by - L.ay, l2 = ax * ax + ay * ay;
+  let t = l2 > 0 ? ((e.x - L.ax) * ax + (e.y - L.ay) * ay) / l2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  let nx = e.x - (L.ax + ax * t), ny = e.y - (L.ay + ay * t);
+  const nd = Math.sqrt(nx * nx + ny * ny) || 1;
+  nx /= nd; ny /= nd;
+  // spin: toward the chosen end along our side of the log, then on round
+  // its cap (fixed by the side we are on, so it cannot dither at the end)
+  const sg = bestT < 0.5 ? -1 : 1;
+  // side of the log we started on (kept while rounding: the cap tip is on the axis)
+  const side = prevL === L && e.logSide ? e.logSide : ax * (e.y - L.ay) - ay * (e.x - L.ax) >= 0 ? 1 : -1;
+  e.logSide = side; // lateral normal = side x (-ay, ax)
+  const s = side * (-ay * ay * sg - ax * ax * sg) >= 0 ? 1 : -1;
+  let k = (er + L.logR + 3 - nd) * 0.08;
+  k = k < -0.5 ? -0.5 : k > 0.5 ? 0.5 : k;
+  const vx = -ny * s + nx * k, vy = nx * s + ny * k;
+  const vl = Math.sqrt(vx * vx + vy * vy);
+  e.vx = vx / vl * sp; e.vy = vy / vl * sp;
+  e.walking = true;
+  e.logAvoid = L;
+}
+
+// Resolve collisions between an entity and nearby solid env objects.
+// E5: collision follows env state (envphys.js keeps obj.collision current:
+// stump circle when felled, 0 when destroyed). Fallen logs are hurdles, not
+// obstacles (E11: envLogSlow, applied to the movement by the callers).
 function resolveEnvCollision(entity, entityRadius) {
   for (let i = 0; i < envObjects.length; i++) {
     const obj = envObjects[i];
-    if (!obj.collision) continue;
     // Quick reject: skip objects far away (cheap check before sqrt)
     const dx = entity.x - obj.x;
     const dy = entity.y - obj.y;
     if (dx > 60 || dx < -60 || dy > 60 || dy < -60) continue;
+    if (obj._envAt !== _envEpoch) envObjState(obj); // E7: persisted state of a regenerated object
+    if (!obj.collision) continue;
     const d2 = dx * dx + dy * dy;
     const minDist = entityRadius + obj.collision;
     if (d2 < minDist * minDist && d2 > 0) {
       const d = Math.sqrt(d2);
       const push = (minDist - d);
-      entity.x += (dx / d) * push;
-      entity.y += (dy / d) * push;
+      const nx = dx / d, ny = dy / d;
+      entity.x += nx * push;
+      entity.y += ny * push;
+      // Walking (almost) dead-centre into a round obstacle cancels out
+      // exactly and pins the entity: nudge it sideways so it slides around
+      const vx = entity.vx || 0, vy = entity.vy || 0;
+      const vl = Math.sqrt(vx * vx + vy * vy);
+      if (vl > 1 && (nx * vx + ny * vy) / vl < -0.92) {
+        const side = (nx * vy - ny * vx) >= 0 ? 1 : -1; // keep the side we're already drifting to
+        entity.x += -ny * side * push * 0.6;
+        entity.y += nx * side * push * 0.6;
+      }
     }
   }
 }
@@ -576,39 +698,43 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
   const isBoss = e.isBoss;
   if (isBoss) addHitStop(HIT_STOP_MAX);
 
-  // Score
-  const comboMult = 1 + combo * 0.1;
-  const basePts = isBoss ? t.score * 10 : t.score;
-  const pts = Math.round(basePts * comboMult);
-  score += pts;
-  kills++;
-  combo++;
-  comboTimer = CFG.COMBO_TIMEOUT;
-  if (combo > bestCombo) bestCombo = combo;
+  // Score (E6: not for an enemy crushed by a tree the player didn't fell)
+  if (!envNoCredit) {
+    const comboMult = 1 + combo * 0.1;
+    const basePts = isBoss ? t.score * 10 : t.score;
+    const pts = Math.round(basePts * comboMult);
+    score += pts;
+    kills++;
+    combo++;
+    comboTimer = CFG.COMBO_TIMEOUT;
+    if (combo > bestCombo) bestCombo = combo;
 
-  // Charge special ability on kills
-  if (player.specialCharge < CFG.SPECIAL_MAX_CHARGE) {
-    player.specialCharge++;
+    // Charge special ability on kills
+    if (player.specialCharge < CFG.SPECIAL_MAX_CHARGE) {
+      player.specialCharge++;
+    }
+
+    // Floating text
+    const color = isBoss ? '#f0f' : combo > 10 ? '#f44' : combo > 5 ? '#fa0' : '#ff0';
+    const size = isBoss ? 24 : combo > 5 ? 18 : 14;
+    floatingTexts.push({
+      x: e.x, y: e.y, text: `+${pts}`, life: 1.2, maxLife: 1.2, color, size,
+    });
   }
-
-  // Floating text
-  const color = isBoss ? '#f0f' : combo > 10 ? '#f44' : combo > 5 ? '#fa0' : '#ff0';
-  const size = isBoss ? 24 : combo > 5 ? 18 : 14;
-  floatingTexts.push({
-    x: e.x, y: e.y, text: `+${pts}`, life: 1.2, maxLife: 1.2, color, size,
-  });
 
   // === BOMBER: explode on death (deferred to avoid recursive chain) ===
   if (t.explodeOnDeath) {
     const r = t.explodeRadius || 100;
-    spawnExplosion(e.x, e.y, r);
+    // Bomber deaths count as the player's doing (a chain the player set off)
+    spawnExplosion(e.x, e.y, r, !envNoCredit, SRC_EXPLOSIVE);
     // Queue damage instead of applying immediately (prevents stack overflow)
     for(let j=0; j<enemies.length; j++) {
       const e2 = enemies[j];
       if (e2 === e || e2.dead) continue;
       const d2 = dist(e.x, e.y, e2.x, e2.y);
       if (d2 < r) {
-        _pendingDamage.push({ target: e2, dmg: 80*(1-d2/r), angle: Math.atan2(e2.y-e.y, e2.x-e.x), src: SRC_EXPLOSIVE });
+        // E6: a chain set off by a fall the player didn't cause earns nothing either
+        _pendingDamage.push({ target: e2, dmg: 80*(1-d2/r), angle: Math.atan2(e2.y-e.y, e2.x-e.x), src: SRC_EXPLOSIVE, noCredit: envNoCredit });
       }
     }
     const pd = dist(e.x, e.y, player.x, player.y);
@@ -673,7 +799,7 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
       showNotification(`BOSS DEFEATED! NEW WEAPON: ${WEAPONS[bossTarget].name.toUpperCase()}! [${bossTarget+1>9?0:bossTarget+1}]`, 3.5);
       playSound('unlock', 0.8);
       // Big celebratory explosion
-      spawnExplosion(e.x, e.y, 180);
+      spawnExplosion(e.x, e.y, 180, true, SRC_EXPLOSIVE);
       bossTarget = -1;
     }
   } else {
@@ -690,7 +816,10 @@ function processPendingDamage() {
     const batch = _pendingDamage.splice(0, _pendingDamage.length);
     for (const pd of batch) {
       if (!pd.target.dead) {
+        const nc = envNoCredit;
+        if (pd.noCredit) envNoCredit = true; // E6: no score for an uncredited chain
         damageEnemy(pd.target, pd.dmg, pd.angle, pd.src || SRC_BULLET);
+        envNoCredit = nc;
       }
     }
   }
@@ -730,7 +859,7 @@ function damagePlayer(dmg) {
     player.hp = player.maxHp * 0.3;
     player.shield = player.maxShield * 0.2;
     player.invincible = 2;
-    spawnExplosion(player.x, player.y, 60);
+    spawnExplosion(player.x, player.y, 60, false, SRC_EXPLOSIVE);
     showNotification('SECOND WIND!', 1.5);
   }
 }
@@ -768,18 +897,39 @@ function updateBullets(dt) {
     const minY = Math.min(py, b.y), maxY = Math.max(py, b.y);
     const step60 = Math.sqrt(b.vx * b.vx + b.vy * b.vy) / 60; // path per 60 Hz frame
     const fresh = b.fresh; b.fresh = false;
-    let nearT = 2, nearE = null, nearB = null;
+    let nearT = 2, nearE = null, nearB = null, nearO = null;
+    const byPlayer = b.owner === 'player';
 
-    // Explosive barrels (G12b)
+    // Explosive barrels (G12b) and env blockers (E3/E4: tree trunks, stumps,
+    // crates, sandbags). Fallen logs are low cover: bullets fly over them.
     for(const obj of envObjects){
-      if(obj.type !== 'barrel' || obj.exploded) continue;
-      if(obj.x + 14 < minX || obj.x - 14 > maxX || obj.y + 14 < minY || obj.y - 14 > maxY) continue;
+      // 20 >= the largest barrel/trunk/crate/sandbag hit radius
+      if(obj.x + 20 < minX || obj.x - 20 > maxX || obj.y + 20 < minY || obj.y - 20 > maxY) continue;
+      if(obj.type === 'barrel'){
+        if(obj.exploded) continue;
+        if(obj.x + 14 < minX || obj.x - 14 > maxX || obj.y + 14 < minY || obj.y - 14 > maxY) continue;
+        if(b.pierce){
+          if(entersCircle(px, py, sdx, sdy, len2, obj.x, obj.y, 14, fresh))
+            hitBarrel(obj, b.dmg * pierceHits(px, py, sdx, sdy, len2, obj.x, obj.y, 14, step60), byPlayer);
+        } else {
+          const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, 14);
+          if(t >= 0 && t < nearT){ nearT = t; nearB = obj; nearO = null; }
+        }
+        continue;
+      }
+      const hr = envBulletRadius(obj);
+      if(!hr) continue;
+      // A round fired from inside a trunk/crate (shooter hugging it) ignores it
+      const fx = px - obj.x, fy = py - obj.y;
+      if(fx * fx + fy * fy <= hr * hr) continue;
       if(b.pierce){
-        if(entersCircle(px, py, sdx, sdy, len2, obj.x, obj.y, 14, fresh))
-          hitBarrel(obj, b.dmg * pierceHits(px, py, sdx, sdy, len2, obj.x, obj.y, 14, step60));
+        // Pierce rounds pass through but still chip/damage once per pass
+        const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, hr);
+        if(t >= 0) envBulletHit(obj, px + sdx * t, py + sdy * t, b.vx, b.vy,
+          b.dmg * pierceHits(px, py, sdx, sdy, len2, obj.x, obj.y, hr, step60));
       } else {
-        const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, 14);
-        if(t >= 0 && t < nearT){ nearT = t; nearB = obj; }
+        const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, hr);
+        if(t >= 0 && t < nearT){ nearT = t; nearO = obj; nearB = null; }
       }
     }
 
@@ -796,27 +946,51 @@ function updateBullets(dt) {
             bulletHitEnemy(b, e, pierceHits(px, py, sdx, sdy, len2, e.x, e.y, r, step60));
         } else {
           const t = segCircleT(px, py, sdx, sdy, len2, e.x, e.y, r);
-          if(t >= 0 && t < nearT){ nearT = t; nearE = e; nearB = null; }
+          if(t >= 0 && t < nearT){ nearT = t; nearE = e; nearB = null; nearO = null; }
         }
       }
     } else {
-      // Enemy bullet -> player (unless a barrel is nearer on its path)
+      // Enemy bullet -> player (unless a barrel or trunk is nearer on its path)
       const t = segCircleT(px, py, sdx, sdy, len2, player.x, player.y, 16);
       if(t >= 0 && t < nearT){
         b.x = px + sdx * t; b.y = py + sdy * t;
         damagePlayer(b.dmg);
-        if(b.explosive) spawnExplosion(b.x, b.y, b.radius||60);
+        if(b.explosive) spawnExplosion(b.x, b.y, b.radius||60, false, SRC_EXPLOSIVE);
         bullets.splice(i,1);
         continue;
       }
     }
 
-    // Non-piercing: the nearest enemy or barrel on the path takes the hit
-    if(nearE || nearB){
+    // Non-piercing: the nearest enemy, barrel or env blocker on the path takes the hit
+    if(nearE || nearB || nearO){
       b.x = px + sdx * nearT; b.y = py + sdy * nearT; // impact point
       if(nearE) bulletHitEnemy(b, nearE, 1);
-      else hitBarrel(nearB, b.dmg);
+      else if(nearB) hitBarrel(nearB, b.dmg, byPlayer);
+      else {
+        envBulletHit(nearO, b.x, b.y, b.vx, b.vy, b.dmg);
+        // Rockets / BFG / tank shells detonate on the trunk or crate
+        if(b.explosive) _bulletExplode(b);
+      }
       bullets.splice(i,1);
+    }
+  }
+}
+
+// Detonate an explosive round at its current position (player rounds also
+// deal area damage to enemies, as on a direct hit)
+function _bulletExplode(b) {
+  if(b.owner !== 'player'){
+    spawnExplosion(b.x, b.y, b.radius||60, false, SRC_EXPLOSIVE);
+    return;
+  }
+  const src = b.bfg ? SRC_BFG : SRC_EXPLOSIVE;
+  spawnExplosion(b.x, b.y, b.radius, true, src);
+  for(let ei=enemies.length-1; ei>=0; ei--){
+    const e2 = enemies[ei];
+    if(e2.dead) continue;
+    const d2 = dist(b.x, b.y, e2.x, e2.y);
+    if(d2 < b.radius){
+      _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: Math.atan2(e2.y-b.y, e2.x-b.x), src });
     }
   }
 }
@@ -842,12 +1016,13 @@ function pierceHits(x0, y0, dx, dy, len2, cx, cy, r, step60) {
   return step60 > 0 ? Math.max(1, Math.round(chord / step60)) : 1;
 }
 
-function hitBarrel(obj, dmg) {
+function hitBarrel(obj, dmg, byPlayer = true) {
   obj.hp -= dmg;
   if(obj.hp <= 0 && !obj.exploded){
     obj.exploded = true;
+    envMarkDestroyed(obj); // E7: stays exploded when its chunk regenerates
     // BIGGER barrel explosion (radius 220, damages enemies more)
-    spawnExplosion(obj.x, obj.y, 220);
+    spawnExplosion(obj.x, obj.y, 220, byPlayer, SRC_EXPLOSIVE);
     for(let ei=enemies.length-1; ei>=0; ei--){
       const e2 = enemies[ei];
       if(e2.dead) continue;
@@ -907,17 +1082,7 @@ function bulletHitEnemy(b, e, mult = 1) {
   // Disintegrator kills are handled in killEnemy (SRC_DISINT)
   damageEnemy(e, b.dmg * mult, bAngle, src);
 
-  if(b.explosive){
-    spawnExplosion(b.x, b.y, b.radius);
-    for(let ei=enemies.length-1; ei>=0; ei--){
-      const e2 = enemies[ei];
-      if(e2.dead) continue;
-      const d2 = dist(b.x, b.y, e2.x, e2.y);
-      if(d2 < b.radius){
-        _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: Math.atan2(e2.y-b.y, e2.x-b.x), src });
-      }
-    }
-  }
+  if(b.explosive) _bulletExplode(b);
 }
 
 // =====================================================================

@@ -199,6 +199,7 @@ function updateRetroCamera() {
 
 function renderRetro() {
   if (!_retro.ready) return;
+  const tRetro0 = performance.now();
   uiContainer.visible = gameStarted; // no stale HUD under the title screen
   // Live-tunable from the console (RETRO.DITHER_STRENGTH / RETRO.LEVELS)
   const u = _retro.ditherFilter.resources.retroUniforms.uniforms;
@@ -214,6 +215,7 @@ function renderRetro() {
   if (RETRO.DITHER) {
     renderer.render({ container: _retro.ditherSprite, target: _retro.ditherRT, clear: true, clearColor: [0, 0, 0, 1] });
   }
+  if (typeof perfLog !== 'undefined') perfLog.retroMs = performance.now() - tRetro0; // P2
 }
 
 // ---------------------------------------------------------------------

@@ -21,6 +21,7 @@ function _spSnap(v) { return Math.round(v / ART) * ART; }
 // Z layers inside worldContainer (terrain is -1000000, effectsContainer 1000000)
 const SP_Z_DECAL = -999999;      // baked decal chunks
 const SP_Z_DECAL_RECENT = -999998.5;
+const SP_Z_ENVL = -999996.5;     // M8 E10: per-chunk remains (stumps, logs, rubble): above the water overlay (logs float), below ground shadows
 const SP_Z_GROUND = -999996;     // ground shadows / flat debris (water overlay is -999997)
 const SP_Z_FX = 999000;          // telegraphs, rings, health bars
 const SP_Z_TEXT = 999500;        // pixel font
@@ -83,6 +84,8 @@ const _sp = {
   hurtDrops: new Float32Array(24 * 5), // x, y, len, speed, life
   // decals
   dec: null,
+  // M8 E10: env remains layer (per terrain chunk)
+  envL: null,
 };
 
 // Type -> visual kind lookup (by enemy name, so table order can change)
@@ -202,7 +205,9 @@ function initPixiSprites() {
       for (const c of _sp.dec.chunks) _spDestroy(c.g);
       for (const g of _sp.dec.freeG) _spDestroy(g);
       _spDestroy(_sp.dec.recent);
+      _spDestroy(_sp.dec.grow);
     }
+    if (_sp.envL) _spEnvLayerClear(_sp.envL);
   }
   _sp.sprites = []; _sp.spriteN = 0; _sp.spritePrev = 0;
   _sp.gfx = []; _sp.gfxN = 0; _sp.gfxPrev = 0;
@@ -241,6 +246,7 @@ function initPixiSprites() {
   uiContainer.addChildAt(_sp.hurtG, 0);
 
   _spDecalInit();
+  _sp.envL = _spEnvLayerNew();
   _sp.inited = true;
 }
 
@@ -882,6 +888,7 @@ function renderPixiSprites() {
   const t0 = performance.now();
   _spBeginFrame();
   _spRenderDecals();
+  _spRenderEnvLayer();
   const t1 = performance.now();
   _spRenderEnv();
   _spRenderBodies();
@@ -895,6 +902,7 @@ function renderPixiSprites() {
   _spRenderParticles();
   _spRenderShells();
   _spRenderGibs();
+  _spRenderDebris();
   _spRenderFx();
   _spRenderTexts();
   _spRenderHurt();
@@ -1312,6 +1320,12 @@ function _spRenderParticles() {
       if (big) s.scale.set(r ? A : 2 * A, r ? 2 * A : A); else s.scale.set(A, A);
       s.tint = col;
       if (lr < (p.fadeStart || 0)) s.alpha = 0.5;
+    } else if (type === 'leaf') {
+      // M8 E2: 1-art-px leaf, stepped flutter, blinks out at the end (no fade)
+      if (lr < 0.15 && ((((gameTime * 14) | 0) + i) & 1)) continue;
+      const wob = Math.round(Math.sin(p.life * 7 + i * 1.7) * 1.2) * A;
+      const s = _spSprite(tw, X + wob, Y, z);
+      s.scale.set(A, A); s.tint = col;
     } else {
       // blood, spark, trail, default: chunky pixel squares
       const d = Math.max(A, _spSnap(p.size * (type === 'blood' ? 1.3 : 1.6)));
@@ -1377,6 +1391,41 @@ function _spRenderGibs() {
     const mx = (r === 0 || r === 3) ? x0 + (w - 1) * A : x0;
     const my = (r < 2) ? y0 + (h - 1) * A : y0;
     _spRectSprite(mx, my, A, A, 0xc01818, zz + 0.002);
+  }
+  sg.fill({ color: 0, alpha: 0.35 });
+}
+
+// M8 E4: flying env debris (envphys.js envDebris), pooled sprites like gibs.
+// Outline + fill chunk, rotation stepped to 45 deg, ground shadow while airborne.
+const _spDebOl = [0x24180c, 0x4a3e24, 0x1e1e1a, 0x1a120a, 0];
+function _spRenderDebris() {
+  if (typeof envDebris === 'undefined' || envDebris.length === 0) return;
+  const iso = CFG.ISO_SCALE, A = ART, Q = Math.PI / 4;
+  const sg = _sp.groundG, tw = _sp.texWhite;
+  for (let i = 0; i < envDebris.length; i++) {
+    const d = envDebris[i];
+    const sx = d.x - d.y, gy = (d.x + d.y) * iso;
+    if (!_spInView(sx, gy)) continue;
+    const z = d.z > 0 ? d.z : 0;
+    const X = _spSnap(sx), Y = _spSnap(gy - z) - A;
+    const zz = depthKey(d.x, d.y);
+    const kind = d.kind | 0;
+    if (kind === 4) { // DEBRIS_LEAF: a single green pixel
+      const s = _spSprite(tw, X, Y, zz);
+      s.scale.set(A, A); s.tint = d.color;
+      continue;
+    }
+    if (z > 2) sg.rect(X - A, _spSnap(gy), 2 * A, A);
+    const size = d.size || 2;
+    let w, h;
+    if (kind === 0 || kind === 3) { w = size >= 2.5 ? 3 : 2; h = 1; }     // wood / bark splinter
+    else if (kind === 2) { w = size >= 2.8 ? 2 : 1; h = size >= 3.5 ? 2 : 1; } // stone
+    else { w = size >= 2.4 ? 2 : 1; h = 1; }                               // sand clump
+    const rot = Math.round((d.rot || 0) / Q) * Q;
+    const o = _spSprite(tw, X, Y, zz);
+    o.scale.set((w + 2) * A, (h + 2) * A); o.rotation = rot; o.tint = _spDebOl[kind] || 0x1a120a;
+    const f = _spSprite(tw, X, Y, zz + 0.001);
+    f.scale.set(w * A, h * A); f.rotation = rot; f.tint = d.color;
   }
   sg.fill({ color: 0, alpha: 0.35 });
 }
@@ -1664,8 +1713,9 @@ function _spHueHex(h) {
   return (r << 16) | (gg << 8) | b;
 }
 
+// Cache key of a Graphics env object: rebuilt only when this changes
 function _spEnvState(obj) {
-  if (obj.type !== 'barrel') return 0;
+  if (obj.type !== 'barrel') { const e = obj._env; return e && e.cracked ? 1 : 0; } // M8 E4
   if (obj.exploded) return -1;
   return Math.ceil((obj.hp || 0) / Math.max(1, obj.maxHp || 30) * 6);
 }
@@ -1686,7 +1736,7 @@ function _spBuildEnv(obj) {
         const b = tg.getLocalBounds();
         const tex = renderer.generateTexture({ target: tg, resolution: 1, antialias: false });
         tex.source.scaleMode = 'nearest';
-        tpl = { tex, ax: -b.x / b.width, ay: -b.y / b.height };
+        tpl = { tex, ax: -b.x / b.width, ay: -b.y / b.height, top: Math.max(1, -b.y) };
         tg.destroy();
       }
       _sp.treeCtx.set(key, tpl);
@@ -1695,6 +1745,9 @@ function _spBuildEnv(obj) {
     const g = new PIXI.Sprite(tpl.tex);
     g.anchor.set(tpl.ax, tpl.ay);
     g._tree = type === 'tree' || type === 'pine';
+    g._spr = true;        // M8: sway / scorch / topple via sprite transform + tint
+    g._top = tpl.top;     // px from the base (anchor) to the top of the texture
+    g._xf = false; g._tl = 0; g._z0 = 0;
     return g;
   }
   const g = new PIXI.Graphics();
@@ -1717,6 +1770,34 @@ function _spRock(g, cx, cy, rx, ry, seed, dark) {
   g.fill(dark ? 0x8e8e82 : 0x9e9e92);
 }
 
+// M8 E4: dark pixel cracks across a cracked boulder (ellipse centre cx, cy)
+function _spRockCracks(g, cx, cy, rx, ry, seed) {
+  const A = ART;
+  const ex = (rx + 0.5) * (rx + 0.5), ey = (ry + 0.5) * (ry + 0.5);
+  for (let k = 0; k < 2; k++) {
+    const h = _spHash(seed, k + 30);
+    let x = ((h & 7) % Math.max(1, rx)) - (rx >> 1) + (k ? (rx >> 1) : 0);
+    let y = -ry + 1 + ((h >> 3) & 1);
+    const len = ry * 2 + 1;
+    for (let i = 0; i < len; i++) {
+      if (x * x / ex + y * y / ey < 0.8) g.rect(cx + x * A, cy + y * A, A, A);
+      const hh = _spHash(h, i);
+      // mostly down, sometimes sideways: reads as a jagged fracture
+      if ((hh & 3) === 0) x += (hh & 4) ? 1 : -1;
+      else { y++; if ((hh & 24) === 0) x += (hh & 32) ? 1 : -1; }
+      // short branch from the middle of the first crack
+      if (k === 0 && i === (len >> 1)) {
+        const dir = (hh & 64) ? 1 : -1;
+        for (let j = 1; j <= 2; j++) {
+          const bx = x + dir * j, by = y - (j >> 1);
+          if (bx * bx / ex + by * by / ey < 0.8) g.rect(cx + bx * A, cy + by * A, A, A);
+        }
+      }
+    }
+  }
+  g.fill(0x1a1a16);
+}
+
 function _spDrawEnv(g, obj) {
   const A = ART, type = obj.type;
   const seed = ((obj.x * 73856093) ^ (obj.y * 19349663)) | 0;
@@ -1725,6 +1806,7 @@ function _spDrawEnv(g, obj) {
     const rx = Math.max(2, Math.round((obj.radius || 8) * 1.1 / A));
     const ry = Math.max(1, Math.round(rx * 0.6));
     _spRock(g, 0, -ry * A, rx, ry, seed, type === 'boulder');
+    if (obj._env && obj._env.cracked) _spRockCracks(g, 0, -ry * A, rx, ry, seed);
   } else if (type === 'rockcluster') {
     const r = obj.radius || 12;
     for (let i = 0; i < 3; i++) {
@@ -1815,6 +1897,21 @@ function _spDrawEnv(g, obj) {
       if (hh > 3) g.rect((x0 + i + 1) * A, (-hh + 2) * A, A, A);
     }
     g.fill(0x9a968a);
+    if (obj._env && obj._env.cracked) {
+      // M8 E4: zigzag cracks down some wall columns + chipped tops
+      for (let i = 0; i < w; i += 2) {
+        const hs = _spHash(seed, i + 40);
+        if ((hs & 3) === 0) continue;
+        const hh = Math.max(1, h - (_spHash(seed, i) % Math.max(1, (h >> 1) + 1)));
+        let cx = (hs >> 2) & 1;
+        for (let y = -hh + 1; y < 0; y++) {
+          g.rect((x0 + i + cx) * A, y * A, A, A);
+          if ((_spHash(hs, y + 9) & 3) === 0) cx ^= 1;
+        }
+        if ((hs >> 4) & 1) g.rect((x0 + i + ((hs >> 5) & 1)) * A, -hh * A, A, A);
+      }
+      g.fill(0x1c1c18);
+    }
   } else if (type === 'reeds') {
     const hgt = Math.max(3, Math.round((obj.height || 12) / A));
     for (let i = 0; i < 5; i++) {
@@ -1851,21 +1948,37 @@ function _spRenderEnv() {
   const f = _sp.frame;
   const mx = 320, my0 = 80, my1 = 360;
   const x0 = _sp.vx0 - mx, x1 = _sp.vx1 + mx, y0 = _sp.vy0 - my0, y1 = _sp.vy1 + my1;
+  const eos = typeof envObjState === 'function' ? envObjState : null;
   for (let i = 0; i < envObjects.length; i++) {
     const obj = envObjects[i];
     obj._spSeen = f;
     const sx = obj.x - obj.y, sy = (obj.x + obj.y) * iso;
     if (sx < x0 || sx > x1 || sy < y0 || sy > y1) continue;
+    // M8: state record (null = never affected); also picks up persisted state
+    const rec = eos !== null ? eos(obj) : null;
+    // Destroyed objects vanish (debris / remains replace them; the exploded-
+    // barrel wreck stays, it is the remains). Baked trees are replaced by
+    // their stump + log in the env remains layer (E10) - but the fallen
+    // sprite stays until the layer has drawn the log (no gap while a dirty
+    // chunk waits for its rebuild). Checked BEFORE building, so an object
+    // first seen already destroyed / felled (off-screen at the time, or
+    // after its chunk regenerated) never shows a ghost standing sprite.
+    // A splintered log (E11 logGone) leaves only its stump (layer).
+    if (rec !== null && ((rec.state === 'destroyed' && obj.type !== 'barrel') ||
+        (rec.baked && rec._drawnInLayer === true) ||
+        (rec.logGone === true && rec._drawnInLayer === true))) continue; // keep the sprite until the stump is baked
     let g = _sp.env.get(obj);
     const st = _spEnvState(obj);
     if (g === undefined) {
       g = _spBuildEnv(obj);
       _sp.env.set(obj, g);
       if (g) {
+        g.visible = false; // shown below only if it passes every check
         g._st = st;
         g.position.set(_spSnap(sx), _spSnap(sy));
         const flat = obj.type === 'flowers' || (obj.type === 'barrel' && obj.exploded);
         g.zIndex = flat ? SP_Z_GROUND + 1 : depthKey(obj.x, obj.y);
+        g._z0 = g.zIndex;
         worldContainer.addChild(g);
       }
     } else if (g && g._st !== st) {
@@ -1876,16 +1989,115 @@ function _spRenderEnv() {
     if (!g) continue;
     g.visible = true;
     vis.push(g);
-    if (g._tree) {
-      // A6 optional: stepped tree sway
-      const ph = Math.round(Math.sin(gameTime * 0.9 + obj.x * 0.013 + obj.y * 0.007) * 1.4);
-      g.skew.x = ph * 0.025;
+    if (g._spr) {
+      _spTreeXf(g, obj, rec);
+      if (g._tree) _spCanopyFade(g, obj, rec, sx, sy, f);
     }
   }
   // periodic sweep of graphics whose env object was unloaded
   if ((f % 120) === 0) {
     _sp.env.forEach(_spEnvSweepFn);
   }
+}
+
+// M8 E2: scorch tint per level (darker, slightly warm) - tints keep batching
+const _spScorchTint = [0xffffff, 0xc4b6a4, 0x938476, 0x695e56];
+const SP_SWAY_Q = 0.04;      // record sway quantum (rad): ~1 art px at the top of a tree
+const SP_FALL_STEPS = 6;     // topple drawn in 6 steps of 15 deg
+
+// Tree-like sprite transform: ambient stepped sway + record sway, scorch
+// tint, and the topple (rotation about the base, foreshortened in iso).
+// Transform-only: never rebuilds geometry.
+function _spTreeXf(g, obj, rec) {
+  const lv = rec !== null ? Math.min(3, rec.scorch | 0) : 0;
+  if (g._tl !== lv) { g._tl = lv; g.tint = _spScorchTint[lv]; }
+  if (rec !== null && (rec.state === 'falling' || rec.state === 'fallen')) {
+    const iso = CFG.ISO_SCALE;
+    const th = Math.round(rec.fall * SP_FALL_STEPS) / SP_FALL_STEPS * (Math.PI / 2);
+    const c = Math.cos(th), sn = Math.sin(th);
+    const fx = rec.fallDirX, fy = rec.fallDirY;
+    // screen projection of the fall direction (per world unit)
+    // (screen-vertical part foreshortened like the baked log, see SP_LOG_VK)
+    const Px = fx - fy, Py = (fx + fy) * iso * SP_LOG_VK;
+    const Pl = Math.sqrt(Px * Px + Py * Py) || 1;
+    // Y axis (image of local +y, base -> down): the top swings from straight
+    // up to the projected fall direction, scaled so the canopy lands where
+    // the baked crown will lie (log end + crown push + crown radius; E10)
+    const cr = obj.type === 'deadtree' ? 0 : (obj.radius || 0) * (CFG.ENV_CROWN_R || 0.75);
+    const reach = (rec.logLen > 0 ? rec.logLen : 40) + cr * (1 + (CFG.ENV_CROWN_PUSH || 0.35));
+    const kL = reach / g._top;
+    let Yx = -sn * Px * kL, Yy = c - sn * Py * kL;
+    // never let the trunk axis collapse (pointing at the camera): keep at
+    // least 0.3 of its length, along the final direction once past halfway
+    let Yl = Math.sqrt(Yx * Yx + Yy * Yy);
+    if (Yl < 0.3) {
+      if (Yl < 1e-3) { if (sn > 0.5) { Yx = -Px / Pl; Yy = -Py / Pl; } else { Yx = 0; Yy = 1; } Yl = 1; }
+      Yx *= 0.3 / Yl; Yy *= 0.3 / Yl; Yl = 0.3;
+    }
+    // X axis (canopy width): kept PERPENDICULAR on screen to the trunk axis
+    // (same handedness as at rest, so the sprite never mirrors or turns into
+    // a sliver), its width easing from 1 to the lying crown's projected
+    // width across the trunk (min 0.5)
+    const qx = (-fy - fx) * 0.7071, qy = (fx - fy) * iso * 0.7071;
+    const wEnd = Math.min(1, Math.max(0.5, Math.abs(qx * Py - qy * Px) / Pl));
+    const w = 1 - sn + sn * wEnd;
+    const Xx = Yy / Yl * w, Xy = -Yx / Yl * w;
+    g.rotation = 0;
+    g.skew.set(Math.atan2(Yx, Yy), Math.atan2(Xy, Xx));
+    g.scale.set(Math.sqrt(Xx * Xx + Xy * Xy), Math.sqrt(Yx * Yx + Yy * Yy));
+    // depth: the lying crown sorts by its middle (in front of the base when
+    // it falls toward the camera)
+    const zm = depthKey(obj.x + fx * rec.logLen * 0.5 * sn, obj.y + fy * rec.logLen * 0.5 * sn);
+    g.zIndex = zm > g._z0 ? zm : g._z0;
+    g._xf = true;
+    return;
+  }
+  if (g._xf) { g._xf = false; g.scale.set(1, 1); g.skew.y = 0; g.zIndex = g._z0; }
+  let skx = 0;
+  if (g._tree) {
+    // A6 optional: stepped ambient tree sway
+    skx = Math.round(Math.sin(gameTime * 0.9 + obj.x * 0.013 + obj.y * 0.007) * 1.4) * 0.025;
+  }
+  // record sway (+ = top leans to screen +x; skew.x > 0 leans it to -x)
+  if (rec !== null && rec.sway !== 0) skx -= Math.round(rec.sway / SP_SWAY_Q) * SP_SWAY_Q;
+  g.skew.x = skx;
+}
+
+// E11: canopy fade. A standing tree that covers the player (the player's
+// body, ~15 art px tall, overlaps the sprite's screen bounds above the trunk
+// base, and the tree sorts in front of the player) fades to 40% in stepped
+// alpha (1 -> 0.7 -> 0.4, one step per SP_FADE_STEP_F frames) and steps
+// back once the player leaves. Alpha only: no geometry or texture work.
+const _spFadeA = [1, 0.7, 0.4];
+const SP_FADE_STEP_F = 4;   // 2 steps x 4 frames ~ 0.13 s
+const SP_FADE_BODY = 15;    // player body height (art px)
+let _spFadeF = -1, _spFadePX = 0, _spFadePY = 0, _spFadePZ = 0, _spFadeOn = false;
+function _spCanopyFade(g, obj, rec, sx, sy, f) {
+  if (_spFadeF !== f) {
+    _spFadeF = f;
+    _spFadeOn = typeof player !== 'undefined' && player !== null && !player.dead;
+    if (_spFadeOn) {
+      _spFadePX = player.x - player.y; _spFadePY = (player.x + player.y) * CFG.ISO_SCALE;
+      _spFadePZ = depthKey(player.x, player.y);
+    }
+  }
+  let want = 0;
+  const standing = rec === null || rec.state === 'standing' || rec.state === 'scorched';
+  // cheap reject first: only trees near the player and in front of it
+  if (standing && _spFadeOn && sy >= _spFadePY && sy - _spFadePY < 400 &&
+      sx - _spFadePX < 240 && _spFadePX - sx < 240 && g._z0 > _spFadePZ) {
+    const tex = g.texture;
+    const w = tex.width, h = tex.height;
+    const l = sx - g.anchor.x * w, r = l + w, top = sy - g.anchor.y * h;
+    const bodyTop = _spFadePY - SP_FADE_BODY * ART;
+    if (_spFadePX > l && _spFadePX < r && _spFadePY > top && bodyTop < sy) want = 2;
+  }
+  const lv = g._fade | 0;
+  if (lv === want) return;
+  if (f - (g._fadeF | 0) < SP_FADE_STEP_F) return;
+  const nl = lv + (want > lv ? 1 : -1);
+  g._fade = nl; g._fadeF = f;
+  g.alpha = _spFadeA[nl];
 }
 
 function _spEnvSweepFn(g, obj, map) {
@@ -1907,13 +2119,27 @@ function _spDecalInit() {
   const recent = new PIXI.Graphics();
   recent.zIndex = SP_Z_DECAL_RECENT;
   worldContainer.addChild(recent);
+  const grow = new PIXI.Graphics();
+  grow.zIndex = SP_Z_DECAL_RECENT;
+  worldContainer.addChild(grow);
   _sp.dec = {
     gen: (_sp.dec ? _sp.dec.gen : 0) + 1,
     head: 0, len: 0, front: null, frontSeed: 0,
     version: -1, sealedEnd: 0,
-    chunks: [], freeG: [], recent: recent,
+    chunks: [], freeG: [], recent: recent, grow: grow,
     rebuilds: 0,
   };
+}
+
+// Test hook (P4/G4): decal layers and their draw count right now
+function decalStats() {
+  const D = _sp.dec;
+  if (!D) return { chunks: 0, dynamic: 0, draws: 0 };
+  let chunks = 0;
+  for (const c of D.chunks) if (c.g.visible !== false) chunks++;
+  // recent + grow layers; an empty Graphics issues no draw
+  const dynamic = (D.recent.context.instructions.length ? 1 : 0) + (D.grow.context.instructions.length ? 1 : 0);
+  return { chunks, dynamic, draws: chunks + dynamic };
 }
 
 function _spDecChunkG() {
@@ -1929,21 +2155,24 @@ function _spDecChunkG() {
   return g;
 }
 
+// P4: chunks and the recent layer draw SETTLED decals only; still-growing
+// pools are drawn by the dynamic grow layer, so they never block merging
 function _spDecDrawRange(g, from, to) {
   const D = _sp.dec;
   for (let v = from; v < to; v++) {
     const d = bloodPools[v - D.head];
-    if (d) _spDrawDecal(g, d);
+    if (d && !d.growing) _spDrawDecal(g, d);
   }
 }
 
-// Sum of visual size steps of still-growing decals in a chunk (-1: none growing)
+// Number of still-growing decals in a chunk (-1: none). When it changes, a
+// pool settled and must now be baked into the chunk.
 function _spDecGrowSig(from, to) {
   const D = _sp.dec;
   let sig = -1;
   for (let v = from; v < to; v++) {
     const d = bloodPools[v - D.head];
-    if (d && d.growing) sig = (sig < 0 ? 0 : sig) + 1 + Math.floor(d.radius / 3);
+    if (d && d.growing) sig = (sig < 0 ? 0 : sig) + 1;
   }
   return sig;
 }
@@ -1962,6 +2191,7 @@ function _spDecalReset() {
   D.gen++;
   D.head = 0; D.len = 0; D.front = null; D.frontSeed = 0; D.sealedEnd = 0;
   D.recent.clear();
+  D.grow.clear();
   D.version = -1;
 }
 
@@ -2013,11 +2243,13 @@ function _spRenderDecals() {
     if (D.sealedEnd < head) D.sealedEnd = head;
   }
 
-  // small chunks holding still-growing pools: redraw only when a size step changed
-  for (let i = 0; i < D.chunks.length; i++) {
+  // chunks whose growing pools settled: bake them in (<= 2 rebuilds per frame;
+  // the rest are picked up on later frames since their signature still differs)
+  let settleBudget = 2;
+  for (let i = 0; i < D.chunks.length && settleBudget > 0; i++) {
     const c = D.chunks[i];
     if (c.sig < 0) continue;
-    if (_spDecGrowSig(c.start, c.end) !== c.sig) _spDecBuildChunk(c);
+    if (_spDecGrowSig(c.start, c.end) !== c.sig) { _spDecBuildChunk(c); settleBudget--; }
   }
 
   // seal the oldest recent decals into small chunks
@@ -2034,7 +2266,7 @@ function _spRenderDecals() {
       const c = D.chunks[i];
       // Big chunks start on a 256-decal boundary so addDecal's 256-aligned
       // recycling drops whole chunks instead of cutting (and rebuilding) one
-      if (!c.big && c.sig < 0 && (run > 0 || c.start % (SP_DEC_SMALL * SP_DEC_MERGE) === 0)) {
+      if (!c.big && (run > 0 || c.start % (SP_DEC_SMALL * SP_DEC_MERGE) === 0)) {
         if (run === 0) runStart = i;
         run++;
         if (run === SP_DEC_MERGE) { found = runStart; break; }
@@ -2051,6 +2283,12 @@ function _spRenderDecals() {
   // recent layer
   D.recent.clear();
   _spDecDrawRange(D.recent, D.sealedEnd, end);
+  // dynamic grow layer: every still-growing pool at its current size
+  D.grow.clear();
+  for (let i = 0; i < _growingDecals.length; i++) {
+    const d = _growingDecals[i];
+    if (d.growing) _spDrawDecal(D.grow, d);
+  }
   D.version = decalVersion;
 }
 
@@ -2135,6 +2373,37 @@ function _spDrawDecal(g, d) {
     g.fill(d.color2 || 0xa040c0);
     g.rect(cx - A, cy - A, A, A);
     g.fill(0x6a6a6a);
+  } else if (kind === 7) { // DECAL_WOOD: splinter (bark uses the same kind, darker colour)
+    const L = (d.radius || 2) >= 2.6 ? 3 : 2;
+    const dir = Math.round((d.angle || 0) / (Math.PI / 4)) & 3; // 0 -, 1 \, 2 |, 3 /
+    const dx = dir === 2 ? 0 : 1, dy = dir === 0 ? 0 : (dir === 3 ? -1 : 1);
+    for (let k = 0; k < L; k++) g.rect(cx + (k * dx - 1) * A, cy + (k * dy - 1) * A, 3 * A, 3 * A);
+    g.fill(darkenColorHex(col, 0.4));
+    for (let k = 0; k < L; k++) g.rect(cx + k * dx * A, cy + k * dy * A, A, A);
+    g.fill(col);
+    g.rect(cx, cy, A, A);
+    g.fill(darkenColorHex(col, 1.3));
+  } else if (kind === 8) { // DECAL_RUBBLE: stone chunk with outline + highlight
+    const rr = d.radius || 2;
+    const w = rr >= 2.8 ? 2 : 1, h = rr >= 3.5 ? 2 : 1;
+    g.rect(cx - A, cy - A, (w + 2) * A, (h + 2) * A);
+    g.fill(0x1e1e1a);
+    g.rect(cx, cy, w * A, h * A);
+    g.fill(col);
+    if (w > 1) { g.rect(cx, cy, A, A); g.fill(darkenColorHex(col, 1.3)); }
+  } else if (kind === 9) { // DECAL_SAND: small tan blob
+    const h = _spHash(seed, 2);
+    const w = (d.radius || 2) >= 2.4 ? 3 : 2;
+    g.rect(cx - A, cy, w * A, A);
+    g.rect(cx + ((h & 1) - 1 + (w > 2 ? 1 : 0)) * A, cy - A, A, A);
+    g.fill(col);
+    g.rect(cx - A + ((h >> 1) & 1) * A, cy, A, A);
+    g.fill(darkenColorHex(col, 0.82));
+  } else if (kind === 10) { // DECAL_LEAF: 1-2 green pixels
+    g.rect(cx, cy, A, A);
+    const h = _spHash(seed, 3);
+    if (h & 1) g.rect(cx + ((h & 2) ? A : -A), cy + ((h & 4) ? A : 0), A, A);
+    g.fill(col);
   } else { // DECAL_SPLAT and unknown kinds
     const sz = (d.radius || 1) >= 2.4 ? 2 : 1;
     g.rect(cx, cy, sz * A, sz * A);
@@ -2147,4 +2416,629 @@ function _spDrawDecal(g, d) {
     }
     g.fill(col);
   }
+}
+
+// =====================================================================
+// ENV REMAINS LAYER (M8 E10 / E12): stumps, fallen logs and rubble
+// footprints are world state (envphys.js envRemains), NOT gore decals.
+// They are bucketed by terrain chunk (same key as chunkCache); each chunk
+// with remains is baked into its own RenderTexture (art-pixel resolution)
+// once per settle-batch and drawn as ONE Sprite, so the per-frame cost is
+// constant in the number of felled trees. Shown only while its terrain
+// chunk is loaded and in view.
+// =====================================================================
+const _spRemScorch = [1, 0.8, 0.62, 0.45];
+
+// Pixel line in absolute art-px coords, thickness t; grow > 0 widens every
+// run by that many art px on each side (outline pass). Same run merging as
+// _pline. Emits rects only (caller fills).
+function _spGLine(g, x0, y0, x1, y1, t, grow) {
+  const A = ART;
+  const dx = x1 - x0, dy = y1 - y0;
+  const n = Math.max(Math.abs(dx), Math.abs(dy));
+  const o = ((t - 1) >> 1) + grow, tt = t + 2 * grow;
+  let rx = 0, ry = 0, rw = 0;
+  for (let i = 0; i <= n; i++) {
+    const x = n ? x0 + Math.round(dx * i / n) : x0;
+    const y = n ? y0 + Math.round(dy * i / n) : y0;
+    if (rw > 0 && y === ry) {
+      if (x === rx + rw) { rw++; continue; }
+      if (x === rx - 1) { rx--; rw++; continue; }
+    }
+    if (rw > 0) g.rect((rx - o) * A, (ry - o) * A, (rw + tt - 1) * A, tt * A);
+    rx = x; ry = y; rw = 1;
+  }
+  if (rw > 0) g.rect((rx - o) * A, (ry - o) * A, (rw + tt - 1) * A, tt * A);
+}
+
+// E10/C: a log lying toward / away from the camera projects to a vertical
+// screen segment that reads as a standing post. Its screen-vertical extent
+// (relative to the stump) is drawn foreshortened by this factor - the log,
+// its crown and the end of the topple animation alike - so it reads as
+// lying flat. (The collision capsule keeps the true world length.)
+const SP_LOG_VK = 0.7;
+
+// Fallen log lying on the ground from the stump side (ax, ay) to (bx, by)
+function _spDrawLog(g, r) {
+  const A = ART, iso = CFG.ISO_SCALE;
+  const variant = r.variant | 0;
+  const sc = _spRemScorch[Math.min(3, r.scorch | 0)];
+  const bark = darkenColorHex(r.barkColor || 0x5a3a1e, sc);
+  const cut = darkenColorHex(r.cutColor || 0xc8a070, sc);
+  // screen-vertical offsets from the stump are foreshortened (SP_LOG_VK)
+  const sb = (r.x + r.y) * iso;
+  const X1 = Math.round((r.bx - r.by) / A), G1 = Math.round((sb + ((r.bx + r.by) * iso - sb) * SP_LOG_VK) / A);
+  // the base end starts a clear art px past the stump so the two read apart
+  const sdx = (r.bx - r.by) - (r.ax - r.ay), sdy = ((r.bx + r.by) - (r.ax + r.ay)) * iso * SP_LOG_VK;
+  const sdl = Math.max(1e-6, Math.abs(sdx) > Math.abs(sdy) ? Math.abs(sdx) : Math.abs(sdy));
+  const X0 = Math.round((r.ax - r.ay) / A + sdx / sdl * 2);
+  const G0 = Math.round((sb + ((r.ax + r.ay) * iso - sb) * SP_LOG_VK) / A + sdy / sdl * 2);
+  // a log lying toward / away from the camera (steep on screen) is drawn one
+  // art px wider and NOT lifted (a lifted vertical log reads as a post
+  // standing on its stump); flat logs sit half a diameter above the ground
+  const steep = Math.abs(G1 - G0) > Math.abs(X1 - X0);
+  const t = Math.max(2, Math.round((r.logR || 7) * 2 / A) - (variant === 1 ? 1 : 0)) + (steep ? 2 : 0);
+  const lift = steep ? 0 : t >> 1;
+  const Y0 = G0 - lift, Y1 = G1 - lift;
+  const o = (t - 1) >> 1;
+  const seed = ((r.x * 73856093) ^ (r.y * 19349663)) | 0;
+  const len = Math.max(Math.abs(X1 - X0), Math.abs(Y1 - Y0));
+  // branch stubs (broad-leaf trees; dead trees get one bare snag)
+  const nStubs = variant === 0 ? 2 + (_spHash(seed, 1) & 1) : variant === 2 ? 1 : 0;
+  // perpendicular screen side of the stubs: up for flat logs, sideways for steep ones
+  const pxs = steep ? 1 : 0, pys = steep ? 0 : 1;
+
+  // ground shadow: a 1-px strip below (flat) or along both sides (steep:
+  // the log lies on the ground) of the log
+  if (steep) {
+    _spGLine(g, X0 + t - o + 1, G0 + 1, X1 + t - o + 1, G1 + 1, 1, 0);
+    _spGLine(g, X0 - o - 2, G0 + 1, X1 - o - 2, G1 + 1, 1, 0);
+  } else _spGLine(g, X0 + 1, G0 + 2, X1 + 1, G1 + 2, 1, 0);
+  g.fill({ color: 0, alpha: 0.3 });
+  // outline (log + stubs + end caps)
+  _spGLine(g, X0, Y0, X1, Y1, t, 1);
+  for (let k = 0; k < nStubs; k++) {
+    const h = _spHash(seed, k + 3);
+    const f = 0.35 + (h & 255) / 255 * 0.5;
+    const sx = Math.round(X0 + (X1 - X0) * f), sy = Math.round(Y0 + (Y1 - Y0) * f);
+    const side = (h & 256) ? 1 : -1, l = o + 2 + ((h >> 9) & 1);
+    _spGLine(g, sx, sy, sx + side * pxs * l + (steep ? 0 : (h & 512 ? 1 : -1)), sy - pys * l, 1, 1);
+  }
+  g.fill(0x1a120a);
+  // bark body + stubs
+  _spGLine(g, X0, Y0, X1, Y1, t, 0);
+  for (let k = 0; k < nStubs; k++) {
+    const h = _spHash(seed, k + 3);
+    const f = 0.35 + (h & 255) / 255 * 0.5;
+    const sx = Math.round(X0 + (X1 - X0) * f), sy = Math.round(Y0 + (Y1 - Y0) * f);
+    const side = (h & 256) ? 1 : -1, l = o + 2 + ((h >> 9) & 1);
+    _spGLine(g, sx, sy, sx + side * pxs * l + (steep ? 0 : (h & 512 ? 1 : -1)), sy - pys * l, 1, 0);
+  }
+  g.fill(bark);
+  // shaded underside (flat) / both flanks (steep: a cylinder lying along
+  // the view has its lit top surface in the middle, not a post's lit side)
+  if (t > 2) {
+    if (steep) {
+      _spGLine(g, X0 + t - 1 - o, Y0, X1 + t - 1 - o, Y1, 1, 0);
+      _spGLine(g, X0 - o, Y0, X1 - o, Y1, 1, 0);
+    } else _spGLine(g, X0, Y0 + t - 1 - o, X1, Y1 + t - 1 - o, 1, 0);
+    g.fill(darkenColorHex(bark, 0.68));
+  }
+  // highlight along the top edge (flat) / the middle of the top (steep)
+  if (steep) _spGLine(g, X0 - o + ((t - 1) >> 1), Y0, X1 - o + ((t - 1) >> 1), Y1, 1, 0);
+  else _spGLine(g, X0, Y0 - o, X1, Y1 - o, 1, 0);
+  g.fill(darkenColorHex(bark, 1.3));
+  // bark grain: a few dark pixels along the trunk (+ char spots when
+  // scorched); on steep logs short bands ACROSS the trunk (a cylinder seen
+  // lying lengthwise, not a post)
+  const nGrain = Math.max(2, len >> 2);
+  for (let k = 0; k < nGrain; k++) {
+    const h = _spHash(seed, k + 20);
+    const f = 0.12 + (h & 255) / 255 * 0.76;
+    const off = ((h >> 8) % Math.max(1, t - 1)) - o + (t > 2 ? 0 : 0);
+    const gx = Math.round(X0 + (X1 - X0) * f) + (steep ? off : 0);
+    const gy = Math.round(Y0 + (Y1 - Y0) * f) + (steep ? 0 : off);
+    if (steep) g.rect((Math.round(X0 + (X1 - X0) * f) - o + ((h >> 8) % Math.max(1, t - 2))) * A, gy * A, 2 * A, A);
+    else g.rect(gx * A, gy * A, ((h >> 12) & 1) ? 2 * A : A, A);
+  }
+  g.fill((r.scorch | 0) >= 2 ? 0x141010 : darkenColorHex(bark, 0.62));
+  // snapped base end: splintered (dark notches + a light splinter), so it
+  // reads apart from the stump's cut top
+  const ux = X1 - X0, uy = Y1 - Y0, ul = Math.max(1, Math.sqrt(ux * ux + uy * uy));
+  const ex = Math.round(ux / ul), ey = Math.round(uy / ul);
+  for (let k = -o; k < t - o; k++) {
+    if ((_spHash(seed, k + 50) & 1) === 0) continue;
+    g.rect((X0 + (steep ? k : 0)) * A, (Y0 + (steep ? 0 : k)) * A, A, A);
+  }
+  g.fill(0x1a120a);
+  g.rect((X0 - ex + (steep ? 0 : 0)) * A, (Y0 - ey) * A, A, A);
+  g.fill(cut);
+  // cut-wood end cap with a ring at the far end (a felled tree that kept
+  // its crown has none: the trunk runs on into the fallen canopy)
+  if (!(r.crownR > 0)) {
+    const cw = Math.max(1, t - 2), ch = Math.max(1, t - 1);
+    const w = steep ? ch : cw, h = steep ? cw : ch;
+    const lx = X1 + ex - (w >> 1), ly = Y1 + ey - (h >> 1);
+    g.rect((lx - 1) * A, (ly - 1) * A, (w + 2) * A, (h + 2) * A);
+    g.fill(0x1a120a);
+    g.rect(lx * A, ly * A, w * A, h * A);
+    g.fill(cut);
+    if (w > 1 || h > 1) {
+      g.rect((lx + (w >> 1)) * A, (ly + (h >> 1)) * A, A, A); // heart / ring
+      g.fill(darkenColorHex(cut, 0.66));
+    }
+  }
+}
+
+// Snapped stump at the tree base (x, y): bark sides, cut-wood top, ring
+function _spDrawStump(g, r) {
+  const A = ART, iso = CFG.ISO_SCALE;
+  const variant = r.variant | 0;
+  const sc = _spRemScorch[Math.min(3, r.scorch | 0)];
+  const bark = darkenColorHex(r.barkColor || 0x5a3a1e, sc);
+  const cut = darkenColorHex(r.cutColor || 0xc8a070, (r.scorch | 0) >= 2 ? sc * 0.8 : sc);
+  const X = Math.round((r.x - r.y) / A), Y = Math.round((r.x + r.y) * iso / A);
+  const w = variant === 0 ? Math.max(4, Math.round((r.stumpR || 5) * 2 / A) + 2) : 4;
+  const h = variant === 1 ? 3 : 4;           // side height (art px)
+  const L = X - (w >> 1), T = Y - h - 1;     // left column, top-face row
+  const seed = ((r.x * 73856093) ^ (r.y * 19349663)) | 0;
+  // shadow
+  g.rect((L + 1) * A, (Y + 1) * A, w * A, A);
+  g.fill({ color: 0, alpha: 0.3 });
+  // outline: body + rounded top
+  g.rect((L - 1) * A, T * A, (w + 2) * A, (Y - T + 1) * A);
+  g.rect(L * A, (T - 1) * A, w * A, A);
+  g.fill(0x1a120a);
+  // bark sides (darker right column)
+  g.rect(L * A, (T + 1) * A, w * A, (Y - T) * A);
+  g.fill(bark);
+  g.rect((L + w - 1) * A, (T + 1) * A, A, (Y - T) * A);
+  g.fill(darkenColorHex(bark, 0.68));
+  // cut top (2 rows: reads as an ellipse in iso) + ring pixel + heart
+  g.rect(L * A, T * A, w * A, A);
+  g.rect((L + 1) * A, (T - 1) * A, Math.max(1, w - 2) * A, A);
+  g.fill(cut);
+  g.rect(L * A, T * A, A, A);
+  g.fill(darkenColorHex(cut, 0.75));
+  g.rect((L + (w >> 1)) * A, (T - (w > 3 ? 1 : 0)) * A, A, A);
+  g.fill(darkenColorHex(cut, 0.6));
+  // a jagged bark splinter sticking up where the trunk snapped
+  const hs = _spHash(seed, 7);
+  const spx = (hs & 1) ? L + w - 1 : L;
+  g.rect(spx * A, (T - 1) * A, A, A);
+  if (variant !== 1 && (hs & 2)) g.rect(spx * A, (T - 2) * A, A, A);
+  g.fill(bark);
+}
+
+// Rubble footprint of a shattered boulder / ruin
+function _spDrawRubble(g, r) {
+  const A = ART, iso = CFG.ISO_SCALE;
+  const cx = _spSnap(r.x - r.y), cy = _spSnap((r.x + r.y) * iso);
+  const seed = ((r.x * 73856093) ^ (r.y * 19349663)) | 0;
+  const ruins = r.type === 'ruins';
+  const rad = r.radius || (ruins ? 16 : 10);
+  const rx = Math.max(2, Math.round(rad * 1.1 / A)), ry = Math.max(1, Math.round(rx * 0.5));
+  const base = darkenColorHex(r.remainColor || 0x62625a, _spRemScorch[Math.min(3, r.scorch | 0)]);
+  // dusty footprint
+  _spEllRows(g, cx, cy, rx + 1, ry + 1, seed, true);
+  g.fill({ color: 0, alpha: 0.2 });
+  const n = 4 + rx + (ruins ? 2 : 0);
+  // stones: outline pass, two tone fills, highlights (same hashes each pass)
+  for (let pass = 0; pass < 4; pass++) {
+    for (let i = 0; i < n; i++) {
+      const h = _spHash(seed, i + 60);
+      const x = ((h & 255) / 255 * 2 - 1) * rx, y = (((h >> 8) & 255) / 255 * 2 - 1) * ry;
+      const px = cx + Math.round(x) * A, py = cy + Math.round(y) * A;
+      const w = 1 + ((h >> 16) & 1) + (ruins && ((h >> 19) & 1) ? 1 : 0), hh = 1 + (((h >> 17) & 3) === 0 ? 1 : 0);
+      const tone = (h >> 18) & 1;
+      if (pass === 0) g.rect(px - A, py - A, (w + 2) * A, (hh + 2) * A);
+      else if (pass === 1 && !tone) g.rect(px, py, w * A, hh * A);
+      else if (pass === 2 && tone) g.rect(px, py, w * A, hh * A);
+      else if (pass === 3 && w > 1) g.rect(px, py, A, A);
+    }
+    if (pass === 0) g.fill(0x1c1c18);
+    else if (pass === 1) g.fill(base);
+    else if (pass === 2) g.fill(darkenColorHex(base, 0.78));
+    else g.fill(darkenColorHex(base, 1.3));
+  }
+  if (ruins) {
+    // two low broken wall stubs
+    for (let i = 0; i < 2; i++) {
+      const h = _spHash(seed, i + 90);
+      const px = cx + ((h % (rx + 1)) - (rx >> 1)) * A, py = cy - ((h >> 6) & 1) * A;
+      const hh = 1 + ((h >> 4) & 1);
+      g.rect(px - A, py - (hh + 1) * A, 4 * A, (hh + 2) * A);
+      g.fill(0x22221e);
+      g.rect(px, py - hh * A, 2 * A, hh * A);
+      g.fill(base);
+      g.rect(px, py - hh * A, 2 * A, A);
+      g.fill(darkenColorHex(base, 1.3));
+    }
+  }
+}
+
+// Fallen crown (E10 polish): a felled tree keeps its canopy, lying
+// flattened on the ground just past the far end of its log (logic fields
+// crownX, crownY, crownR, crownColor, crownVariant). Broadleaf: an
+// iso-ellipse footprint (screen width ~2R, height ~1.2 R x ISO) of lumpy
+// leaf masses; pine: a narrower spiky cone lying along the fall direction,
+// with whorl lines. Outlined, 3 flat tones + light leaf clumps, a few loose
+// leaves. Blobs are merged into one span per row and pass (~4 rects/row).
+const SP_CR_ROWS = 64;
+const _spCrL = new Int16Array(SP_CR_ROWS), _spCrR = new Int16Array(SP_CR_ROWS);
+function _spCrownBlob(n, o, bx, by, brx, bry) {
+  const inv = 1 / (bry + 0.5);
+  for (let j = -bry; j <= bry; j++) {
+    const k = by + j + o;
+    if (k < 0 || k >= n) continue;
+    const t = j * inv;
+    const w = Math.round(brx * Math.sqrt(Math.max(0, 1 - t * t)));
+    if (bx - w < _spCrL[k]) _spCrL[k] = bx - w;
+    if (bx + w > _spCrR[k]) _spCrR[k] = bx + w;
+  }
+}
+function _spCrownHas(n, k) { return k >= 0 && k < n && _spCrL[k] <= _spCrR[k]; }
+
+function _spDrawCrown(g, r) {
+  const A = ART, iso = CFG.ISO_SCALE;
+  const pine = (r.crownVariant | 0) === 1;
+  const col = r.crownColor || 0x2f5a22;
+  const R = Math.min(r.crownR, 80);
+  const sb = (r.x + r.y) * iso; // stump base: vertical offsets foreshortened like the log
+  const cx = Math.round((r.crownX - r.crownY) / A), cy = Math.round((sb + ((r.crownX + r.crownY) * iso - sb) * SP_LOG_VK) / A);
+  const seed = ((r.crownX * 73856093) ^ (r.crownY * 19349663)) | 0;
+  // screen projection (art px per world unit) of the fall direction
+  let fx = r.fallDirX, fy = r.fallDirY;
+  if (!(fx * fx + fy * fy > 1e-6)) { fx = 1; fy = 0; }
+  const dsx = (fx - fy) / A, dsy = (fx + fy) * iso * SP_LOG_VK / A;
+  const rx = Math.max(3, Math.round(R / A)), ry = Math.max(2, Math.round(R * iso * 0.6 / A));
+  // silhouette: per-row spans [L, R] (art px relative to cx), rows -H..H
+  const H = Math.min((SP_CR_ROWS >> 1) - 2, pine ? Math.ceil(Math.abs(dsy) * R * 0.75 + ry) + 2 : ry + 2);
+  const n = 2 * H + 1, o = H;
+  _spCrL.fill(32767, 0, n); _spCrR.fill(-32768, 0, n);
+  const NT = 4; // pine tiers
+  if (pine) {
+    // a cone lying along the fall direction: tiers shrink toward the tip
+    for (let k = 0; k < NT; k++) {
+      const t = (-0.5 + k * 0.4) * R;
+      const w = Math.max(1, Math.round(R * (0.62 - 0.12 * k) / A));
+      _spCrownBlob(n, o, Math.round(dsx * t), Math.round(dsy * t), w, Math.max(1, Math.round(w * iso * 1.2)));
+    }
+    // needle spikes: rows alternately pushed out / pulled in
+    for (let k = 0; k < n; k++) {
+      if (_spCrL[k] > _spCrR[k]) continue;
+      const h = _spHash(seed, k + 5);
+      if (k & 1) { _spCrL[k] -= 1 + (h & 1); _spCrR[k] += 1 + ((h >> 1) & 1); }
+      else { _spCrL[k] += 1; _spCrR[k] -= 1; }
+      if (_spCrL[k] > _spCrR[k]) { _spCrL[k] = 32767; _spCrR[k] = -32768; }
+    }
+  } else {
+    // a lumpy canopy: a core ellipse plus a ring of leaf masses
+    _spCrownBlob(n, o, 0, 0, Math.round(rx * 0.6), Math.round(ry * 0.7));
+    const nb = 7;
+    for (let i = 0; i < nb; i++) {
+      const h = _spHash(seed, i + 9);
+      const a = (i + ((h & 255) / 255 - 0.5) * 0.6) * (Math.PI * 2 / nb);
+      const bx = Math.round(Math.cos(a) * rx * 0.6), by = Math.round(Math.sin(a) * ry * 0.56);
+      const s = 0.3 + ((h >> 8) & 255) / 255 * 0.2;
+      _spCrownBlob(n, o, bx, by, Math.max(1, Math.round(rx * s)), Math.max(1, Math.round(ry * (s + 0.16))));
+    }
+  }
+  const top = cy - o;
+  const light = darkenColorHex(col, 1.32), dark = darkenColorHex(col, 0.5);
+  // ground shadow (offset down-right)
+  for (let k = 0; k < n; k++) {
+    if (_spCrownHas(n, k)) g.rect((cx + _spCrL[k] + 1) * A, (top + k + 2) * A, (_spCrR[k] - _spCrL[k] + 1) * A, A);
+  }
+  g.fill({ color: 0, alpha: 0.28 });
+  // outline: the silhouette grown by one art px in every direction
+  for (let k = -1; k <= n; k++) {
+    let l = 32767, rr = -32768;
+    for (let d = -1; d <= 1; d++) {
+      if (_spCrownHas(n, k + d)) { l = Math.min(l, _spCrL[k + d]); rr = Math.max(rr, _spCrR[k + d]); }
+    }
+    if (l > rr) continue;
+    g.rect((cx + l - 1) * A, (top + k) * A, (rr - l + 3) * A, A);
+  }
+  g.fill(darkenColorHex(col, 0.38));
+  // shaded underside: the whole silhouette in the dark tone
+  for (let k = 0; k < n; k++) {
+    if (_spCrownHas(n, k)) g.rect((cx + _spCrL[k]) * A, (top + k) * A, (_spCrR[k] - _spCrL[k] + 1) * A, A);
+  }
+  g.fill(darkenColorHex(col, 0.7));
+  // lit body: silhouette minus a bottom rim and a 1-px right rim
+  const s = pine ? 1 : 2;
+  for (let k = 0; k < n; k++) {
+    if (!_spCrownHas(n, k) || !_spCrownHas(n, k + s)) continue;
+    const l = Math.max(_spCrL[k], _spCrL[k + s]), rr = Math.min(_spCrR[k], _spCrR[k + s]) - 1;
+    if (rr >= l) g.rect((cx + l) * A, (top + k) * A, (rr - l + 1) * A, A);
+  }
+  g.fill(col);
+  // dark pass: leaf-clump undersides / pine whorls (char when scorched)
+  const nc = Math.max(3, Math.round(rx * ry / (pine ? 6 : 5)));
+  if (pine) {
+    // whorl lines across the cone between tiers (perpendicular on screen)
+    const dl = Math.max(1e-6, Math.sqrt(dsx * dsx + dsy * dsy));
+    const px = -dsy / dl, py = dsx / dl;
+    for (let k = 0; k < NT - 1; k++) {
+      const t = (-0.3 + k * 0.4) * R;
+      const w = R * (0.5 - 0.12 * k) / A;
+      const mx = cx + dsx * t, my = cy + dsy * t;
+      _spGLine(g, Math.round(mx - px * w * 0.7), Math.round(my - py * w * 0.35),
+        Math.round(mx + px * w * 0.7), Math.round(my + py * w * 0.35), 1, 0);
+    }
+  } else {
+    for (let i = 0; i < nc; i++) {
+      const h = _spHash(seed, i + 30);
+      const k = 1 + (h % Math.max(1, n - 3));
+      if (!_spCrownHas(n, k + 2) || !_spCrownHas(n, k + 2 + s)) continue;
+      const l = Math.max(_spCrL[k + 2], _spCrL[k + 2 + s]) + 1, rr = Math.min(_spCrR[k + 2], _spCrR[k + 2 + s]) - 2;
+      if (rr <= l) continue;
+      g.rect((cx + l + ((h >>> 8) % (rr - l + 1))) * A, (top + k + 2) * A, 2 * A, A);
+    }
+  }
+  g.fill((r.scorch | 0) >= 2 ? 0x161410 : dark);
+  // light pass: rounded leaf clumps (broadleaf) / needle tufts (pine) on the
+  // lit body, plus a few loose leaves on the ground around the crown
+  for (let i = 0; i < nc; i++) {
+    const h = _spHash(seed, i + 30);
+    const k = 1 + (h % Math.max(1, n - 3));
+    if (pine) {
+      if (!_spCrownHas(n, k) || !_spCrownHas(n, k + s)) continue;
+      const l = Math.max(_spCrL[k], _spCrL[k + s]), rr = Math.min(_spCrR[k], _spCrR[k + s]) - 2;
+      if (rr <= l) continue;
+      g.rect((cx + l + ((h >>> 8) % (rr - l + 1))) * A, (top + k) * A, 2 * A, A);
+      continue;
+    }
+    if (!_spCrownHas(n, k + 2) || !_spCrownHas(n, k + 2 + s)) continue;
+    const l = Math.max(_spCrL[k + 2], _spCrL[k + 2 + s]) + 1, rr = Math.min(_spCrR[k + 2], _spCrR[k + 2 + s]) - 2;
+    if (rr <= l) continue;
+    const x = l + ((h >>> 8) % (rr - l + 1));
+    if (_spCrownHas(n, k) && x >= _spCrL[k] && x + 1 <= _spCrR[k]) g.rect((cx + x) * A, (top + k) * A, 2 * A, A);
+    if (x - 1 >= _spCrL[k + 1] && x + 1 <= _spCrR[k + 1]) g.rect((cx + x - 1) * A, (top + k + 1) * A, 3 * A, A);
+  }
+  const nl = 3 + (seed & 1);
+  for (let i = 0; i < nl; i++) {
+    const h = _spHash(seed, i + 90);
+    const a = (h & 1023) / 1024 * Math.PI * 2;
+    const k = Math.round(Math.sin(a) * (ry + 2 + ((h >> 10) & 1)));
+    const x = Math.round(Math.cos(a) * (rx + 2 + ((h >> 11) & 1)) + (pine ? dsx * R * 0.1 : 0));
+    g.rect((cx + x) * A, (cy + k + 1) * A, A, A);
+  }
+  g.fill(light);
+}
+
+function _spRemainDepth(r) { return r.x + r.y; }
+function _spRemainCmp(a, b) { return _spRemainDepth(a) - _spRemainDepth(b); }
+
+// Layer bookkeeping. envRemains only grows during a round (reset empties
+// it), so new entries are bucketed incrementally into persistent per-chunk
+// buckets (numeric key, no per-item allocs); only the touched chunk goes
+// dirty. A dirty chunk is rebuilt once its bakes have paused for
+// SP_ENVL_QUIET_N frames (or after SP_ENVL_MAX_LAG frames while bakes keep
+// trickling in), and never twice within SP_ENVL_REBUILD_N frames: a BFG's
+// burst of bakes costs a few rebuilds, not one per bake. Until
+// the layer has drawn a felled tree (r._drawnInLayer) its fallen sprite
+// stays visible, so a late rebuild never shows a gap. A chunk's baked
+// texture + sprite are destroyed when its terrain chunk unloads and
+// re-baked from its bucket when it returns.
+//
+// E12 bake: one shared build Graphics (never in the scene) is filled with
+// the chunk's remains, measured, and rendered once into the chunk's
+// RenderTexture, sized to the remains' screen bounds (+ padding) and
+// aligned to the art-pixel grid. The texture is at 1/ART resolution
+// (one texel per art pixel, nearest sampling): every remain rect lies on
+// the ART grid, so at x3 it is pixel-identical to drawing the Graphics
+// live, and at x1/x2/x4 it reads like any other art-pixel sprite.
+const SP_ENVL_REBUILD_N = 6;     // frames between rebuilds of one chunk (~0.1 s)
+const SP_ENVL_QUIET_N = 6;       // rebuild once no remain was added for this many frames
+const SP_ENVL_MAX_LAG = 30;      // ...or once dirty this long (~0.5 s) while bakes continue
+const SP_ENVL_BUILDS_MAX = 2;    // chunk rebuilds per frame at most
+const SP_ENVL_SWEEP_N = 30;      // unload check at least every N frames
+const SP_ENVL_RES = 1 / ART;     // bake resolution: one texel per art pixel
+const SP_ENVL_PAD = 2 * ART;     // padding around the measured remains bounds
+const SP_ENVL_RT_STEP = 32 * ART; // RT size granularity (re-bakes reuse the RT while it fits)
+function _spEnvKey(cx, cy) { return cx * 100003 + cy; }
+function _spRemainSig(r) {
+  let s = (r.x * 7 | 0) + (r.y * 13 | 0) + (r.remain === 'log' ? 1 : 2) + (r.scorch | 0) * 101 + (r.variant | 0) * 7919 +
+    (r.logGone === true ? 104729 : 0);
+  if (r.crownR > 0) s += (r.crownR * 17 | 0) + (r.crownColor | 0) + (r.crownX * 3 | 0) + (r.crownY * 5 | 0) + (r.crownVariant | 0);
+  return s | 0;
+}
+
+function _spEnvLayerNew() {
+  return { version: -1, map: new Map(), list: [], count: 0, first: null, last: null,
+    frame: 0, ccSize: -1, rebuilds: 0 };
+}
+
+// Shared bake source: one Graphics under an identity root, never in the
+// scene (created once, survives re-init like the textures).
+let _spEnvBakeRoot = null, _spEnvBakeG = null;
+
+function _spEnvLayerDrawItems(g, items) {
+  if (items.length > 1) items.sort(_spRemainCmp);
+  for (let i = 0; i < items.length; i++) {
+    const r = items[i];
+    if (r.remain === 'log' && r.logGone === true) {
+      _spDrawStump(g, r); // E11: the log was splintered; the stump stays
+    } else if (r.remain === 'log') {
+      _spDrawLog(g, r);
+      // the crown overlaps the log's far end (the trunk runs into it)
+      if (r.crownR > 0) _spDrawCrown(g, r);
+      _spDrawStump(g, r);
+    } else {
+      _spDrawRubble(g, r);
+    }
+  }
+}
+
+function _spEnvLayerFreeTex(c) {
+  if (c.sp) _spDestroy(c.sp);
+  if (c.rt && !c.rt.destroyed) c.rt.destroy(true);
+  c.sp = null; c.rt = null;
+}
+
+// Bake one chunk: build its remains into the shared Graphics, render that
+// once into the chunk's RenderTexture, show it through the chunk's Sprite.
+function _spEnvLayerBuild(L, c) {
+  if (_spEnvBakeG === null || _spEnvBakeG.destroyed) {
+    _spEnvBakeRoot = new PIXI.Container();
+    _spEnvBakeG = new PIXI.Graphics();
+    _spEnvBakeRoot.addChild(_spEnvBakeG);
+  }
+  const g = _spEnvBakeG;
+  g.clear();
+  const items = c.items;
+  _spEnvLayerDrawItems(g, items);
+  // measured screen bounds of everything drawn, snapped out to the art grid
+  const b = g.getLocalBounds();
+  const A = ART;
+  const x0 = Math.floor((b.minX - SP_ENVL_PAD) / A) * A, y0 = Math.floor((b.minY - SP_ENVL_PAD) / A) * A;
+  const x1 = Math.ceil((b.maxX + SP_ENVL_PAD) / A) * A, y1 = Math.ceil((b.maxY + SP_ENVL_PAD) / A) * A;
+  const w = Math.max(A, x1 - x0), h = Math.max(A, y1 - y0);
+  // reuse the chunk's RT while it fits (and is not far too big), else re-allocate
+  let rt = c.rt;
+  if (rt === null || rt.destroyed || rt.width < w || rt.height < h ||
+      rt.width > w + 4 * SP_ENVL_RT_STEP || rt.height > h + 4 * SP_ENVL_RT_STEP) {
+    const old = rt;
+    rt = PIXI.RenderTexture.create({
+      width: Math.ceil(w / SP_ENVL_RT_STEP) * SP_ENVL_RT_STEP,
+      height: Math.ceil(h / SP_ENVL_RT_STEP) * SP_ENVL_RT_STEP,
+      resolution: SP_ENVL_RES, scaleMode: 'nearest', antialias: false,
+    });
+    if (c.sp) c.sp.texture = rt;
+    if (old !== null && !old.destroyed) old.destroy(true);
+    c.rt = rt;
+  }
+  g.position.set(-x0, -y0);
+  renderer.render({ container: _spEnvBakeRoot, target: rt, clear: true, clearColor: [0, 0, 0, 0] });
+  g.clear(); // drop the source geometry: the RT holds the pixels
+  let sp = c.sp;
+  if (sp === null) {
+    sp = new PIXI.Sprite(rt);
+    sp.zIndex = SP_Z_ENVL; sp.visible = false;
+    sp.eventMode = 'none';
+    worldContainer.addChild(sp);
+    c.sp = sp;
+  }
+  sp.position.set(x0, y0);
+  // the baked texture now shows every remain of the chunk: hand off from
+  // the fallen tree sprites (no gap, no double draw)
+  for (let i = 0; i < items.length; i++) items[i]._drawnInLayer = true;
+  // screen bounds (view culling) = the sprite's extent
+  c.x0 = x0; c.x1 = x0 + rt.width; c.y0 = y0; c.y1 = y0 + rt.height;
+  c.dirty = false;
+  c.built = L.frame;
+  L.rebuilds++;
+}
+
+// Terrain chunk gone: free the texture + sprite, keep the bucket for its return
+function _spEnvLayerUnload(c) {
+  _spEnvLayerFreeTex(c);
+  c.dirty = true;
+  c.built = c.since = c.touched = -1e9; // rebuild as soon as it is back
+  for (let i = 0; i < c.items.length; i++) c.items[i]._drawnInLayer = false;
+}
+
+function _spEnvLayerClear(L) {
+  for (let i = 0; i < L.list.length; i++) {
+    const c = L.list[i];
+    _spEnvLayerFreeTex(c);
+    for (let j = 0; j < c.items.length; j++) c.items[j]._drawnInLayer = false;
+  }
+  L.map.clear();
+  L.list.length = 0;
+  L.count = 0; L.first = null; L.last = null;
+}
+
+function _spEnvLayerAdd(L, r, cs) {
+  r._drawnInLayer = false;
+  if (r.remain !== 'log' && r.remain !== 'rubble') return;
+  const cx = Math.floor(r.x / cs), cy = Math.floor(r.y / cs);
+  const nk = _spEnvKey(cx, cy);
+  let c = L.map.get(nk);
+  if (c === undefined) {
+    c = { nk, skey: cx + ',' + cy, sp: null, rt: null, items: [], sig: 0, dirty: false, built: -1e9,
+      since: 0, touched: 0, x0: 0, x1: 0, y0: 0, y1: 0 };
+    L.map.set(nk, c);
+    L.list.push(c);
+  }
+  c.items.push(r);
+  c.sig = (c.sig + _spRemainSig(r)) | 0;
+  _spEnvLayerTouch(L, c);
+}
+
+function _spEnvLayerTouch(L, c) {
+  if (!c.dirty) { c.dirty = true; c.since = L.frame; }
+  c.touched = L.frame;
+}
+
+// Bring the buckets up to date with envRemains (incremental)
+function _spEnvLayerIngest(L) {
+  const n = envRemains.length;
+  // shrunk or replaced contents (new round): start over
+  if (n < L.count || (L.count > 0 && (envRemains[0] !== L.first || envRemains[L.count - 1] !== L.last))) {
+    _spEnvLayerClear(L);
+  }
+  if (n > L.count) {
+    const cs = CFG.CHUNK_SIZE * CFG.TILE_SIZE;
+    for (let i = L.count; i < n; i++) _spEnvLayerAdd(L, envRemains[i], cs);
+    L.count = n; L.first = envRemains[0]; L.last = envRemains[n - 1];
+    // no early return: an existing remain may have changed in the SAME frame
+    // (e.g. a log splintered while another tree baked), so re-sign as well
+  }
+  // An existing remain changed (e.g. logGone): re-sign the buckets (numeric
+  // pass, no allocs) and dirty what differs.
+  for (let i = 0; i < L.list.length; i++) {
+    const c = L.list[i];
+    let sig = 0;
+    for (let j = 0; j < c.items.length; j++) sig = (sig + _spRemainSig(c.items[j])) | 0;
+    if (sig !== c.sig) { c.sig = sig; _spEnvLayerTouch(L, c); }
+  }
+}
+
+function _spRenderEnvLayer() {
+  const L = _sp.envL;
+  if (!L || typeof envRemains === 'undefined') return;
+  L.frame++;
+  if (envRemainsVersion !== L.version) {
+    L.version = envRemainsVersion;
+    _spEnvLayerIngest(L);
+  }
+  const hasCC = typeof chunkCache !== 'undefined';
+  // terrain chunks come and go: release the remains of unloaded ones
+  if (hasCC && (chunkCache.size !== L.ccSize || L.frame % SP_ENVL_SWEEP_N === 0)) {
+    L.ccSize = chunkCache.size;
+    for (let i = 0; i < L.list.length; i++) {
+      const c = L.list[i];
+      if (c.sp && !chunkCache.has(c.skey)) _spEnvLayerUnload(c);
+    }
+  }
+  let budget = SP_ENVL_BUILDS_MAX;
+  for (let i = 0; i < L.list.length; i++) {
+    const c = L.list[i];
+    if (hasCC && !chunkCache.has(c.skey)) continue; // unloaded: no texture
+    if (c.dirty && budget > 0 && L.frame - c.built >= SP_ENVL_REBUILD_N &&
+        (L.frame - c.touched >= SP_ENVL_QUIET_N || L.frame - c.since >= SP_ENVL_MAX_LAG)) {
+      _spEnvLayerBuild(L, c);
+      budget--;
+    }
+    if (c.sp) c.sp.visible = c.x1 > _sp.vx0 && c.x0 < _sp.vx1 && c.y1 > _sp.vy0 && c.y0 < _sp.vy1;
+  }
+}
+
+// Test hook (E10/E12): env remains layer. chunks = live per-chunk baked
+// sprites, buckets = chunks holding remains (loaded or not), draws =
+// visible now, rtBytes = GPU memory of the baked textures (estimate).
+function envLayerStats() {
+  const L = _sp.envL;
+  if (!L) return { chunks: 0, buckets: 0, draws: 0, rebuilds: 0, dirty: 0, rtBytes: 0 };
+  let vis = 0, live = 0, dirty = 0, bytes = 0;
+  for (let i = 0; i < L.list.length; i++) {
+    const c = L.list[i];
+    if (c.sp) { live++; if (c.sp.visible) vis++; }
+    if (c.rt) bytes += c.rt.source.pixelWidth * c.rt.source.pixelHeight * 4;
+    if (c.dirty) dirty++;
+  }
+  return { chunks: live, buckets: L.list.length, draws: vis, rebuilds: L.rebuilds, dirty, rtBytes: bytes };
 }

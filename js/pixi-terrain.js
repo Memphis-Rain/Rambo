@@ -246,15 +246,23 @@ function generatePixiChunk(cx, cy) {
   // Clean up temporary container
   chunkContainer.destroy({ children: true });
 
-  // Spawn environmental objects (unchanged from original - handled by world.js)
+  // Bake this chunk's water camo once (P1)
+  bakeChunkWater(cx, cy);
+
+  // Spawn environmental objects
   if (!envChunks.has(key)) {
     envChunks.add(key);
     const rng2 = seededRand(cx * 12345 + cy * 67890);
+    // E7: stable per-chunk ids (same seed -> same objects in the same order)
+    let envN = 0;
+    const addEnv = (o) => { o.id = key + '#' + (envN++); envObjects.push(o); };
     const chunkWorldX = cx * sz * ts;
     const chunkWorldY = cy * sz * ts;
     const forestDensity = (fbm(chunkWorldX * 0.001, chunkWorldY * 0.001, 3) + 0.5);
     const isForest = forestDensity > 0.5;
-    const numTrees = isForest ? Math.floor(30 + rng2() * 20) : Math.floor(5 + rng2() * 12);
+    // E1: ~30% more placed trees than before (the original counts x density;
+    // the E0 rendered-tile check rejects slightly fewer, hence 1.26)
+    const numTrees = Math.floor((isForest ? 30 + rng2() * 20 : 5 + rng2() * 12) * CFG.ENV_TREE_DENSITY);
     const numRocks = Math.floor(3 + rng2() * 6);
     const numMilitary = Math.floor(rng2() * 3);
     const numFlowers = Math.floor(rng2() * 5);
@@ -264,20 +272,17 @@ function generatePixiChunk(cx, cy) {
       const ox = (cx * sz + rng2() * sz) * ts;
       const oy = (cy * sz + rng2() * sz) * ts;
       if (Math.abs(ox) < 150 && Math.abs(oy) < 150) continue;
-      if (getTerrainTypeAt(ox, oy) === 'water' ||
-        getTerrainTypeAt(ox + 30, oy) === 'water' ||
-        getTerrainTypeAt(ox - 30, oy) === 'water' ||
-        getTerrainTypeAt(ox, oy + 30) === 'water' ||
-        getTerrainTypeAt(ox, oy - 30) === 'water') continue;
+      // E0: trunk and base must stand on a RENDERED land tile (canopies may overhang)
+      if (baseOnWater(ox, oy, 12)) continue;
       const treeType = rng2();
       if (treeType < 0.5) {
-        envObjects.push({ x: ox, y: oy, type: 'tree', radius: 31 + rng2() * 29, height: 60 + rng2() * 55, collision: 8, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'tree', radius: 31 + rng2() * 29, height: 60 + rng2() * 55, collision: 8, createdAt: -1 });
       } else if (treeType < 0.75) {
-        envObjects.push({ x: ox, y: oy, type: 'pine', radius: 22 + rng2() * 20, height: 66 + rng2() * 44, collision: 7, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'pine', radius: 22 + rng2() * 20, height: 66 + rng2() * 44, collision: 7, createdAt: -1 });
       } else if (treeType < 0.9) {
-        envObjects.push({ x: ox, y: oy, type: 'bush', radius: 12 + rng2() * 14, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'bush', radius: 12 + rng2() * 14, createdAt: -1 });
       } else {
-        envObjects.push({ x: ox, y: oy, type: 'deadtree', height: 30 + rng2() * 25, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'deadtree', height: 30 + rng2() * 25, createdAt: -1 });
       }
     }
 
@@ -286,19 +291,15 @@ function generatePixiChunk(cx, cy) {
       const ox = (cx * sz + rng2() * sz) * ts;
       const oy = (cy * sz + rng2() * sz) * ts;
       if (Math.abs(ox) < 150 && Math.abs(oy) < 150) continue;
-      if (getTerrainTypeAt(ox, oy) === 'water' ||
-        getTerrainTypeAt(ox + 20, oy) === 'water' ||
-        getTerrainTypeAt(ox - 20, oy) === 'water' ||
-        getTerrainTypeAt(ox, oy + 20) === 'water' ||
-        getTerrainTypeAt(ox, oy - 20) === 'water') continue;
-      const isHill = getTerrainTypeAt(ox, oy) === 'hill';
+      if (baseOnWater(ox, oy, 20)) continue; // E0: rocks/boulders need a dry base too
+      const isHill = renderedTerrainAt(ox, oy) === 'hill';
       const rockSize = rng2();
       if (rockSize < 0.35) {
-        envObjects.push({ x: ox, y: oy, type: 'rock', radius: 6 + rng2() * 8, collision: 6, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'rock', radius: 6 + rng2() * 8, collision: 6, createdAt: -1 });
       } else if (rockSize < 0.7 || isHill) {
-        envObjects.push({ x: ox, y: oy, type: 'boulder', radius: 14 + rng2() * 16, collision: 14, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'boulder', radius: 14 + rng2() * 16, collision: 14, createdAt: -1 });
       } else {
-        envObjects.push({ x: ox, y: oy, type: 'rockcluster', radius: 10 + rng2() * 10, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'rockcluster', radius: 10 + rng2() * 10, createdAt: -1 });
       }
     }
 
@@ -306,9 +307,9 @@ function generatePixiChunk(cx, cy) {
     for (let i = 0; i < numFlowers; i++) {
       const ox = (cx * sz + rng2() * sz) * ts;
       const oy = (cy * sz + rng2() * sz) * ts;
-      const terrain = getTerrainTypeAt(ox, oy);
+      const terrain = renderedTerrainAt(ox, oy);
       if (terrain === 'water' || terrain === 'dark') continue;
-      envObjects.push({ x: ox, y: oy, type: 'flowers', radius: 4 + rng2() * 6, colorHue: rng2() * 360, createdAt: -1 });
+      addEnv({ x: ox, y: oy, type: 'flowers', radius: 4 + rng2() * 6, colorHue: rng2() * 360, createdAt: -1 });
     }
 
     // Military objects
@@ -316,16 +317,16 @@ function generatePixiChunk(cx, cy) {
       const ox = (cx * sz + rng2() * sz) * ts;
       const oy = (cy * sz + rng2() * sz) * ts;
       if (Math.abs(ox) < 200 && Math.abs(oy) < 200) continue;
-      if (getTerrainTypeAt(ox, oy) === 'water') continue;
+      if (baseOnWater(ox, oy, 10)) continue;
       const r = rng2();
       if (r < 0.35) {
-        envObjects.push({ x: ox, y: oy, type: 'barrel', hp: 30, maxHp: 30, exploded: false, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'barrel', hp: 30, maxHp: 30, exploded: false, createdAt: -1 });
       } else if (r < 0.6) {
-        envObjects.push({ x: ox, y: oy, type: 'sandbag', width: 30 + rng2() * 20, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'sandbag', width: 30 + rng2() * 20, createdAt: -1 });
       } else if (r < 0.85) {
-        envObjects.push({ x: ox, y: oy, type: 'crate', createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'crate', createdAt: -1 });
       } else {
-        envObjects.push({ x: ox, y: oy, type: 'ruins', width: 20 + rng2() * 30, height: 15 + rng2() * 20, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'ruins', width: 20 + rng2() * 30, height: 15 + rng2() * 20, createdAt: -1 });
       }
     }
 
@@ -333,13 +334,13 @@ function generatePixiChunk(cx, cy) {
     for (let i = 0; i < 3; i++) {
       const ox = (cx * sz + rng2() * sz) * ts;
       const oy = (cy * sz + rng2() * sz) * ts;
-      const terrain = getTerrainTypeAt(ox, oy);
-      const nearWater = getTerrainTypeAt(ox + 40, oy) === 'water' ||
-        getTerrainTypeAt(ox - 40, oy) === 'water' ||
-        getTerrainTypeAt(ox, oy + 40) === 'water' ||
-        getTerrainTypeAt(ox, oy - 40) === 'water';
+      const terrain = renderedTerrainAt(ox, oy);
+      const nearWater = renderedTerrainAt(ox + 40, oy) === 'water' ||
+        renderedTerrainAt(ox - 40, oy) === 'water' ||
+        renderedTerrainAt(ox, oy + 40) === 'water' ||
+        renderedTerrainAt(ox, oy - 40) === 'water';
       if (nearWater && terrain !== 'water') {
-        envObjects.push({ x: ox, y: oy, type: 'reeds', height: 8 + rng2() * 10, createdAt: -1 });
+        addEnv({ x: ox, y: oy, type: 'reeds', height: 8 + rng2() * 10, createdAt: -1 });
       }
     }
   }
@@ -348,6 +349,24 @@ function generatePixiChunk(cx, cy) {
 /**
  * Render terrain chunks around the player
  */
+// Terrain type of the tile that is actually DRAWN at (x, y): tiles render
+// from the sample at their corner, so snap to the tile grid (E0; same rule
+// as the water slowdown in combat.js)
+function renderedTerrainAt(x, y) {
+  const ts = CFG.TILE_SIZE;
+  return getTerrainTypeAt(Math.floor(x / ts) * ts, Math.floor(y / ts) * ts);
+}
+
+// Is the point or its base footprint (radius r) on a rendered water tile?
+function baseOnWater(x, y, r) {
+  if (renderedTerrainAt(x, y) === 'water') return true;
+  for (let i = 0; i < 8; i++) {
+    const a = i * Math.PI / 4;
+    if (renderedTerrainAt(x + Math.cos(a) * r, y + Math.sin(a) * r) === 'water') return true;
+  }
+  return false;
+}
+
 function renderPixiTerrain() {
   const ts = CFG.TILE_SIZE;
   const cs = CFG.CHUNK_SIZE * ts;
@@ -356,10 +375,18 @@ function renderPixiTerrain() {
   const pcx = Math.floor(centerWorld.x / cs);
   const pcy = Math.floor(centerWorld.y / cs);
 
-  // Generate visible chunks
-  for (let cy = pcy - chunkRange; cy <= pcy + chunkRange; cy++) {
-    for (let cx = pcx - chunkRange; cx <= pcx + chunkRange; cx++) {
-      generatePixiChunk(cx, cy);
+  // P3: bake nearest-first, ring by ring. The 3x3 around the camera covers
+  // the screen and always bakes; the outer ring is pre-baked off-screen
+  // within a per-frame budget, so walking never bakes a whole row at once
+  const t0 = performance.now();
+  bake:
+  for (let ring = 0; ring <= chunkRange; ring++) {
+    for (let cy = pcy - ring; cy <= pcy + ring; cy++) {
+      for (let cx = pcx - ring; cx <= pcx + ring; cx++) {
+        if (Math.max(Math.abs(cx - pcx), Math.abs(cy - pcy)) !== ring) continue;
+        if (ring > 1 && performance.now() - t0 > TERRAIN_BAKE_BUDGET_MS) break bake;
+        generatePixiChunk(cx, cy);
+      }
     }
   }
 
@@ -368,143 +395,162 @@ function renderPixiTerrain() {
 
   // Cleanup distant chunks (only when exceeding limit)
   if (chunkCache.size > 40) {
+    const dropped = _droppedChunkKeys;
+    dropped.clear();
     for (const [key, sprite] of chunkCache) {
       const [cx2, cy2] = key.split(',').map(Number);
       if (Math.abs(cx2 - pcx) > chunkRange + 2 || Math.abs(cy2 - pcy) > chunkRange + 2) {
         terrainContainer.removeChild(sprite);
         sprite.destroy(true); // Destroy sprite and texture
         chunkCache.delete(key);
+        destroyChunkWater(key);
         envChunks.delete(key);
+        dropped.add(key);
       }
     }
-    // Cleanup distant environmental objects
-    for (let i = envObjects.length - 1; i >= 0; i--) {
-      const d = dist(envObjects[i].x, envObjects[i].y, player.x, player.y);
-      if (d > 2500) envObjects.splice(i, 1);
+    // Drop exactly the env objects of the unloaded chunks (id = chunk key +
+    // '#' + n), so they regenerate with their chunk. A separate distance cut
+    // used to remove objects of chunks that stayed cached: those never came back.
+    if (dropped.size) {
+      for (let i = envObjects.length - 1; i >= 0; i--) {
+        const id = envObjects[i].id;
+        if (id && dropped.has(id.slice(0, id.indexOf('#')))) envObjects.splice(i, 1);
+      }
     }
   }
 }
 
+const TERRAIN_BAKE_BUDGET_MS = 4;
+const _droppedChunkKeys = new Set(); // reused by the chunk cleanup (no per-frame alloc) // P3: per-frame budget for pre-baking off-screen chunks
+
 /**
- * Animated water overlay - digital blue camo effect with slow movement
- * Draws semi-transparent camo blocks on water tiles, animated with gameTime
+ * Animated water overlay - digital blue camo blocks drifting over water tiles.
+ * P1: the camo is baked ONCE per terrain chunk into low-res textures (camo
+ * blocks + two ripple groups); per frame only a stepped drift offset and the
+ * ripple alphas change (<= 10 Hz), instead of rebuilding ~3300 rects.
+ * W1: per-block alpha as designed, scaled by CFG.WATER_CAMO_ALPHA_SCALE.
  */
-function renderPixiWaterOverlay() {
-  if (!renderPixiWaterOverlay._graphics) {
-    renderPixiWaterOverlay._graphics = new PIXI.Graphics();
-    renderPixiWaterOverlay._graphics.zIndex = -999997; // Above blood/craters, below entities
-    worldContainer.addChild(renderPixiWaterOverlay._graphics);
-  }
+const waterCache = new Map();          // chunk key -> { camo, ripA, ripB } sprites, or null (no water)
+const WATER_BAKE_RES = 1 / 3;          // the world is shown at 1/3 resolution anyway (R1)
+const WATER_DRIFT = 3;                 // max drift in screen units (1 low-res pixel)
+const WATER_STEP_HZ = 8;               // animation update rate (stepped, <= 10 Hz)
+const WATER_CAMO_COLORS = [
+  0x163d5c, 0x1a4a6e, 0x0f3348, 0x1e5577,
+  0x12405a, 0x255d80, 0x0d2c40, 0x1b5270,
+  0x183e5e, 0x2a6888, 0x0e3550, 0x1f5878
+];
 
-  const g = renderPixiWaterOverlay._graphics;
-  g.clear();
+// Deterministic per-tile hash for camo patterns
+function waterTileHash(tx, ty, i) {
+  let h = (tx * 374761393 + ty * 668265263 + i * 2654435761) | 0;
+  h = ((h ^ (h >>> 13)) * 1274126177) | 0;
+  return (h ^ (h >>> 16)) & 0x7fffffff;
+}
 
-  const ts = CFG.TILE_SIZE;
-  const iso = CFG.ISO_SCALE;
-  const centerWorld = toWorld(cam.x, cam.y);
-  const rangeX = Math.ceil(W / (ts * 1.5)) + 3;
-  const rangeY = Math.ceil(H / (ts * iso * 1.5)) + 3;
-  const centerTX = Math.floor(centerWorld.x / ts);
-  const centerTY = Math.floor(centerWorld.y / ts);
-  const time = gameTime;
+// All 4 corners of a rect (relative to the tile centre) inside the tile diamond
+function waterRectInDiamond(rx, ry, rw, rh, dhw, dhh) {
+  const hw = rw * 0.5, hh = rh * 0.5;
+  return (Math.abs(rx - hw) / dhw + Math.abs(ry - hh) / dhh <= 1) &&
+         (Math.abs(rx + hw) / dhw + Math.abs(ry - hh) / dhh <= 1) &&
+         (Math.abs(rx - hw) / dhw + Math.abs(ry + hh) / dhh <= 1) &&
+         (Math.abs(rx + hw) / dhw + Math.abs(ry + hh) / dhh <= 1);
+}
 
-  // Camo color palette - deep blues, teals, navy
-  const camoColors = [
-    0x163d5c, 0x1a4a6e, 0x0f3348, 0x1e5577,
-    0x12405a, 0x255d80, 0x0d2c40, 0x1b5270,
-    0x183e5e, 0x2a6888, 0x0e3550, 0x1f5878
-  ];
+function _bakeWaterLayer(g, w, h) {
+  const rt = PIXI.RenderTexture.create({ width: w, height: h, resolution: WATER_BAKE_RES, scaleMode: 'nearest', antialias: false });
+  app.renderer.render({ container: g, target: rt, clear: true });
+  const sp = new PIXI.Sprite(rt);
+  sp.zIndex = -999997; // above blood/craters, below entities
+  worldContainer.addChild(sp);
+  return sp;
+}
 
-  // Hash function for deterministic per-tile patterns
-  function tileHash(tx, ty, i) {
-    let h = (tx * 374761393 + ty * 668265263 + i * 2654435761) | 0;
-    h = ((h ^ (h >>> 13)) * 1274126177) | 0;
-    return (h ^ (h >>> 16)) & 0x7fffffff;
-  }
-
-  // Check if ALL 4 corners of a rect are inside the isometric diamond
-  // rx, ry are relative to tile center; dhw/dhh are diamond half-widths
-  function rectInDiamond(rx, ry, rw, rh, dhw, dhh) {
-    const hw = rw * 0.5, hh = rh * 0.5;
-    // Test all 4 corners against diamond: |x|/dhw + |y|/dhh <= 1
-    return (Math.abs(rx - hw) / dhw + Math.abs(ry - hh) / dhh <= 1) &&
-           (Math.abs(rx + hw) / dhw + Math.abs(ry - hh) / dhh <= 1) &&
-           (Math.abs(rx - hw) / dhw + Math.abs(ry + hh) / dhh <= 1) &&
-           (Math.abs(rx + hw) / dhw + Math.abs(ry + hh) / dhh <= 1);
-  }
-
-  for (let ty = centerTY - rangeY; ty <= centerTY + rangeY; ty++) {
-    for (let tx = centerTX - rangeX; tx <= centerTX + rangeX; tx++) {
+// Bake the water camo of one terrain chunk (called when the chunk is baked)
+function bakeChunkWater(cx, cy) {
+  const key = `${cx},${cy}`;
+  destroyChunkWater(key);
+  const sz = CFG.CHUNK_SIZE, ts = CFG.TILE_SIZE, iso = CFG.ISO_SCALE;
+  const w = sz * ts * 2 + ts * 2, h = sz * ts * iso * 2 + ts * 2;
+  // Same local frame as the terrain chunk sprite
+  const origin = toScreen(cx * sz * ts, cy * sz * ts);
+  const ox0 = origin.x - sz * ts, oy0 = origin.y;
+  const aScale = CFG.WATER_CAMO_ALPHA_SCALE;
+  const dhw = ts, dhh = ts * iso;
+  const camo = new PIXI.Graphics(), ripA = new PIXI.Graphics(), ripB = new PIXI.Graphics();
+  let any = false;
+  for (let ty = cy * sz; ty < cy * sz + sz; ty++) {
+    for (let tx = cx * sz; tx < cx * sz + sz; tx++) {
       if (getTerrainTypeAt(tx * ts, ty * ts) !== 'water') continue;
-
-      // Tile center in screen coords
-      const sp = toScreen(tx * ts + ts * 0.5, ty * ts + ts * 0.5);
-
-      // Diamond half-widths for this tile in screen space
-      const dhw = ts;       // half-width of isometric diamond
-      const dhh = ts * iso; // half-height
-
-      // Large camo blocks (slow drift)
-      for (let i = 0; i < 5; i++) {
-        const h = tileHash(tx, ty, i);
-        const w = 8 + ((h >> 16) & 0xf);
-        const bh = 4 + ((h >> 20) & 0x7);
-
-        // Slow animated drift
-        const phase = ((h >> 4) & 0xf) * 0.39;
-        const ox = Math.sin(time * 0.25 + phase) * 3;
-        const oy = Math.cos(time * 0.18 + phase * 1.3) * 1.5;
-
-        // Final center position relative to tile center
-        const cx = ((h & 0xff) / 255 - 0.5) * dhw * 0.9 + ox;
-        const cy = (((h >> 8) & 0xff) / 255 - 0.5) * dhh * 0.9 + oy;
-
-        // Reject if ANY corner is outside the diamond
-        if (!rectInDiamond(cx, cy, w, bh, dhw, dhh)) continue;
-
-        const color = camoColors[h % camoColors.length];
-        g.alpha = 0.25 + ((h >> 28) & 3) * 0.06;
-        g.rect(sp.x + cx - w * 0.5, sp.y + cy - bh * 0.5, w, bh);
-        g.fill(color);
+      any = true;
+      const c = toScreen(tx * ts + ts * 0.5, ty * ts + ts * 0.5);
+      const lx = c.x - ox0, ly = c.y - oy0;
+      // Large camo blocks + small detail blocks; the reject test keeps the
+      // drift margin so a drifted block never crosses onto land
+      for (let i = 0; i < 10; i++) {
+        const hh = waterTileHash(tx, ty, i);
+        const big = i < 5;
+        const bw = big ? 8 + ((hh >> 16) & 0xf) : 4 + ((hh >> 16) & 0x7);
+        const bh = big ? 4 + ((hh >> 20) & 0x7) : 2 + ((hh >> 20) & 0x3);
+        const spread = big ? 0.9 : 0.8;
+        const rx = ((hh & 0xff) / 255 - 0.5) * dhw * spread;
+        const ry = (((hh >> 8) & 0xff) / 255 - 0.5) * dhh * spread;
+        if (!waterRectInDiamond(rx, ry, bw + WATER_DRIFT * 2, bh + WATER_DRIFT, dhw, dhh)) continue;
+        const color = WATER_CAMO_COLORS[(big ? hh : hh >> 3) % WATER_CAMO_COLORS.length];
+        const alpha = big ? 0.25 + ((hh >> 28) & 3) * 0.06 : 0.15 + ((hh >> 28) & 3) * 0.04;
+        camo.rect(lx + rx - bw * 0.5, ly + ry - bh * 0.5, bw, bh).fill({ color, alpha: Math.min(1, alpha * aScale) });
       }
-
-      // Small detail blocks (faster shimmer)
-      for (let i = 5; i < 10; i++) {
-        const h = tileHash(tx, ty, i);
-        const w = 4 + ((h >> 16) & 0x7);
-        const bh2 = 2 + ((h >> 20) & 0x3);
-
-        const phase = ((h >> 4) & 0xf) * 0.47;
-        const ox = Math.sin(time * 0.4 + phase) * 2;
-        const oy = Math.cos(time * 0.3 + phase * 0.9) * 1;
-
-        const cx = ((h & 0xff) / 255 - 0.5) * dhw * 0.8 + ox;
-        const cy = (((h >> 8) & 0xff) / 255 - 0.5) * dhh * 0.8 + oy;
-
-        if (!rectInDiamond(cx, cy, w, bh2, dhw, dhh)) continue;
-
-        const color = camoColors[(h >> 3) % camoColors.length];
-        g.alpha = 0.15 + ((h >> 28) & 3) * 0.04;
-        g.rect(sp.x + cx - w * 0.5, sp.y + cy - bh2 * 0.5, w, bh2);
-        g.fill(color);
-      }
-
-      // Occasional bright ripple highlight (time-varying visibility)
-      const rippleH = tileHash(tx, ty, 99);
-      const ripplePhase = ((rippleH & 0xff) / 255) * Math.PI * 2;
-      const rippleVis = Math.sin(time * 0.5 + ripplePhase);
-      if (rippleVis > 0.3) {
-        const rx = ((rippleH >> 8 & 0xff) / 255 - 0.5) * dhw * 0.4;
-        const ry = ((rippleH >> 16 & 0xff) / 255 - 0.5) * dhh * 0.4;
-        const rw = 8 + (rippleH >> 24 & 0xf);
-        if (rectInDiamond(rx, ry, rw, 2, dhw, dhh)) {
-          g.alpha = (rippleVis - 0.3) * 0.2;
-          g.rect(sp.x + rx - rw * 0.5, sp.y + ry - 1, rw, 2);
-          g.fill(0x4488aa);
-        }
+      // Ripple highlight, in one of two groups that pulse in counter-phase
+      const rh = waterTileHash(tx, ty, 99);
+      const rx = (((rh >> 8) & 0xff) / 255 - 0.5) * dhw * 0.4;
+      const ry = (((rh >> 16) & 0xff) / 255 - 0.5) * dhh * 0.4;
+      const rw = 8 + ((rh >> 24) & 0xf);
+      if (waterRectInDiamond(rx, ry, rw, 2, dhw, dhh)) {
+        ((rh & 1) ? ripA : ripB).rect(lx + rx - rw * 0.5, ly + ry - 1, rw, 2).fill({ color: 0x4488aa, alpha: Math.min(1, 0.14 * aScale) });
       }
     }
   }
+  if (any) {
+    const entry = { camo: _bakeWaterLayer(camo, w, h), ripA: _bakeWaterLayer(ripA, w, h), ripB: _bakeWaterLayer(ripB, w, h), x: ox0, y: oy0 };
+    entry.camo.position.set(ox0, oy0); // drifted per frame by renderPixiWaterOverlay
+    entry.ripA.position.set(ox0, oy0);
+    entry.ripB.position.set(ox0, oy0);
+    waterCache.set(key, entry);
+  } else {
+    waterCache.set(key, null);
+  }
+  camo.destroy(); ripA.destroy(); ripB.destroy();
+}
 
-  g.alpha = 1;
+function destroyChunkWater(key) {
+  const e = waterCache.get(key);
+  if (e) for (const sp of [e.camo, e.ripA, e.ripB]) { worldContainer.removeChild(sp); sp.destroy(true); }
+  waterCache.delete(key);
+}
+
+function clearWaterBakes() {
+  for (const key of [...waterCache.keys()]) destroyChunkWater(key);
+}
+
+// W1: CFG.WATER_CAMO_ALPHA_SCALE is baked in; call this after changing it
+function rebakeWaterCamo() {
+  for (const key of chunkCache.keys()) {
+    const [cx, cy] = key.split(',').map(Number);
+    bakeChunkWater(cx, cy);
+  }
+}
+
+// Per frame: move/fade the baked layers in steps (no geometry rebuild)
+function renderPixiWaterOverlay() {
+  const tq = Math.floor(gameTime * WATER_STEP_HZ) / WATER_STEP_HZ;
+  const dx = Math.round(Math.sin(tq * 0.25) * WATER_DRIFT / 3) * 3;
+  const dy = Math.round(Math.cos(tq * 0.18) * WATER_DRIFT / 3) * 3;
+  const pulse = Math.sin(tq * 0.5);
+  const aA = Math.round(Math.max(0, pulse) * 4) / 4;
+  const aB = Math.round(Math.max(0, -pulse) * 4) / 4;
+  for (const e of waterCache.values()) {
+    if (!e) continue;
+    e.camo.x = e.x + dx; e.camo.y = e.y + dy;
+    e.ripA.alpha = aA; e.ripB.alpha = aB;
+    e.ripA.visible = aA > 0; e.ripB.visible = aB > 0;
+  }
 }

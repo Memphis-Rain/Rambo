@@ -12,7 +12,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "perf:sustained": "node tests/perf/sustained.mjs",
+    "perf:demo": "node tests/perf/demo-killrate.mjs",
+    "perf:bfg": "node tests/perf/bfg-forest.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

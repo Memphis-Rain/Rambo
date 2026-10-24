@@ -1,4 +1,4 @@
-import { test, expect } from './fixtures.js';
+import { test, expect, T } from './fixtures.js';
 import { LANDED } from '../milestones.js';
 
 test.describe('T4 boot & loop', () => {
@@ -120,7 +120,7 @@ test.describe('T4 gore', () => {
     await game.advance(0.2);
     await game.snap(testInfo, 'T7-gibs.png');
     // Gibs land within ~1-3 s and become DECAL_GIB decals.
-    await game.page.waitForFunction(() => gibs.length === 0, null, { timeout: 20_000 });
+    await game.page.waitForFunction(() => gibs.length === 0, null, { timeout: T(20_000) });
     expect(await game.eval(() => bloodPools.filter((d) => d.kind === DECAL_GIB).length)).toBeGreaterThan(0);
   });
 });
@@ -208,7 +208,7 @@ test.describe('R2 pixel-grid camera', () => {
 });
 
 test.describe('T6 perf', () => {
-  test('T6: 40 enemies for 5 s holds the fps threshold', async ({ game }, testInfo) => {
+  test('T6: 40 enemies for 5 s holds the fps threshold', { tag: '@perf' }, async ({ game }, testInfo) => {
     const minFps = Number(process.env.PERF_MIN_FPS ?? 50);
     await game.boot();
     await game.start();
@@ -248,8 +248,9 @@ test.describe('T6 perf', () => {
     testInfo.annotations.push({ type: 'perf', description: summary });
     expect(perf.samples).toBeGreaterThan(20);
     expect(perf.enemies).toBeGreaterThanOrEqual(40);
-    // Q2: CPU frame time is meaningful everywhere; judge the typical frame, not a spike.
-    expect(perf.cpuMedianMs).toBeLessThan(12);
+    // Q2: judge the typical frame, not a spike. Absolute ms only off CI (Q2a: CI runners
+    // check relative criteria only).
+    if (!process.env.CI) expect(perf.cpuMedianMs).toBeLessThan(12);
     // With software WebGL (headless/CI) fps measures SwiftShader, not the game: record it only.
     const softwareGl = /swiftshader|llvmpipe|software/i.test(perf.gpu);
     if (!softwareGl) expect(perf.fps).toBeGreaterThanOrEqual(minFps);

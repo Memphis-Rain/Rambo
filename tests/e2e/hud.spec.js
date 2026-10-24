@@ -1,4 +1,4 @@
-import { test, expect } from './fixtures.js';
+import { test, expect, T } from './fixtures.js';
 import { LANDED } from '../milestones.js';
 
 // M5 retro HUD & title (H1-H4). Skipped until M5 is marked landed in tests/milestones.js.
@@ -12,7 +12,7 @@ test.describe('M5 title & font', () => {
     await page.goto('/game.html');
     const btn = page.locator('#start-btn');
     await expect(btn).toHaveText(/PRESS START/);
-    await expect(btn).toBeEnabled({ timeout: 5_000 });
+    await expect(btn).toBeEnabled({ timeout: T(5_000) }); // spec: 5 s on a dev machine
     console.log(`[H4] start button enabled after ${Date.now() - t0} ms`);
   });
 
@@ -21,7 +21,7 @@ test.describe('M5 title & font', () => {
     page.on('request', (r) => requests.push(r.url()));
     const fontResponse = page.waitForResponse((r) => r.url().includes('/assets/fonts/') && /\.(ttf|woff2?|otf)$/.test(new URL(r.url()).pathname));
     await page.goto('/game.html');
-    await expect(page.locator('#start-btn')).toBeEnabled({ timeout: 5_000 });
+    await expect(page.locator('#start-btn')).toBeEnabled({ timeout: T(5_000) });
     const res = await fontResponse;
     expect(res.status()).toBe(200);
     expect(await page.evaluate((f) => document.fonts.check(`16px "${f}"`), FONT)).toBe(true);
@@ -81,10 +81,10 @@ test.describe('M5 / D6 start after demo', () => {
     await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1e9; startDemo(); });
     await page.waitForFunction(() => demoState().active && demoState().elapsed > 1);
     await page.keyboard.press('x');
-    await page.waitForFunction(() => !demoState().active, null, { timeout: 2_000 });
-    await expect(page.locator('#start-btn')).toBeEnabled({ timeout: 2_000 });
+    await page.waitForFunction(() => !demoState().active, null, { timeout: T(2_000) });
+    await expect(page.locator('#start-btn')).toBeEnabled({ timeout: T(2_000) });
     await page.click('#start-btn');
-    await page.waitForFunction(() => gameStarted && gameTime > 0.2, null, { timeout: 10_000 });
+    await page.waitForFunction(() => gameStarted && gameTime > 0.2, null, { timeout: T(10_000) });
     const s = await game.eval(() => ({ demo: demoState().active, score, kills, unlockedWeapons, hud: uiContainer.visible }));
     expect(s).toEqual({ demo: false, score: 0, kills: 0, unlockedWeapons: 1, hud: true });
   });
@@ -103,7 +103,7 @@ test.describe('M5 review fixes', () => {
     });
     await page.goto('/game.html');
     const btn = page.locator('#start-btn');
-    await expect(btn).toHaveText('WEBGL UNAVAILABLE', { timeout: 10_000 });
+    await expect(btn).toHaveText('WEBGL UNAVAILABLE', { timeout: T(10_000) });
     await expect(btn).toBeDisabled();
     await expect(page.locator('#boot-error')).toBeVisible();
     expect(await page.locator('#boot-error').innerText()).not.toBe('');
@@ -117,7 +117,7 @@ test.describe('M5 review fixes', () => {
     await game.freezeWaves();
     await game.eval(() => showNotification('RAMPAGE!', 0.6));
     await expect(page.locator('#notif')).toHaveClass(/\bshow\b/);
-    await expect(page.locator('#notif')).not.toHaveClass(/\bshow\b/, { timeout: 5_000 });
+    await expect(page.locator('#notif')).not.toHaveClass(/\bshow\b/, { timeout: T(5_000) });
     expect(Number(await page.evaluate(() => getComputedStyle(document.getElementById('notif')).opacity))).toBe(0);
   });
 });

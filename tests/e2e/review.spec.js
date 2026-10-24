@@ -1,4 +1,4 @@
-import { test, expect } from './fixtures.js';
+import { test, expect, T } from './fixtures.js';
 import { LANDED } from '../milestones.js';
 
 // Must-fixes from the review of Josh's first build (spec dfe6194): G9 limits,
@@ -161,7 +161,7 @@ async function armedGame(game) {
 
 test.describe('G9 hit-stop rate', () => {
   test('G9: Minigun at 10 kills/s for 10 s keeps simulated time >= 90% of wall time', async ({ game }, testInfo) => {
-    test.setTimeout(60_000);
+    test.setTimeout(T(60_000));
     await armedGame(game);
     const r = await game.eval(runScenario, { seconds: 10, killsPerSec: 10, explosionsPerSec: 0 });
     const st = stopStats(r.stops);
@@ -177,7 +177,7 @@ test.describe('G9 hit-stop rate', () => {
   });
 
   test('G9: explosion hit-stops are <= 0.06 s and >= 0.3 s apart', async ({ game }, testInfo) => {
-    test.setTimeout(60_000);
+    test.setTimeout(T(60_000));
     await armedGame(game);
     // An explosion (radius 150) every 0.1 s: far more triggers than the cooldown allows.
     const r = await game.eval(runScenario, { seconds: 3, killsPerSec: 0, explosionsPerSec: 10 });

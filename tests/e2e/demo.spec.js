@@ -1,4 +1,4 @@
-import { test, expect } from './fixtures.js';
+import { test, expect, T } from './fixtures.js';
 import { LANDED } from '../milestones.js';
 
 // T11 / M6 attract mode (D8 hooks). Skipped until M6 is marked landed in tests/milestones.js.
@@ -8,13 +8,25 @@ test.skip(!LANDED.M6, 'M6 not landed (tests/milestones.js)');
 
 async function bootTitle(game, idleSeconds) {
   await game.boot();
+  // On a slow machine the default 5 s idle can elapse during boot, so hold the demo
+  // off, stop one that already started, and reset the idle timer with a real move.
+  await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1e9; if (demoState().active) stopDemo(); });
+  await game.page.mouse.move(5, 5);
+  await game.page.mouse.move(200, 200);
+  await game.page.waitForFunction(() => !demoState().active && demoState().idleTimer < 0.5, null, { timeout: T(5_000) });
   await game.eval((s) => { CFG.DEMO_IDLE_SECONDS = s; }, idleSeconds);
+}
+
+/** Wait until the running demo has been active for `seconds` of game time. */
+async function waitDemoElapsed(game, seconds) {
+  await game.page.waitForFunction((s) => !demoState().active || demoState().elapsed >= s, seconds,
+    { timeout: T(10_000 + seconds * 4000) });
 }
 
 const demo = (game) => game.eval(() => demoState());
 
 async function waitForDemo(game, active, timeout = 15_000) {
-  await game.page.waitForFunction((a) => demoState().active === a, active, { timeout });
+  await game.page.waitForFunction((a) => demoState().active === a, active, { timeout: T(timeout) });
 }
 
 test.describe('T11 attract mode', () => {
@@ -26,18 +38,19 @@ test.describe('T11 attract mode', () => {
   });
 
   test('T11/D3/D4: the demo kills enemies, advances gameTime and cycles weapons within 20 s', async ({ game }, testInfo) => {
-    test.setTimeout(60_000);
+    test.setTimeout(T(60_000) * 2);
     await bootTitle(game, 1);
     await waitForDemo(game, true, 10_000);
     const s0 = await game.eval(() => ({ t: gameTime, kills, weapon: demoState().weaponIndex }));
     const seenWeapons = new Set([s0.weapon]);
     let last = s0;
-    for (let i = 0; i < 20; i++) {
-      await game.page.waitForTimeout(1000);
+    // Sample once per second of DEMO time (game time), up to 20 s.
+    for (let i = 1; i <= 20; i++) {
+      await waitDemoElapsed(game, i);
       last = await game.eval(() => ({ t: gameTime, kills, weapon: demoState().weaponIndex, active: demoState().active }));
       seenWeapons.add(last.weapon);
       if (!last.active) break;
-      if (i === 8) await game.snap(testInfo, 'T11-demo-action.png');
+      if (i === 9) await game.snap(testInfo, 'T11-demo-action.png');
     }
     testInfo.annotations.push({ type: 'demo', description: `kills=${last.kills} gameTime=${last.t.toFixed(1)} weapons=${[...seenWeapons].join(',')}` });
     expect(last.t).toBeGreaterThan(s0.t);
@@ -74,7 +87,7 @@ test.describe('T11 attract mode', () => {
   test('T11/D6: a real game after the demo starts from a clean state', async ({ game, page }) => {
     await bootTitle(game, 1);
     await waitForDemo(game, true, 10_000);
-    await page.waitForFunction(() => kills > 0, null, { timeout: 20_000 });
+    await page.waitForFunction(() => kills > 0, null, { timeout: T(20_000) });
     await page.keyboard.press('x');
     await waitForDemo(game, false, 2_000);
     // Keep the demo from re-triggering while we start the real game.
@@ -100,19 +113,19 @@ test.describe('T11 attract mode', () => {
   test('T11/D1: mouse jitter under 8 px does not reset the idle timer', async ({ game, page }) => {
     await bootTitle(game, 1e9);
     await page.mouse.move(400, 300);
-    await page.waitForTimeout(300);
+    await page.waitForFunction(() => demoState().idleTimer > 0.3, null, { timeout: T(5_000) });
     let prev = (await demo(game)).idleTimer;
     for (const [dx, dy] of [[3, 0], [0, 4], [-5, 2], [2, -6], [5, 5]]) {
       await page.mouse.move(400 + dx, 300 + dy);
-      await page.waitForTimeout(250);
+      // A reset would drop the timer below prev; otherwise it keeps counting up.
+      await page.waitForFunction((p) => demoState().idleTimer > p + 0.1 || demoState().idleTimer < p, prev, { timeout: T(5_000) });
       const t = (await demo(game)).idleTimer;
       expect(t, `jitter (${dx},${dy}) reset the idle timer`).toBeGreaterThan(prev);
       prev = t;
     }
     // A real move (> 8 px) does reset it.
     await page.mouse.move(460, 360);
-    await page.waitForTimeout(50);
-    expect((await demo(game)).idleTimer).toBeLessThan(prev);
+    await page.waitForFunction((p) => demoState().idleTimer < p, prev, { timeout: T(5_000) });
   });
 
   test('T11/D1: the demo never starts during real play or while paused', async ({ game, page }) => {
@@ -120,15 +133,16 @@ test.describe('T11 attract mode', () => {
     await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1e9; });
     await game.start();
     await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1; });
-    await page.waitForTimeout(2500);
+    await game.advance(2.5); // 2.5 s of game time with no input
     expect((await demo(game)).active).toBe(false);
     await page.keyboard.press('p');
-    await page.waitForTimeout(2500);
+    expect(await game.eval(() => paused)).toBe(true);
+    await page.waitForTimeout(T(2_500));
     expect((await demo(game)).active).toBe(false);
   });
 
   test('T11/D6: the demo ends on its own after CFG.DEMO_MAX_SECONDS and loops title -> demo', async ({ game }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(T(60_000) * 2);
     await bootTitle(game, 1);
     expect(await game.eval(() => CFG.DEMO_MAX_SECONDS), 'D8 default').toBe(60);
     await game.eval(() => { CFG.DEMO_MAX_SECONDS = 4; });
@@ -145,7 +159,7 @@ test.describe('T11 attract mode', () => {
     await bootTitle(game, 1e9);
     await game.eval(() => startDemo());
     await waitForDemo(game, true, 2_000);
-    await game.page.waitForFunction(() => demoState().elapsed > 0.5, null, { timeout: 10_000 });
+    await waitDemoElapsed(game, 0.5);
     await game.eval(() => stopDemo());
     await waitForDemo(game, false, 2_000);
     await expect(page.locator('#start-screen')).toBeVisible();
@@ -156,7 +170,7 @@ test.describe('T11 attract mode', () => {
     await bootTitle(game, 1);
     await waitForDemo(game, true, 10_000);
     // The counter sits at 9 for ~0.3 s; the first wave that actually runs must be 10.
-    await game.page.waitForFunction(() => waveActive, null, { timeout: 10_000 });
+    await game.page.waitForFunction(() => waveActive, null, { timeout: T(10_000) });
     expect(await game.eval(() => wave)).toBeGreaterThanOrEqual(10);
     // Wave-10 enemy types are in the spawn pool.
     const types = await game.eval(() => ENEMY_TYPES.filter((t) => t.wave <= wave).map((t) => t.name));
@@ -167,7 +181,7 @@ test.describe('T11 attract mode', () => {
     test.skip(!LANDED.FU1, 'follow-up FU1 not landed (tests/milestones.js)');
     await bootTitle(game, 1);
     await waitForDemo(game, true, 10_000);
-    await game.page.waitForFunction(() => demoState().elapsed > 2, null, { timeout: 15_000 });
+    await waitDemoElapsed(game, 2);
     // Score/HUD must be visible "as normal", so the full-screen title DOM must not cover the canvas.
     const cover = await game.eval(() => {
       const el = document.getElementById('start-screen');
@@ -199,67 +213,67 @@ test.describe('T11 attract mode', () => {
     expect(all, 'D5: bottom prompt').toMatch(/PRESS ANY KEY OR CLICK TO PLAY/);
   });
 
-  test('B6: the bot does not oscillate while its target sits just off-screen', async ({ game }, testInfo) => {
-    test.skip(!LANDED.B6M, 'B6 metric thresholds pending a decision (tests/milestones.js)');
-    test.setTimeout(150_000);
+  // D3a bar (spec ca242e3), over 3 x 30 s demo runs at wave 10. KILLS_BASELINE is the
+  // kill rate of the pre-D3a bot (87a27f1), measured with this same scenario.
+  const KILLS_BASELINE = Number(process.env.D3A_KILLS_BASELINE || 1.06); // kills per game-second, 87a27f1 (measured 1.06-1.07)
+
+  test('D3a/B6: the demo bot reads as deliberate (few reversals, no jitter in place, kill rate kept)', { tag: '@perf' }, async ({ game }, testInfo) => {
+    test.skip(!LANDED.D3A && !process.env.D3A_MEASURE, 'D3A not landed (tests/milestones.js)');
+    test.setTimeout(T(180_000));
     await bootTitle(game, 1e9);
     const runs = [];
     for (let run = 0; run < 3; run++) {
       await game.eval(() => { CFG.DEMO_MAX_SECONDS = 1e9; startDemo(); });
       runs.push(await game.eval((seconds) => new Promise((resolve) => {
-        // Sample the bot's movement keys every frame. A reversal is a new direction
-        // pointing against the last non-zero direction (dot < 0) within 0.4 s.
-        const dirOf = () => {
-          const x = (keys.d ? 1 : 0) - (keys.a ? 1 : 0), y = (keys.s ? 1 : 0) - (keys.w ? 1 : 0);
-          return x || y ? { x, y, t: performance.now() / 1000 } : null;
-        };
-        let last = null, start = null, offTime = 0, prevT = null;
-        const reversals = [], offReversals = [];
-        const offscreenTarget = () => {
-          const id = demoState().targetId;
-          const e = id >= 0 && enemies.find((en) => en._demoId === id);
-          if (!e) return false;
-          const sp = toScreen(e.x, e.y);
-          const x = sp.x + worldOffsetX, y = sp.y + worldOffsetY, m = 150;
-          const out = x < 0 || y < 0 || x > W || y > H;
-          return out && x > -m && y > -m && x < W + m && y < H + m;
-        };
-        const tick = () => {
-          const now = performance.now() / 1000;
+        const samples = [];
+        let start = null;
+        const kills0 = kills, gt0 = gameTime;
+        const tick = (now) => {
           if (start === null) start = now;
-          const off = offscreenTarget();
-          if (off && prevT !== null) offTime += now - prevT;
-          prevT = now;
-          const d = dirOf();
-          if (d) {
-            if (last && d.x * last.x + d.y * last.y < 0 && d.t - last.t < 0.4) {
-              reversals.push(d.t);
-              if (off) offReversals.push(d.t);
-            }
-            last = d;
-          }
-          if (now - start < seconds && demoState().active) requestAnimationFrame(tick);
+          const x = (keys.d ? 1 : 0) - (keys.a ? 1 : 0), y = (keys.s ? 1 : 0) - (keys.w ? 1 : 0);
+          samples.push({ t: (now - start) / 1000, x, y, px: player.x, py: player.y, dodge: !!player.dodging });
+          if (now - start < seconds * 1000 && demoState().active) requestAnimationFrame(tick);
           else {
-            // Oscillation window: 3+ reversals within 1 s.
-            const windows = reversals.filter((t, i) => i >= 2 && t - reversals[i - 2] <= 1).length;
-            resolve({ secs: now - start, reversals: reversals.length, offTime, offReversals: offReversals.length, windows });
+            // Reversal: a new direction against the last non-zero one (dot < 0) within 0.4 s.
+            const rev = [];
+            let last = null;
+            for (const q of samples) {
+              if (!q.x && !q.y) continue;
+              if (last && q.x * last.x + q.y * last.y < 0 && q.t - last.t < 0.4) rev.push(q.t);
+              last = q;
+            }
+            // Jitter in place: >= 3 reversals within 1 s, net/path displacement < 0.3, no dodge in that second.
+            let jitter = 0, lastWindowEnd = -1;
+            for (let k = 2; k < rev.length; k++) {
+              if (rev[k] - rev[k - 2] > 1 || rev[k - 2] < lastWindowEnd) continue;
+              const w = samples.filter((q) => q.t >= rev[k - 2] && q.t <= rev[k]);
+              let path = 0;
+              for (let m = 1; m < w.length; m++) path += Math.hypot(w[m].px - w[m - 1].px, w[m].py - w[m - 1].py);
+              const net = Math.hypot(w[w.length - 1].px - w[0].px, w[w.length - 1].py - w[0].py);
+              if (!w.some((q) => q.dodge) && path > 0 && net / path < 0.3) { jitter++; lastWindowEnd = rev[k]; }
+            }
+            resolve({ secs: samples[samples.length - 1].t, gameSecs: gameTime - gt0, reversals: rev.length, jitter, kills: kills - kills0 });
           }
         };
         requestAnimationFrame(tick);
       }), 30));
       await game.eval(() => stopDemo());
     }
-    const total = runs.reduce((a, r) => ({ secs: a.secs + r.secs, reversals: a.reversals + r.reversals,
-      offTime: a.offTime + r.offTime, offReversals: a.offReversals + r.offReversals, windows: a.windows + r.windows }),
-    { secs: 0, reversals: 0, offTime: 0, offReversals: 0, windows: 0 });
-    const summary = `secs=${total.secs.toFixed(1)} reversals=${total.reversals} (${(total.reversals / total.secs).toFixed(2)}/s) targetJustOffscreen=${total.offTime.toFixed(1)}s reversalsThen=${total.offReversals} oscillationWindows=${total.windows}`;
-    console.log(`[B6] ${summary}`);
-    testInfo.annotations.push({ type: 'B6', description: summary });
-    expect(total.windows, 'B6: no 3-reversals-in-1-s oscillation windows').toBeLessThanOrEqual(1);
-    if (total.offTime > 2) {
-      expect(total.offReversals / total.offTime, 'B6: reversals/s while the target is just off-screen').toBeLessThan(0.5);
+    const sum = (k) => runs.reduce((a, r) => a + r[k], 0);
+    // Kill rate per game-second, so a slow software-GL frame rate doesn't skew it.
+    const secs = sum('secs'), revRate = sum('reversals') / secs, jitter = sum('jitter'), killRate = sum('kills') / sum('gameSecs');
+    const summary = `secs=${secs.toFixed(1)} reversals=${sum('reversals')} (${revRate.toFixed(2)}/s) jitterWindows=${jitter} kills=${sum('kills')} (${killRate.toFixed(2)}/game-s, baseline ${KILLS_BASELINE || 'n/a'})`;
+    console.log(`[D3a] ${summary}`);
+    testInfo.annotations.push({ type: 'D3a', description: summary });
+    expect(revRate, 'D3a: average reversals per second').toBeLessThanOrEqual(0.8);
+    expect(jitter, 'D3a: jitter-in-place windows per 90 s').toBeLessThanOrEqual(3);
+    // D3a (b): a 90 s sample has ~±10% Poisson noise, so fail only when the rate is
+    // significantly below 90% of baseline (rate + 2 standard errors < bar). The plain
+    // >= 90% bar over 5 x 60 s runs in the manual `npm run perf:demo`.
+    if (KILLS_BASELINE) {
+      const upper = killRate + (2 * Math.sqrt(sum('kills'))) / sum('gameSecs');
+      expect(upper, `D3a: kill rate ${killRate.toFixed(3)} (+2 SE = ${upper.toFixed(3)}) vs 90% of ${KILLS_BASELINE}`).toBeGreaterThanOrEqual(0.9 * KILLS_BASELINE);
     }
-    expect(total.reversals / total.secs, 'B6: overall reversal rate').toBeLessThan(0.5);
   });
 });
 

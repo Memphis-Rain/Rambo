@@ -173,6 +173,7 @@ test.describe('B7/J5a shake cap', () => {
 });
 
 test.describe('B8 weapon slots', () => {
+  test.use({ viewport: { width: 1280, height: 720 } }); // the 11-slot check is specced at 1280 px
   const visibleSlots = (game) => game.eval(() => hudElements.slotTexts
     .map((t, i) => ({ i, text: t.text, visible: t.visible !== false && t.worldAlpha !== 0 }))
     .filter((s) => s.visible));

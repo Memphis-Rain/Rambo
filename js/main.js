@@ -22,7 +22,13 @@ const perfLog = {
   particlesMs: 0,
   minimapMs: 0,
   gpuMs: 0,
+  // Q2a: totalCpuMs = ALL main-thread JS per displayed frame
+  //   = buildMs (update + sprite/HUD build) + retroMs (low-res pass) + stageMs (app.render)
+  buildMs: 0,
+  retroMs: 0,
+  stageMs: 0,
   totalCpuMs: 0,
+  cpuSamples: new Float32Array(240), cpuSampleN: 0, // ring buffer for median/p99
   entities: { enemies: 0, bullets: 0, particles: 0, bodies: 0, bloodPools: 0, envObjects: 0 },
   lastLogTime: 0,
   warnings: [],
@@ -75,9 +81,22 @@ const perfLog = {
   },
 
   // Dump full state to console
+  // Called after app.render: the frame's full CPU cost is known now
+  finishFrame() {
+    this.totalCpuMs = this.buildMs + this.retroMs + this.stageMs;
+    this.cpuSamples[this.cpuSampleN++ % this.cpuSamples.length] = this.totalCpuMs;
+  },
+
+  cpuPercentile(q) {
+    const n = Math.min(this.cpuSampleN, this.cpuSamples.length);
+    if (!n) return 0;
+    const a = Array.from(this.cpuSamples.subarray(0, n)).sort((x, y) => x - y);
+    return a[Math.min(n - 1, Math.floor(q * n))];
+  },
+
   dump() {
-    console.log(`[RAMBO] FPS: ${this.fps} | CPU: ${this.totalCpuMs.toFixed(1)}ms | GPU: ${this.gpuMs.toFixed(1)}ms`);
-    console.log(`[RAMBO] Update: ${this.updateMs.toFixed(1)}ms | Render: ${this.renderMs.toFixed(1)}ms`);
+    console.log(`[RAMBO] FPS: ${this.fps} | CPU: ${this.totalCpuMs.toFixed(1)}ms (median ${this.cpuPercentile(0.5).toFixed(1)} / p99 ${this.cpuPercentile(0.99).toFixed(1)} over ${Math.min(this.cpuSampleN, this.cpuSamples.length)} frames) | GPU: ${this.gpuMs.toFixed(1)}ms`);
+    console.log(`[RAMBO] CPU split: Build=${this.buildMs.toFixed(1)}ms (update ${this.updateMs.toFixed(1)} + render build ${this.renderMs.toFixed(1)}) | RetroPass=${this.retroMs.toFixed(1)}ms | AppRender=${this.stageMs.toFixed(1)}ms`);
     console.log(`[RAMBO] Layers: Terrain=${this.terrainMs.toFixed(1)}ms Sprites=${this.spritesMs.toFixed(1)}ms HUD=${this.hudMs.toFixed(1)}ms`);
     console.log(`[RAMBO] Sprites Detail: Blood=${this.bloodMs.toFixed(2)}ms Enemies=${this.enemiesMs.toFixed(2)}ms Bodies=${this.bodiesMs.toFixed(2)}ms Bullets=${this.bulletsMs.toFixed(2)}ms`);
     console.log(`[RAMBO] Entities:`, JSON.stringify(this.entities));
@@ -241,6 +260,7 @@ function update(dt) {
   processPendingDamage();
   updateEnemies(dt);
   updateBullets(dt);
+  updateEnv(dt);         // M8: env reactions, falling trees, debris
   processPendingDamage();
   updateWaves(dt);
   updatePickups(dt);
@@ -354,8 +374,8 @@ function gameLoop() {
   perfLog.terrainMs = tTerrain1 - tTerrain0;
   perfLog.spritesMs = tSprites1 - tSprites0;
   perfLog.hudMs = tHUD1 - tHUD0;
-  perfLog.totalCpuMs = t2 - t0; // JS time; the GPU passes run later in the same tick
-  perfLog.gpuMs = Math.max(0, frameMs - perfLog.totalCpuMs);
+  perfLog.buildMs = t2 - t0; // totalCpuMs is completed after app.render (finishFrame)
+  perfLog.gpuMs = Math.max(0, frameMs - perfLog.buildMs);
   perfLog.snapshot();
 
   // Warn on slow frames
@@ -380,6 +400,7 @@ function resetRound() {
   }
   initPixiSprites();     // (Re)initialize sprite pools and caches (incl. decal layers)
   resetDecalState();     // blood map + growing decals (D6: no trace between rounds)
+  resetEnvState();       // M8 E7: intact world for a new round / the demo
 
   gameTime = 0;
   score = 0;
@@ -414,6 +435,7 @@ function resetRound() {
     sprite.destroy(true);
   }
   chunkCache.clear();
+  clearWaterBakes();
   envObjects.length = 0;
   envChunks.clear();
   floatingTexts.length = 0;
@@ -465,6 +487,14 @@ function showBootError(err) {
     initInput();
     lastTime = performance.now();
     app.ticker.add(gameLoop, null, PIXI.UPDATE_PRIORITY.HIGH);
+    // P2/Q2a: time Pixi's own stage render (app.render runs at LOW priority)
+    let stageT0 = 0;
+    app.ticker.add(() => { stageT0 = performance.now(); }, null, PIXI.UPDATE_PRIORITY.LOW + 1);
+    app.ticker.add(() => {
+      if (!gameStarted || paused) return;
+      perfLog.stageMs = performance.now() - stageT0;
+      perfLog.finishFrame();
+    }, null, PIXI.UPDATE_PRIORITY.LOW - 1);
     const startBtn = document.getElementById('start-btn');
     if (startBtn) startBtn.disabled = false;
     console.log('Game ready. Press START to begin.');

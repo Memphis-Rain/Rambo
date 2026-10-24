@@ -14,7 +14,9 @@ const DEMO_SHOWCASE = [1, 2, 5, 7, 8, 9, 10, 6, 4, 3, 0];
 const DEMO_MOUSE_THRESHOLD = 8;   // px of real mouse travel that counts as input (D1)
 const DEMO_ENGAGE_RANGE = 900;    // world units: consider enemies for targeting
 const DEMO_LEASH = 600;           // fully pulled back toward the origin around here
-const DEMO_LEASH_SOFT = 450;      // the pull ramps in smoothly from here (no on/off edge)
+const DEMO_LEASH_SOFT = 400;      // the leash pull ramps in smoothly from here (no on/off edge)
+const DEMO_LEASH_FULL = 550;      // full pull here, so the held-strafe equilibrium stays inside DEMO_LEASH
+const DEMO_MOVE_HOLD = 0.4;       // D3a: minimum time a chosen direction is held      // the pull ramps in smoothly from here (no on/off edge)
 const DEMO_START_WAVE = 10;       // first demo wave (real play starts at 1)
 const DEMO_WAVE_GAP = 1.0;        // max seconds between waves in the demo (ramps faster, D4)
 const DEMO_PREF_DIST = {
@@ -99,7 +101,9 @@ function startDemo() {
   _demo.weaponTimer = Infinity; // press the first showcase weapon on frame 1
   _demo.wantWeapon = -1;
   _demo.target = null; _demo.targetId = -1;
-  _demo.moveIdx = -1; _demo.moveHold = 0; _demo.flipCd = 0;
+  _demo.moveIdx = -1; _demo.moveHold = 0; _demo.flipCd = 0; _demo.dirAge = 0;
+  _demo.huntBest = Infinity; _demo.huntT = 0;
+  _demo.losBlocked = false; _demo.losBlockedT = 0;
   _demo.strafeDir = Math.random() < 0.5 ? -1 : 1;
   _demo.strafeTimer = 2;
   _demo.jx = _demo.jy = _demo.jtx = _demo.jty = 0; _demo.jitterTimer = 0;
@@ -202,6 +206,40 @@ function _demoPress(k) {
   _demo.pulsed.push(k);
 }
 
+// D3b: would a non-piercing round from (x0,y0) to (x1,y1) hit a tree trunk,
+// stump, crate or sandbag first? (same swept test the bullets use)
+// A fire CONE, not a line: an obstacle blocks when it sits within its bullet
+// radius plus a spread margin (grows with distance, capped) of the segment,
+// short of the end point. Rounds fan out by +/- spread, so a zero-width
+// line let trunks just off the line eat many shots.
+function _demoLosBlocked(x0, y0, x1, y1, spread) {
+  const dx = x1 - x0, dy = y1 - y0, len2 = dx * dx + dy * dy;
+  if (len2 <= 0) return false;
+  const len = Math.sqrt(len2), ux = dx / len, uy = dy / len;
+  const tanS = Math.tan(Math.min(spread, 0.3) * 0.6);
+  const pad = 30 + Math.min(20, len * tanS);
+  const minX = Math.min(x0, x1) - pad, maxX = Math.max(x0, x1) + pad;
+  const minY = Math.min(y0, y1) - pad, maxY = Math.max(y0, y1) + pad;
+  for (let i = 0; i < envObjects.length; i++) {
+    const o = envObjects[i];
+    if (o.x < minX || o.x > maxX || o.y < minY || o.y > maxY) continue;
+    const r = envBulletRadius(o);
+    if (r <= 0) continue;
+    const rx = o.x - x0, ry = o.y - y0;
+    const along = rx * ux + ry * uy;
+    if (along < -r || along > len - 6) continue; // behind us, or past the target
+    const perp = Math.abs(rx * uy - ry * ux);
+    if (perp < r + 2 + Math.min(20, Math.max(0, along) * tanS)) return true;
+  }
+  return false;
+}
+
+// Dot product of two moves in WASD key space (< 0: turning back)
+function _demoKeyDot(a, b) {
+  return ((a.d ? 1 : 0) - (a.a ? 1 : 0)) * ((b.d ? 1 : 0) - (b.a ? 1 : 0)) +
+         ((a.s ? 1 : 0) - (a.w ? 1 : 0)) * ((b.s ? 1 : 0) - (b.w ? 1 : 0));
+}
+
 // Aim the virtual mouse at a world point (inverse of updatePlayer's mapping)
 function _demoAimAt(wx, wy) {
   const sx = wx - wy, sy = (wx + wy) * CFG.ISO_SCALE; // toScreen, inlined
@@ -214,8 +252,10 @@ function _demoAimAt(wx, wy) {
 }
 
 // Per-frame scratch storage (the bot allocates nothing per frame)
-const _demoNearE = [], _demoNearD = [], _demoObs = [];
+const _demoNearE = [], _demoNearD = [], _demoObs = [], _demoLogs = [];
 const _demoAim = { x: 0, y: 0 };
+const _demoPhys = new Float32Array(8);   // per-move water/obstacle penalty (D3a)
+const _demoScores = new Float32Array(8); // per-move total score this frame
 
 // The 8 WASD combos and the world direction updatePlayer turns each into
 let _demoMoves = null;
@@ -317,7 +357,8 @@ function _demoBot(dt) {
     if (e.dead) continue;
     const d = dist(p.x, p.y, e.x, e.y);
     if (d > DEMO_ENGAGE_RANGE) { if (d < farD) { farD = d; far = e; } continue; }
-    const s = d / _demoThreatWeight(e);
+    let s = d / _demoThreatWeight(e);
+    if (e._demoLosBadUntil > _demo.elapsed) s *= 3; // D3b: its line of fire is blocked
     if (e === cur) curS = s;
     if (s < bestS) { bestS = s; best = e; }
   }
@@ -339,7 +380,7 @@ function _demoBot(dt) {
 
   // --- Movement: score the 8 achievable directions ---
   _demo.strafeTimer -= dt;
-  if (_demo.strafeTimer <= 0) { _demo.strafeDir *= -1; _demo.strafeTimer = randRange(1.5, 3.5); }
+  if (_demo.strafeTimer <= 0) { _demo.strafeDir *= -1; _demo.strafeTimer = randRange(3, 5); } // D3a: deliberate, readable strafing
 
   let wantX, wantY, wantW;
   if (tgt) {
@@ -350,8 +391,10 @@ function _demoBot(dt) {
     // sign every time the distance crosses pref and the bot see-saws
     const off = tgtD - pref;
     const radial = Math.abs(off) < 40 ? 0 : clamp((off - Math.sign(off) * 40) / 60, -1.2, 1);
-    wantX = tox * radial + (-toy) * _demo.strafeDir * 0.9;
-    wantY = toy * radial + tox * _demo.strafeDir * 0.9;
+    // Blocked line of fire (D3b): strafe harder to open it up
+    const strafe = _demo.losBlocked ? 1.6 : 0.9;
+    wantX = tox * radial + (-toy) * _demo.strafeDir * strafe;
+    wantY = toy * radial + tox * _demo.strafeDir * strafe;
     wantW = 1.6;
   } else {
     // Patrol a slow circle around the origin
@@ -365,11 +408,19 @@ function _demoBot(dt) {
   wantX /= wl; wantY /= wl;
 
   const dO = dist(p.x, p.y, _demo.originX, _demo.originY);
-  let leash = clamp((dO - DEMO_LEASH_SOFT) / (DEMO_LEASH - DEMO_LEASH_SOFT) * 3, 0, 4); // full pull by DEMO_LEASH
+  let leash = clamp((dO - DEMO_LEASH_SOFT) / (DEMO_LEASH_FULL - DEMO_LEASH_SOFT) * 3, 0, 4);
   // Stragglers keep a wave from ending: hunt them past the leash. Only for an
   // out-of-range target or the last couple of enemies (keying it on
   // visibility toggled the pull at the screen edge)
-  if (tgt && (_demo.chasingFar || enemies.length <= 2)) leash = 0;
+  const hunting = tgt && (_demo.chasingFar || enemies.length <= 2);
+  if (hunting) leash = 0;
+  // A straggler hunt that stops closing in for 4 s (e.g. water in the way)
+  // wades through: water only slows, while a stalled hunt stalls the wave
+  if (hunting) {
+    if (tgtD < _demo.huntBest - 40) { _demo.huntBest = tgtD; _demo.huntT = 0; }
+    else _demo.huntT += dt;
+  } else { _demo.huntBest = Infinity; _demo.huntT = 0; }
+  const wade = _demo.huntT > 4;
   const oX = dO > 0 ? (_demo.originX - p.x) / dO : 0, oY = dO > 0 ? (_demo.originY - p.y) / dO : 0;
 
   let pk = null, pkD = Infinity;
@@ -390,6 +441,10 @@ function _demoBot(dt) {
     if (dx > 170 || dx < -170 || dy > 170 || dy < -170) continue;
     _demoObs[obsN++] = o;
   }
+  // E11: fallen logs near us are hurdles (slow to climb): a mild penalty,
+  // never boxing the bot in (chunk-bucketed query)
+  const logN = envLogsNear(p.x, p.y, 170);
+  for (let i = 0; i < logN; i++) _demoLogs[i] = envLogHits[i];
 
   let bestM = -1, bestScore = -Infinity, curScore = -Infinity;
   for (let mi = 0; mi < moves.length; mi++) {
@@ -406,9 +461,10 @@ function _demoBot(dt) {
       const toward = (m.dx * (ne.x - p.x) + m.dy * (ne.y - p.y)) / nd;
       if (toward > 0) sc -= danger * prox * prox * toward * 2.2;
     }
-    // Water lookahead
-    if (_demoIsWater(p.x + m.dx * 45, p.y + m.dy * 45)) sc -= 4;
-    if (_demoIsWater(p.x + m.dx * 100, p.y + m.dy * 100)) sc -= 2;
+    // Water lookahead (physical: may break the D3a direction hold)
+    const sc0 = sc;
+    if (!wade && _demoIsWater(p.x + m.dx * 45, p.y + m.dy * 45)) sc -= 4;
+    if (!wade && _demoIsWater(p.x + m.dx * 100, p.y + m.dy * 100)) sc -= 2;
     // Obstacles and barrels
     for (let oi = 0; oi < obsN; oi++) {
       const o = _demoObs[oi];
@@ -429,24 +485,55 @@ function _demoBot(dt) {
         }
       }
     }
+    for (let li = 0; li < logN; li++) {
+      const r = _demoLogs[li];
+      const rr = r.logR + 16;
+      for (let step = 22; step <= 66; step += 22) {
+        const d2 = envSegDist2(p.x + m.dx * step, p.y + m.dy * step, r);
+        if (d2 < rr * rr) { sc -= 0.6 * (1 - Math.sqrt(d2) / rr) * 2 * (88 - step) / 66; break; }
+      }
+    }
+    _demoPhys[mi] = sc - sc0; // water + obstacle penalty of this move
     // Stay near the start area
     if (leash > 0) sc += leash * (m.dx * oX + m.dy * oY);
     // Health detour
     if (pk) sc += 2.4 * (m.dx * (pk.x - p.x) + m.dy * (pk.y - p.y)) / (pkD || 1);
     // Stickiness against flicker
     if (mi === _demo.moveIdx) { sc += 0.25; curScore = sc; }
+    _demoScores[mi] = sc;
     if (sc > bestScore) { bestScore = sc; bestM = mi; }
   }
   // Boxed in: try the other strafe direction, at most once a second (flipping
   // every frame made the bot reverse diagonals back and forth)
   _demo.flipCd -= dt;
   if (bestScore < -2.5 && tgt && _demo.flipCd <= 0) { _demo.strafeDir *= -1; _demo.flipCd = 1; }
-  // Commit to a move briefly unless something clearly better appears
+  // D3a: commit to a direction so movement reads as deliberate kiting. Any
+  // change waits DEMO_MOVE_HOLD unless the current move is blocked; turning
+  // back against it (key-space dot < 0) also needs a clearly better move.
   _demo.moveHold -= dt;
-  if (_demo.moveIdx >= 0 && bestM !== _demo.moveIdx && _demo.moveHold > 0 && bestScore - curScore < 0.6) {
-    bestM = _demo.moveIdx;
+  _demo.dirAge += dt;
+  if (_demo.moveIdx >= 0 && bestM !== _demo.moveIdx) {
+    const cur = moves[_demo.moveIdx];
+    // Only a physical block (water/obstacle ahead) or a dodge may break the
+    // hold; crowd pressure is ordinary evasion and waits like any other change
+    // Well past the leash and still heading out counts as blocked too
+    const outward = leash > 0 && dO > DEMO_LEASH + 75 && cur.dx * oX + cur.dy * oY < 0;
+    const blocked = _demoPhys[_demo.moveIdx] < -1.5 || outward;
+    if (blocked) {
+      // Blocked: turn aside (<= 90 deg) rather than reverse, if any side is open
+      let side = -1, sideScore = -Infinity;
+      for (let mi = 0; mi < moves.length; mi++) {
+        if (_demoKeyDot(cur, moves[mi]) < 0 || _demoPhys[mi] < -1.5) continue;
+        if (_demoScores[mi] > sideScore) { sideScore = _demoScores[mi]; side = mi; }
+      }
+      if (side >= 0 && _demoKeyDot(cur, moves[bestM]) < 0) bestM = side;
+    } else {
+      const reverse = _demoKeyDot(cur, moves[bestM]) < 0;
+      // Turning back needs the direction held a while AND a clearly better move
+      if (_demo.moveHold > 0 || (reverse && (_demo.dirAge < 0.8 || bestScore - curScore < 1.0))) bestM = _demo.moveIdx;
+    }
   }
-  if (bestM !== _demo.moveIdx) _demo.moveHold = 0.25;
+  if (bestM !== _demo.moveIdx) { _demo.moveHold = DEMO_MOVE_HOLD; _demo.dirAge = 0; }
   _demo.moveIdx = bestM;
 
   // --- Dodge roll (melee in range, bomber close, or a bullet about to hit) ---
@@ -495,6 +582,9 @@ function _demoBot(dt) {
     bestM = bi;
     _demoPress(' ');
     _demo.dodgeLock = 0.6;
+    // Keep running the way we rolled instead of snapping straight back
+    _demo.moveIdx = bi;
+    _demo.moveHold = 0.45; _demo.dirAge = 0;
   }
 
   const mv = moves[bestM];
@@ -526,6 +616,17 @@ function _demoBot(dt) {
 
   // --- Fire ---
   let fire = tgt !== null && tgtVisible && !p.reloading;
+  // D3b: don't waste non-piercing fire into trees/crates/sandbags on the line
+  _demo.losBlocked = false;
+  // Check both the line to the target and the actually aimed (lead + jitter) line
+  if (fire && !wep.pierce && (_demoLosBlocked(p.x, p.y, tgt.x, tgt.y, wep.spread) ||
+      _demoLosBlocked(p.x, p.y, _demoAim.x + _demo.jx, _demoAim.y + _demo.jy, wep.spread))) {
+    fire = false;
+    _demo.losBlocked = true;
+    _demo.losBlockedT += dt;
+    // still blocked after a while: prefer another target for a moment
+    if (_demo.losBlockedT > 1.2) { tgt._demoLosBadUntil = _demo.elapsed + 1.5; _demo.losBlockedT = 0; }
+  } else _demo.losBlockedT = 0;
   if (fire) {
     // Don't shoot a barrel next to ourselves
     const ax = (tgt.x - p.x) / (tgtD || 1), ay = (tgt.y - p.y) / (tgtD || 1);
