@@ -739,8 +739,19 @@ describe('M8 persistence (generated chunks)', () => {
   }
 
   /** Entity dropped on the middle of the log axis is pushed fully out of the capsule. */
+  // "Still collidable": before E11 a log pushes entities out (wall); with E11a it is a
+  // hurdle: overlapping it slows to CFG.ENV_LOG_CLIMB and it stays in the spatial query.
   function logBlocks(log) {
-    const ent = { x: (log.ax + log.bx) / 2 + 0.5, y: (log.ay + log.by) / 2 + 0.5 };
+    const mx = (log.ax + log.bx) / 2, my = (log.ay + log.by) / 2;
+    if (LANDED.E11) {
+      // envLogsNear() returns a count and fills the global envLogHits (allocation-free).
+      const n = w.envLogsNear(mx, my, 10);
+      const hits = w.envLogHits;
+      let found = false;
+      for (let i = 0; i < n; i++) if (hits[i] === log || hits[i].id === log.id) found = true;
+      return w.envLogSlow(mx, my, 10) === w.CFG.ENV_LOG_CLIMB && found;
+    }
+    const ent = { x: mx + 0.5, y: my + 0.5 };
     w.resolveEnvCollision(ent, 10);
     return Math.sqrt(w.envSegDist2(ent.x, ent.y, log)) >= log.logR + 10 - 1e-6;
   }
@@ -959,7 +970,7 @@ describe('E11a logs are hurdles', () => {
     expect(along, 'player ended up beyond the log').toBeGreaterThan(100 + log.logR + pr);
     expect(speeds.length, 'frames spent climbing').toBeGreaterThan(3);
     const med = speeds.slice().sort((a, b) => a - b)[speeds.length >> 1];
-    const mx = (log.x + log.bx) / 2, my = (log.y + log.by) / 2, ts = g.CFG.TILE_SIZE;
+    const mx = (log.ax + log.bx) / 2, my = (log.ay + log.by) / 2, ts = g.CFG.TILE_SIZE;
     const terrainMult = g.getTerrainTypeAt(Math.floor(mx / ts) * ts, Math.floor(my / ts) * ts) === 'water' ? 0.55 : 1;
     expect(med / (g.CFG.PLAYER_SPEED * terrainMult), 'climb speed / normal speed').toBeGreaterThan(0.35 * 0.8);
     expect(med / (g.CFG.PLAYER_SPEED * terrainMult), 'climb speed / normal speed').toBeLessThan(0.35 * 1.2);
@@ -1002,14 +1013,18 @@ describe('E11a logs are hurdles', () => {
     stepEnv(3);
     const log = logOf(t);
     expect(log, 'log').toBeTruthy();
-    const mid = { x: (log.x + log.bx) / 2, y: (log.y + log.by) / 2 };
-    // Weak blast (f = 0.3 at the log's middle): log stays.
-    g.spawnExplosion(mid.x + 0.7 * RPG_R, mid.y, RPG_R, true, g.SRC_EXPLOSIVE);
+    // Blasts sit perpendicular to the log's middle, so the nearest point of the log IS its
+    // middle and f is the same whichever of the two is used to measure it.
+    const mid = { x: (log.ax + log.bx) / 2, y: (log.ay + log.by) / 2 };
+    const ll = Math.hypot(log.bx - log.ax, log.by - log.ay);
+    const px = -(log.by - log.ay) / ll, py = (log.bx - log.ax) / ll;
+    // Weak blast (f = 0.3): log stays.
+    g.spawnExplosion(mid.x + px * 0.7 * RPG_R, mid.y + py * 0.7 * RPG_R, RPG_R, true, g.SRC_EXPLOSIVE);
     stepEnv(1);
     expect(logOf(t), 'f = 0.3 keeps the log').toBeTruthy();
     const v0 = g.envRemainsVersion;
     // Strong blast (f = 0.7): splinters it.
-    g.spawnExplosion(mid.x + 0.3 * RPG_R, mid.y, RPG_R, true, g.SRC_EXPLOSIVE);
+    g.spawnExplosion(mid.x + px * 0.3 * RPG_R, mid.y + py * 0.3 * RPG_R, RPG_R, true, g.SRC_EXPLOSIVE);
     stepEnv(2);
     expect(logOf(t), 'f = 0.7 splinters the log (capsule removed)').toBeFalsy();
     expect(g.envRemainsVersion, 'remains updated').toBeGreaterThan(v0);

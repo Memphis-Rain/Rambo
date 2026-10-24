@@ -1,7 +1,8 @@
-// M8 / Q2a manual check: a BFG in a dense forest must not cause a frame over 16.7 ms
-// on the real GPU, renderer pinned to CCD0 (Q2a protocol, see pin.mjs).
-//   npm run perf:bfg -- [--gpu] [--no-pin] [--blasts 3] [--port 5179]
-// Writes test-results/perf-bfg-<timestamp>.json; exits 1 if any frame exceeds 16.7 ms.
+// M8 / Q2a manual check (spec E8 clarification): an EVENT = BFG explosion(s) in one frame
+// that fell 10+ trees in total; over the following 3 s no frame may exceed 16.7 ms on the
+// real GPU, renderer pinned to CCD0 (Q2a protocol, see pin.mjs).
+//   npm run perf:bfg -- [--gpu] [--no-pin] [--events 3] [--port 5179]
+// Writes test-results/perf-bfg-<timestamp>.json; exits 1 if a qualifying event has a frame over 16.7 ms.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -15,7 +16,7 @@ const arg = (name, def) => {
   return i < 0 ? def : (process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : true);
 };
 const gpu = arg('gpu', false) === true, pin = arg('no-pin', false) !== true;
-const blasts = Number(arg('blasts', 3)), port = Number(arg('port', 5179));
+const events = Number(arg('events', 3)), port = Number(arg('port', 5179));
 
 const server = spawn(process.execPath, [path.join(ROOT, 'node_modules/vite/bin/vite.js'), '--port', String(port), '--strictPort'],
   { cwd: ROOT, env: { ...process.env, BROWSER: 'none' }, stdio: 'ignore' });
@@ -43,9 +44,10 @@ try {
 
   const TREES = ['tree', 'pine', 'deadtree'];
   const results = [];
-  for (let b = 0; b < blasts; b++) {
+  let bfgs = 2; // BFGs per event; raised when an event fells fewer than 10 trees
+  for (let attempt = 0; results.filter((r) => r.qualifies).length < events && attempt < events + 4; attempt++) {
     // Walk the player across the map until a spot with 60+ standing trees within a
-    // chunk-sized radius is loaded, then let chunks bake for a moment.
+    // chunk-sized radius is loaded.
     const spot = await page.evaluate(async (types) => {
       const R = CFG.CHUNK_SIZE * CFG.TILE_SIZE * 0.6;
       // envObjState() is null for untouched objects, else a record with .state.
@@ -65,35 +67,48 @@ try {
       }
       return null;
     }, TREES);
-    if (!spot) { results.push({ error: 'no 60+ tree spot found' }); continue; }
+    if (!spot) { results.push({ error: 'no 60+ tree spot found', qualifies: false }); break; }
     await page.evaluate((s) => { player.x = s.x + 150; player.y = s.y + 150; }, spot);
     await page.waitForTimeout(2000);
-    const r = await page.evaluate((s) => new Promise((resolve) => {
+    const r = await page.evaluate(({ s, n, types }) => new Promise((resolve) => {
+      const standing = (o) => { if (!types.includes(o.type)) return false; const q = envObjState(o); return !q || q.state === 'standing'; };
+      // n BFG centres on the densest standing trees around the spot, >= 120 apart.
+      const near = envObjects.filter((o) => standing(o) && Math.hypot(o.x - s.x, o.y - s.y) < 500);
+      const score = (o) => near.filter((q) => Math.hypot(q.x - o.x, q.y - o.y) < 150).length;
+      const centres = [];
+      for (const o of near.sort((a, b) => score(b) - score(a))) {
+        if (centres.every((c) => Math.hypot(c.x - o.x, c.y - o.y) >= 120)) centres.push(o);
+        if (centres.length >= n) break;
+      }
       const felled0 = envStats().felled;
+      const radius = WEAPONS.find((w) => w.name === 'BFG').radius;
       const cpu = [];
+      for (const c of centres) spawnExplosion(c.x, c.y, radius, true, SRC_BFG); // one frame
       const t0 = performance.now();
-      spawnExplosion(s.x, s.y, WEAPONS.find((w) => w.name === 'BFG').radius, true, SRC_BFG);
       const tick = (now) => {
         cpu.push(perfLog.totalCpuMs);
-        if (now - t0 < 5000) requestAnimationFrame(tick);
+        if (now - t0 < 3000) requestAnimationFrame(tick);
         else {
           const sorted = cpu.slice().sort((a, b) => a - b);
-          resolve({ trees: s.n, felled: envStats().felled - felled0, frames: cpu.length,
+          const felled = envStats().felled - felled0;
+          resolve({ trees: s.n, bfgs: centres.length, felled, qualifies: felled >= 10, frames: cpu.length,
             over16_7: cpu.filter((x) => x > 16.7).length, maxMs: sorted[sorted.length - 1],
             p99: sorted[Math.floor(sorted.length * 0.99)], median: sorted[sorted.length >> 1] });
         }
       };
       requestAnimationFrame(tick);
-    }), spot);
-    console.log(`blast ${b + 1}: ${JSON.stringify(r)}`);
+    }), { s: spot, n: bfgs, types: TREES });
+    console.log(`event ${attempt + 1}: ${JSON.stringify(r)}`);
     results.push(r);
+    if (!r.qualifies) bfgs++;
   }
   const gpuName = await page.evaluate(() => {
     const gl = document.createElement('canvas').getContext('webgl');
     const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
     return info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : 'unknown';
   });
-  const pass = results.every((r) => !r.error && r.over16_7 === 0);
+  const qualifying = results.filter((r) => r.qualifies);
+  const pass = qualifying.length > 0 && qualifying.every((r) => r.over16_7 === 0);
   const out = { date: new Date().toISOString(), gpu: gpuName, pinning, results, errors, pass: gpu ? pass : `n/a (software GL; frames over 16.7: ${results.map((r) => r.over16_7).join(',')})` };
   fs.mkdirSync(path.join(ROOT, 'test-results'), { recursive: true });
   const file = path.join(ROOT, 'test-results', `perf-bfg-${Date.now()}.json`);
