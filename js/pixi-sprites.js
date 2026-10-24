@@ -1288,8 +1288,11 @@ function _spRenderParticles() {
       s.scale.set(d / 16); s.tint = col;
     } else if (type === 'muzzle') {
       let mx = X, my = Y;
-      // player flashes snap to the drawn gun tip
-      if (_sp.pTipValid) {
+      // flashes snap to the drawn gun tip of whoever fired
+      const og = p.owner && p.owner._spG;
+      if (og && og._hasMuz && og.visible) {
+        mx = _spSnap(og.x + og._muzX * A); my = _spSnap(og.y + og._muzY * A);
+      } else if (!p.owner && _sp.pTipValid) {
         const dx = p.x - px, dy = p.y - py;
         if (dx * dx + dy * dy < 1600) { mx = _spSnap(_sp.pTipX); my = _spSnap(_sp.pTipY); }
       }

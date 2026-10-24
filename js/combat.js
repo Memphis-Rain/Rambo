@@ -428,7 +428,7 @@ function updateEnemies(dt) {
           });
         }
         e.recoilT = 0.06;
-        spawnMuzzleFlash(e.x + Math.cos(a)*10, e.y + Math.sin(a)*10, a, t.explosive ? 1.6 : 0.8, 14 * e.size);
+        spawnMuzzleFlash(e.x + Math.cos(a)*10, e.y + Math.sin(a)*10, a, t.explosive ? 1.6 : 0.8, 14 * e.size, e);
       }
     } else {
       // Melee enemy
