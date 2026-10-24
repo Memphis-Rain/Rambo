@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { newRound } from '../helpers/load-game.js';
+import { LANDED } from '../milestones.js';
 
 const type = (g, name) => g.ENEMY_TYPES.findIndex((t) => t.name === name);
 
@@ -252,13 +253,50 @@ describe('T3 combat: area damage', () => {
   });
 
   test('T3: a long bomber chain terminates', () => {
-    // processPendingDamage caps chains at 3 rounds and drops what's still queued,
-    // so long chains stop part-way (reported to Ralph/Josh; not locked in either way).
     for (let i = 0; i < 30; i++) g.spawnEnemy(type(g, 'Bomber'), i * 30, 0);
     g.player.x = 50000;
     g.killEnemy(g.enemies[0], 0);
     expect(() => g.processPendingDamage()).not.toThrow();
     expect(g.kills).toBeGreaterThanOrEqual(3);
+  });
+
+  test.skipIf(!LANDED.G11)('G11: a 30-bomber chain cascades across frames until every bomber is dead', () => {
+    const chain = [];
+    for (let i = 0; i < 30; i++) chain.push(g.spawnEnemy(type(g, 'Bomber'), i * 30, 0));
+    g.player.x = 50000;
+    g.killEnemy(chain[0], 0);
+    // At most 3 rounds per frame (G11 keeps the cap), so allow plenty of frames.
+    for (let frame = 0; frame < 30; frame++) g.processPendingDamage();
+    for (const b of chain) expect(b.dead, `bomber at x=${b.x}`).toBe(true);
+    expect(g.kills).toBe(30);
+    expect(g.enemies).toHaveLength(0);
+  });
+
+  test.skipIf(!LANDED.G11)('G11: the 3-rounds-per-frame cap is kept', () => {
+    const chain = [];
+    for (let i = 0; i < 30; i++) chain.push(g.spawnEnemy(type(g, 'Bomber'), i * 30, 0));
+    g.player.x = 50000;
+    g.killEnemy(chain[0], 0);
+    g.processPendingDamage();
+    // One frame must not resolve the whole chain: the rest waits for later frames.
+    expect(chain.some((b) => !b.dead)).toBe(true);
+  });
+
+  test.skipIf(!LANDED.G11)('G11: the chain also completes through the normal update loop', () => {
+    const chain = [];
+    for (let i = 0; i < 30; i++) chain.push(g.spawnEnemy(type(g, 'Bomber'), i * 30, 0));
+    g.player.x = 50000;
+    g.player.invincible = 1e9;
+    g.waveActive = true;
+    g.enemiesThisWave = 0;
+    g.killEnemy(chain[0], 0);
+    for (let frame = 0; frame < 30; frame++) {
+      g.processPendingDamage();
+      g.updateEnemies(1 / 60);
+      g.updateBullets(1 / 60);
+      g.processPendingDamage();
+    }
+    for (const b of chain) expect(b.dead, `bomber at x=${b.x}`).toBe(true);
   });
 });
 

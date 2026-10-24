@@ -124,13 +124,27 @@ test.describe('T11 attract mode', () => {
     expect((await demo(game)).active).toBe(false);
   });
 
-  test('T11/D6: the demo ends on its own after 60 s and loops title -> demo', async ({ game }) => {
-    test.slow(); // no shortened-duration hook; waits out the real 60 s
-    test.setTimeout(150_000);
+  test('T11/D6: the demo ends on its own after CFG.DEMO_MAX_SECONDS and loops title -> demo', async ({ game }) => {
+    test.setTimeout(60_000);
     await bootTitle(game, 1);
+    expect(await game.eval(() => CFG.DEMO_MAX_SECONDS), 'D8 default').toBe(60);
+    await game.eval(() => { CFG.DEMO_MAX_SECONDS = 4; });
     await waitForDemo(game, true, 10_000);
-    await waitForDemo(game, false, 75_000);
+    await waitForDemo(game, false, 15_000);
     await expect(game.page.locator('#start-screen')).toBeVisible();
+    // idleTimer restarts from 0 when a demo ends (D6/D8), then the demo comes back.
+    expect((await demo(game)).idleTimer).toBeLessThan(1);
     await waitForDemo(game, true, 10_000);
+    await waitForDemo(game, false, 15_000);
+  });
+
+  test('T11/D8: startDemo()/stopDemo() drive the demo directly', async ({ game, page }) => {
+    await bootTitle(game, 1e9);
+    await game.eval(() => startDemo());
+    await waitForDemo(game, true, 2_000);
+    await game.page.waitForFunction(() => demoState().elapsed > 0.5, null, { timeout: 10_000 });
+    await game.eval(() => stopDemo());
+    await waitForDemo(game, false, 2_000);
+    await expect(page.locator('#start-screen')).toBeVisible();
   });
 });
