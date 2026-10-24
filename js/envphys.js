@@ -43,16 +43,18 @@
 // Decals (bloodPools, via addDecal; see particles.js for the kinds):
 //   DECAL_WOOD 7, DECAL_RUBBLE 8, DECAL_SAND 9, DECAL_LEAF 10: settled
 //     debris; x, y, radius = piece size, color, angle = rot.
-//   DECAL_STUMP 11: x, y = tree base, radius = stump radius, color = bark,
-//     color2 = cut-wood colour, variant (0 tree, 1 pine, 2 dead tree),
-//     scorch (0-3), envId.
-//   DECAL_LOG 12: x, y = log CENTRE, angle = world-space direction of the
-//     log (atan2(fallDirY, fallDirX)), len = log length (world units),
-//     width = log diameter, radius = len / 2 (extent), color = bark,
-//     color2 = cut-wood colour, variant, scorch, envId.
+//   (DECAL_STUMP 11 / DECAL_LOG 12 are no longer emitted, see E10.)
+//
+// Structural remains (E10, world state; never gore decals): envRemains[] of
+// records, envRemainsVersion bumps on change. Bake them per chunk.
+//   remain 'log': x, y = stump base, ax, ay, bx, by = log capsule (world),
+//     logR, stumpR, variant (0 tree, 1 pine, 2 dead tree), scorch (0-3),
+//     barkColor, cutColor, fallDirX/fallDirY.
+//   remain 'rubble': x, y, type ('boulder'|'ruins'), radius, remainColor.
 //
 // Hooks (E9): envState(id), envStats(), resetEnvState(), envBlast(),
-// updateEnv(dt); globals envLogs (fallen-log capsules), envDebris.
+// updateEnv(dt); globals envLogs (fallen-log capsules), envDebris,
+// envRemains, envRemainsVersion.
 // =====================================================================
 
 const DEBRIS_WOOD = 0, DEBRIS_SAND = 1, DEBRIS_STONE = 2, DEBRIS_BARK = 3, DEBRIS_LEAF = 4;
@@ -77,6 +79,11 @@ let _envAnon = 0;              // ids for objects created without one (tests)
 const _envActive = [];         // E8: records being simulated
 const _envQueue = [];          // topples waiting for a free active slot
 const envLogs = [];            // E5: records of felled trees (log capsules)
+// E10: structural remains (stump + log of felled trees, rubble footprint of
+// shattered boulders/ruins) are WORLD STATE, not gore decals: the renderer
+// bakes them per chunk from this list, so gore can never recycle them.
+const envRemains = [];
+let envRemainsVersion = 0;     // bumps whenever envRemains changes
 const envDebris = [];          // E4: flying debris pieces
 const _envDebrisFree = [];
 let _envFelled = 0;
@@ -318,6 +325,10 @@ function _envDestroy(r, ux, uy, power) {
       const n = r.type === 'ruins' ? 14 : 8 + Math.round(r.radius / 4);
       _envDebrisBurst(r.x, r.y, 6, n, DEBRIS_STONE, pal, ux, uy, p, 1.8, 4);
       _envDust(r.x, r.y, 6, 12);
+      // E10: the rubble footprint stays as world state
+      r.remain = 'rubble';
+      r.remainColor = pal[0];
+      _envAddRemain(r);
       break;
     }
     case 'bush':
@@ -370,21 +381,20 @@ function _envLand(r) {
   }
 }
 
-// Stump + log go into the decal (bake) layer
+// Stump + log become a persistent remain, baked by the renderer (E10)
 function _envBake(r) {
   r.baked = true;
-  const variant = r.type === 'pine' ? 1 : r.kind === ENVK_DEAD ? 2 : 0;
-  const bark = shadeHex(r.kind === ENVK_DEAD ? ENV_DEADWOOD_COLORS[0] : ENV_BARK_COLORS[0], 1 - r.scorch * 0.15);
-  const s = addDecal(DECAL_STUMP, r.x, r.y, r.stumpR, bark, 0, 0, ENV_CUT_WOOD);
-  s.variant = variant; s.scorch = r.scorch; s.envId = r.id;
-  const len = Math.hypot(r.bx - r.ax, r.by - r.ay);
-  const l = addDecal(DECAL_LOG, (r.ax + r.bx) * 0.5, (r.ay + r.by) * 0.5, len * 0.5, bark,
-    Math.atan2(r.fallDirY, r.fallDirX), 0, ENV_CUT_WOOD);
-  l.len = len; l.width = r.logR * 2; l.variant = variant; l.scorch = r.scorch; l.envId = r.id;
-  r.stumpDecal = s; r.logDecal = l;
+  r.remain = 'log';
+  r.variant = r.type === 'pine' ? 1 : r.kind === ENVK_DEAD ? 2 : 0;
+  r.barkColor = shadeHex(r.kind === ENVK_DEAD ? ENV_DEADWOOD_COLORS[0] : ENV_BARK_COLORS[0], 1 - r.scorch * 0.15);
+  r.cutColor = ENV_CUT_WOOD;
+  _envAddRemain(r);
 }
 
-function _envDecalAlive(d, r, kind) { return !!d && d.kind === kind && d.envId === r.id; }
+function _envAddRemain(r) {
+  if (envRemains.indexOf(r) < 0) envRemains.push(r);
+  envRemainsVersion++;
+}
 
 // ---------------------------------------------------------------------
 // Explosions (E2/E4). spawnExplosion() calls this once per explosion.
@@ -600,17 +610,6 @@ function updateEnv(dt) {
 
   updateEnvDebris(dt);
 
-  // Felled-tree decals can be recycled under MAX_BLOOD_POOLS: re-bake them
-  _envCheckT -= dt;
-  if (_envCheckT <= 0) {
-    _envCheckT = 0.5;
-    for (let i = 0; i < envLogs.length; i++) {
-      const r = envLogs[i];
-      // only near the player: far chunks re-bake when the player comes back
-      if (player && (r.x - player.x > 1500 || player.x - r.x > 1500 || r.y - player.y > 1500 || player.y - r.y > 1500)) continue;
-      if (r.baked && (!_envDecalAlive(r.stumpDecal, r, DECAL_STUMP) || !_envDecalAlive(r.logDecal, r, DECAL_LOG))) _envBake(r);
-    }
-  }
 }
 
 function updateEnvDebris(dt) {
@@ -668,6 +667,8 @@ function resetEnvState() {
   _envActive.length = 0;
   _envQueue.length = 0;
   envLogs.length = 0;
+  envRemains.length = 0;
+  envRemainsVersion++;
   for (const d of envDebris) _envDebrisFree.push(d);
   envDebris.length = 0;
   _envFelled = 0;
