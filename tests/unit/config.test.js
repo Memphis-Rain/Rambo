@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { loadGame } from '../helpers/load-game.js';
+import { LANDED } from '../milestones.js';
 
 const { g } = loadGame({ files: ['js/config.js'] });
 const { CFG, WEAPONS, ENEMY_TYPES, BOSS_NAMES } = g;
@@ -95,7 +96,7 @@ describe('Q4 gameplay lock', () => {
   test('Q4: weapon stats and unlock scores', () => {
     const stats = WEAPONS.map(({ name, rate, dmg, spread, count, speed, mag, reload, unlock }) =>
       ({ name, rate, dmg, spread, count, speed, mag, reload, unlock }));
-    expect(stats).toEqual([
+    const lock = [
       { name: 'Pistol', rate: 0.28, dmg: 30, spread: 0.04, count: 1, speed: 900, mag: 15, reload: 1.0, unlock: 0 },
       { name: 'Uzi', rate: 0.07, dmg: 14, spread: 0.13, count: 1, speed: 800, mag: 32, reload: 1.2, unlock: 400 },
       { name: 'Shotgun', rate: 0.55, dmg: 18, spread: 0.25, count: 7, speed: 650, mag: 6, reload: 1.8, unlock: 1200 },
@@ -107,7 +108,15 @@ describe('Q4 gameplay lock', () => {
       { name: 'Railgun', rate: 1.4, dmg: 600, spread: 0, count: 1, speed: 4000, mag: 3, reload: 2.5, unlock: 40000 },
       { name: 'BFG', rate: 2.0, dmg: 800, spread: 0.02, count: 1, speed: 350, mag: 1, reload: 3.0, unlock: 60000 },
       { name: 'Disintegrator', rate: 0.04, dmg: 38, spread: 0.03, count: 2, speed: 1600, mag: 120, reload: 2.5, unlock: 85000 },
-    ]);
+    ];
+    if (!LANDED.F1) {
+      expect(stats).toEqual(lock);
+      return;
+    }
+    // F1 (Q4 waived for M9 items): the Flamethrower replaces Tesla in slot 7 at the same unlock.
+    // Its stats may be tuned +-20% (checked in fire.test.js); every other row stays locked.
+    expect(stats[7]).toMatchObject({ name: 'Flamethrower', unlock: 25000 });
+    expect(stats.filter((_, i) => i !== 7)).toEqual(lock.filter((_, i) => i !== 7));
   });
 
   test('Q4: enemy stats', () => {

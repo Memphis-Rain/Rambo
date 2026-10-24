@@ -21,7 +21,7 @@ export const LANDED = {
   G13: true, // head-to-toe hits: aim picking on drawn bodies + body-column hitbox (spec G13)
   // M9 water, fire & grenades (spec c172772): one flag per item.
   N1: true, // grenades on F
-  E13: false, // sustained fire cuts trees down (trunk HP)
+  E13: true, // sustained fire cuts trees down (trunk HP)
   W2: false, // wading: submerged sprites, visible-only aim
   W3: false, // blood in water: clouds, no decals; footprints washed by wading
   W4: false, // corpses sink and dissolve in water
@@ -30,6 +30,8 @@ export const LANDED = {
   F2: false, // burning enemies panic
   F3: false, // burning trees
   F4: false, // demo bot uses the flamethrower
-  M9PERF: false, // M9 perf scenario (burning enemies/trees + red pond)
+  M9PERF: false,
+  M10: false, // Xbox controller (spec a53b301): gamepad polling, aim, assist, rumble, hot-plug
+  CACHEBUST: false, // spec B1: ?v=<BUILD> on every local asset in game.html (npm run stamp) // M9 perf scenario (burning enemies/trees + red pond)
   FU1: true, // follow-ups after the first build (spec 1c81384): R4a DITHER_STRENGTH, D4 wave 10, D5 overlay visible
 };

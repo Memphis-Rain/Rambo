@@ -584,21 +584,39 @@ test('G13: the cursor on the top of a boss\'s drawn head picks the boss', async 
   await setupArena(game, 3);
   const rows = [];
   // Screen down-right of the player (world +x), so even the Juggernaut boss fits on 960x540
-  for (const base of [1, 2, 7, 11]) {
+  // Every walk frame explicitly: a stationary boss still "walks" (out of range, speed 0) and
+  // its walk frame is fixed by walkDist at spawn; frames 1 and 3 bob the body up one art pixel
+  // (a Medic boss draws 135 px instead of 129). Forcing walkDist makes the check deterministic.
+  for (const [base, wf] of [1, 2, 7, 11].flatMap((b) => [0, 1, 2, 3].map((f) => [b, f]))) {
     const i = await placeBoss(game, base, 200, 0);
+    await game.eval(({ wf }) => {
+      const e = __g13.list[0];
+      const stride = ((e.type === 1 || e.type === 4) ? 10 : 14) * e.size; // Runner/Berserker stride 10
+      e.walkDist = (wf + 0.5) * stride;
+    }, { wf });
     // The idle bob moves a boss's drawn top by ~1 art pixel (~6 px at boss size, x3), so read
     // the bounds over both bob phases (~1 s) and use the LOWER top: the cursor then sits on
     // the head whichever phase is drawn when the pick happens.
-    const b = await game.eval((i) => new Promise((resolve) => {
-      let best = null;
+    // (bounds() is synchronous; prepBounds() is async and must not be used inside this loop.)
+    const b = await game.eval(async (i) => {
+      await __g13.prepBounds(i);
+      let best = null, lo = Infinity, hi = -Infinity;
       const t0 = gameTime;
-      const tick = () => {
-        const q = __g13.prepBounds(i);
-        if (!best || q.y > best.y) best = q;
-        if (gameTime - t0 < 1) requestAnimationFrame(tick); else resolve(best);
-      };
-      requestAnimationFrame(tick);
-    }), i);
+      await new Promise((resolve) => {
+        const tick = () => {
+          const q = __g13.bounds(i);
+          if (q) {
+            lo = Math.min(lo, q.h); hi = Math.max(hi, q.h);
+            if (!best || q.y > best.y) best = q;
+          }
+          if (gameTime - t0 < 0.6) requestAnimationFrame(tick); else resolve();
+        };
+        requestAnimationFrame(tick);
+      });
+      const e = __g13.list[i];
+      const pose = { angle: +(e.angle || 0).toFixed(2), key: e._spG && e._spG._key, healGlow: +(e.healGlow || 0).toFixed(2), attackT: +(e.attackT || 0).toFixed(2), recoilT: +(e.recoilT || 0).toFixed(2), stun: +(e.stunTimer || 0).toFixed(2) };
+      return { ...best, hMin: lo, hMax: hi, pose };
+    }, i);
     const body = Math.min(b.y + b.h, b.footY) - b.y;
     // Top ~10% of the head: 3% of the drawn body height below the top edge, on the body axis
     const pt = { x: aimPoint(b, 0).x, y: Math.round(b.y + Math.max(2, body * 0.03)) };
@@ -612,7 +630,7 @@ test('G13: the cursor on the top of a boss\'s drawn head picks the boss', async 
       return { picked, aimErrDeg: Math.abs(d) * 180 / Math.PI };
     }, { pt, i });
     const { hits } = await fireAt(game, pt, i);
-    rows.push({ who: `boss(base ${base}) ${Math.round(b.h)}px tall`, hit: hits[i], ...aim, below: pt.y - Math.round(b.y) });
+    rows.push({ who: `boss(base ${base}) walk frame ${wf}: ${Math.round(b.h)}px tall (drawn ${Math.round(b.hMin)}-${Math.round(b.hMax)}px, pose ${JSON.stringify(b.pose)})`, hit: hits[i], ...aim, below: pt.y - Math.round(b.y) });
   }
   const text = rows.map((r) => `${r.who}, cursor ${r.below}px below its top: aim ${r.aimErrDeg.toFixed(1)} deg off its feet, ` +
     `pickEnemyAtScreen ${r.picked === null ? 'n/a' : r.picked ? 'picks it' : 'NO'}, shot ${r.hit ? 'HIT' : 'miss'}`);

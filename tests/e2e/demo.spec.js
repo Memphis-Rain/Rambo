@@ -30,6 +30,26 @@ async function waitForDemo(game, active, timeout = 15_000) {
 }
 
 test.describe('T11 attract mode', () => {
+  // The REAL idle path, with no test overrides: fresh load, default CFG, no input at all.
+  // The idle timer advances with (clamped) frame dt, so on a slow runner it is measured in
+  // idle-timer seconds rather than wall time.
+  test('T11/D1: with no input after a fresh load, the demo starts by itself at DEMO_IDLE_SECONDS (+1 s)', async ({ game }) => {
+    await game.boot(); // no mouse moves, no key presses, no CFG changes
+    expect(await game.eval(() => CFG.DEMO_IDLE_SECONDS), 'default idle time').toBe(5);
+    const r = await game.eval(() => new Promise((resolve) => {
+      let last = 0;
+      const tick = () => {
+        const s = demoState();
+        if (s.active) resolve({ idleAtStart: last, gameStarted });
+        else { last = s.idleTimer; requestAnimationFrame(tick); }
+      };
+      requestAnimationFrame(tick);
+    }));
+    expect(r.idleAtStart, 'the demo starts once the idle timer reaches DEMO_IDLE_SECONDS').toBeGreaterThanOrEqual(5 - 0.1);
+    expect(r.idleAtStart, '... within 1 s of it').toBeLessThanOrEqual(6);
+    expect(r.gameStarted, 'the demo runs the game loop').toBe(true);
+  });
+
   test('T11/D1: idle on the title starts the demo after CFG.DEMO_IDLE_SECONDS', async ({ game }, testInfo) => {
     await bootTitle(game, 1);
     expect((await demo(game)).active).toBe(false);
