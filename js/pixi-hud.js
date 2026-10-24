@@ -908,7 +908,6 @@ function renderPixiVignettes(hpRatio) {
   }
 
   // Low health red vignette (stepped edge rings; strength 0..1)
-  hudElements.vignetteGraphics.clear();
   if (hpRatio < 0.3) {
     drawEdgeVignette(hudElements.vignetteGraphics, 0xb40000, 1 - hpRatio / 0.3);
     hudElements.vignetteGraphics.visible = true;
@@ -917,7 +916,6 @@ function renderPixiVignettes(hpRatio) {
   }
 
   // Shield break blue vignette
-  hudElements.shieldVignetteGraphics.clear();
   if (player && player.shield <= 0 && shieldRegenTimer < 0.5) {
     drawEdgeVignette(hudElements.shieldVignetteGraphics, 0x3250c8, (1 - shieldRegenTimer / 0.5) * 0.6);
     hudElements.shieldVignetteGraphics.visible = true;
@@ -927,15 +925,19 @@ function renderPixiVignettes(hpRatio) {
 }
 
 // Screen-edge vignette as 4 hard-edged rings (full-screen rect with an
-// elliptical hole), so the centre of the screen stays clear
+// elliptical hole), so the centre of the screen stays clear. The geometry
+// is built once per screen size; only the (stepped) alpha changes per frame.
 function drawEdgeVignette(g, color, strength) {
-  g.alpha = 1;
-  const steps = 4;
-  for (let i = 0; i < steps; i++) {
-    const t = (i + 1) / steps;
-    g.rect(0, 0, W, H).fill({ color, alpha: 0.09 * strength });
-    g.ellipse(W / 2, H / 2, W * (0.62 - 0.07 * t), H * (0.62 - 0.07 * t)).cut();
+  if (g._vw !== W || g._vh !== H || g._vc !== color) {
+    g._vw = W; g._vh = H; g._vc = color;
+    g.clear();
+    for (let i = 0; i < 4; i++) {
+      const t = (i + 1) / 4;
+      g.rect(0, 0, W, H).fill({ color, alpha: 0.09 });
+      g.ellipse(W / 2, H / 2, W * (0.62 - 0.07 * t), H * (0.62 - 0.07 * t)).cut();
+    }
   }
+  g.alpha = Math.ceil(clamp(strength, 0, 1) * 4) / 4;
 }
 
 /**
