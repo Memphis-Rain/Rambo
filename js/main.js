@@ -367,7 +367,8 @@ function resetRound() {
     initPixiHUD();       // Initialize HUD elements
     _renderLayersReady = true;
   }
-  initPixiSprites();     // (Re)initialize sprite pools and caches
+  initPixiSprites();     // (Re)initialize sprite pools and caches (incl. decal layers)
+  resetDecalState();     // blood map + growing decals (D6: no trace between rounds)
 
   gameTime = 0;
   score = 0;
@@ -388,7 +389,7 @@ function resetRound() {
   shakeX = 0; shakeY = 0; shakeMag = 0;
   notifTimer = 0; notifEl.style.opacity = 0;
   paused = false;
-  hitStopTimer = 0;
+  resetHitStop();
   _pendingDamage.length = 0;
   enemies.length = 0;
   bullets.length = 0;

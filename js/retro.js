@@ -197,6 +197,7 @@ function updateRetroCamera() {
 
 function renderRetro() {
   if (!_retro.ready) return;
+  uiContainer.visible = gameStarted; // no stale HUD under the title screen
   // Live-tunable from the console (RETRO.DITHER_STRENGTH / RETRO.LEVELS)
   const u = _retro.ditherFilter.resources.retroUniforms.uniforms;
   u.uStrength = clamp(RETRO.DITHER_STRENGTH, 0, 1);

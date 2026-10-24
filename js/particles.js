@@ -128,6 +128,13 @@ function addDecal(kind, x, y, size, color, angle=0, maxSize=0, color2=0) {
   return d;
 }
 
+// D6: forget all decal bookkeeping (the decal list itself is bloodPools)
+function resetDecalState() {
+  _bloodMap.clear();
+  _growingDecals.length = 0;
+  decalVersion++;
+}
+
 function updateDecals(dt) {
   for (let i = _growingDecals.length - 1; i >= 0; i--) {
     const d = _growingDecals[i];
