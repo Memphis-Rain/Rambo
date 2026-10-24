@@ -21,7 +21,7 @@ export const LANDED = {
   G13: true, // head-to-toe hits: aim picking on drawn bodies + body-column hitbox (spec G13)
   // M9 water, fire & grenades (spec c172772): one flag per item.
   N1: true, // grenades on F
-  E13: false, // sustained fire cuts trees down (trunk HP)
+  E13: true, // sustained fire cuts trees down (trunk HP)
   W2: false, // wading: submerged sprites, visible-only aim
   W3: false, // blood in water: clouds, no decals; footprints washed by wading
   W4: false, // corpses sink and dissolve in water

@@ -113,9 +113,14 @@ describe('E13 felling by sustained fire', () => {
     aimAt(t.x, t.y);
     g.mouseDown = true;
     let tFell = Infinity;
+    let drift = 0;
     for (let i = 0; i < maxS / DT; i++) {
       p.magAmmo = 1e6; p.reloading = false; // the magazine isn't what's being measured
       frame();
+      // Recoil kickback pushes the shooter back ~0.3 x kickback per shot (60u+ over 5 s of
+      // minigun); the acceptance is AT a range, so hold the shooter there (as a player would).
+      drift = Math.max(drift, Math.hypot(p.x, p.y));
+      p.x = 0; p.y = 0;
       if (felled(t)) { tFell = (i + 1) * DT; break; }
     }
     g.mouseDown = false;
@@ -130,7 +135,7 @@ describe('E13 felling by sustained fire', () => {
         fallErrDeg = Math.abs(d) * 180 / Math.PI;
       }
     }
-    return { tFell, fallErrDeg };
+    return { tFell, fallErrDeg, drift };
   }
 
   // Spec 410dba9: asserted 3-5 game-s for the minigun at <= 60u and the M16 at <= 150u; at
@@ -138,6 +143,7 @@ describe('E13 felling by sustained fire', () => {
   for (const [weapon, dist] of [['Minigun', 55], ['M16', 145]]) {
     test.skipIf(todo)(`E13: sustained ${weapon} fire at ${dist}u fells a tree in 3-5 game-s, away from the shooter (+-45 deg)`, () => {
       const r = sustainedFell(weapon, dist);
+      console.log(`[E13] ${weapon} at ${dist}u: felled after ${r.tFell.toFixed(2)} s (per-frame kickback ${r.drift.toFixed(2)}u, reset)`);
       expect(r.tFell, `${weapon} at ${dist}u felled the tree after ${r.tFell.toFixed(2)} s`).toBeGreaterThanOrEqual(3);
       expect(r.tFell).toBeLessThanOrEqual(5);
       expect(r.fallErrDeg, 'falls away from the shooter').not.toBeNull();
