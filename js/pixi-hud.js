@@ -71,6 +71,8 @@ const hudElements = {
   specialBar: null,      // shockwave bar graphics
   bossHealthBar: null,   // top-center boss bar
   statsPanel: null,      // top-right stats panel (incl. combo bar)
+  grenadeBar: null,      // N1: grenade icons box right of the weapon/ammo row
+  grenadeKeyText: null,
   weaponText: null,
   ammoText: null,
   scoreText: null,
@@ -111,6 +113,7 @@ const _hudCache = {
   specialKey: new Float64Array(5),
   statsKey: new Float64Array(6),
   bossKey: new Float64Array(6),
+  grenadeKey: new Float64Array(4),
   crossColor: -1
 };
 
@@ -204,6 +207,7 @@ function initPixiHUD() {
   hudElements.statsPanel = new PIXI.Graphics();
   hudElements.minimapGraphics = new PIXI.Graphics();
   hudElements.crosshair = new PIXI.Graphics();
+  hudElements.grenadeBar = new PIXI.Graphics();
   hudElements.minimapGraphics.zIndex = 2000;
   hudElements.crosshair.zIndex = 8500; // above panels and minimap, below pause
 
@@ -214,6 +218,9 @@ function initPixiHUD() {
   hudElements.hpText = hudText(8, 0xffffff);
   hudElements.shieldText = hudText(8, 0x5599cc);
   hudElements.specialText = hudText(8, 0x887755);
+  hudElements.grenadeKeyText = hudText(8, 0x5a6a80);
+  hudElements.grenadeKeyText.text = '[F]';
+  hudElements.grenadeKeyText.anchor.set(0, 0.5);
 
   // Top-right stats panel
   hudElements.scoreText = hudText(24, 0xffd700);
@@ -267,6 +274,8 @@ function initPixiHUD() {
   uiContainer.addChild(hudElements.specialBar);
   uiContainer.addChild(hudElements.bossHealthBar);
   uiContainer.addChild(hudElements.statsPanel);
+  uiContainer.addChild(hudElements.grenadeBar);
+  uiContainer.addChild(hudElements.grenadeKeyText);
   uiContainer.addChild(hudElements.minimapGraphics);
   uiContainer.addChild(hudElements.crosshair);
   uiContainer.addChild(hudElements.weaponText);
@@ -524,6 +533,12 @@ function renderHudPlayerPanel(p, hpRatio, Wi, Hi) {
   hudElements.ammoText.x = panX + HUD_PAN_W - HUD_PAD;
   hudElements.ammoText.y = panY + 14;
 
+  // Right of the ammo panel; on narrow screens (would reach the 240 px
+  // minimap) it sits above the panel instead
+  const gx = panX + HUD_PAN_W + 6, gw = 32 + (CFG.GRENADE_AMMO_MAX || 6) * HUD_GREN_STEP;
+  const gFits = gx + gw <= Wi - 240 - 18;
+  renderHudGrenades(p, gFits ? gx : panX, gFits ? panY : panY - HUD_GREN_H - 6);
+
   // --- HP label (blinks white/red when low) ---
   const hpNow = Math.ceil(p.hp);
   if (c.hp !== hpNow || c.maxHp !== p.maxHp) {
@@ -622,6 +637,59 @@ function renderHudPlayerPanel(p, hpRatio, Wi, Hi) {
     hudElements.nextText.visible = false;
     hudElements.bossUnlockText.visible = false;
   }
+}
+
+// =========================================================
+// GRENADES (N1): raised box right of the weapon/ammo row, one pixel-art
+// grenade per round carried, dim silhouettes for empty slots
+// =========================================================
+// 5x7 art (3 px each): O outline, G olive, L highlight, D shade, S steel lever
+const HUD_GREN_ART = [
+  '.SSO.',
+  '.OOOS',
+  'OLGGO',
+  'OLGDO',
+  'OGGDO',
+  'OGDDO',
+  '.OOO.',
+];
+const HUD_GREN_PAL = { O: 0x000000, G: 0x6a7c34, L: 0xa4b45c, D: 0x3c4a1e, S: 0xc8c8bc };
+const HUD_GREN_PX = 3, HUD_GREN_STEP = 18, HUD_GREN_H = 30;
+
+function hudGrenadeIcon(g, x, y, full) {
+  const A = HUD_GREN_PX;
+  for (const ch in HUD_GREN_PAL) {
+    let any = false;
+    for (let r = 0; r < HUD_GREN_ART.length; r++) {
+      const row = HUD_GREN_ART[r];
+      for (let c = 0; c < row.length; c++) {
+        if (row[c] !== ch) continue;
+        // empty slot: only the outline, dark, as a silhouette
+        if (!full && ch !== 'O') continue;
+        g.rect(x + c * A, y + r * A, A, A);
+        any = true;
+      }
+    }
+    if (any) g.fill(full ? HUD_GREN_PAL[ch] : 0x56637e);
+  }
+}
+
+function renderHudGrenades(p, bx, by) {
+  const max = CFG.GRENADE_AMMO_MAX || 6;
+  const n = Math.max(0, Math.min(max, p.grenades | 0));
+  const bw = 32 + max * HUD_GREN_STEP;
+  const k = _hudCache.grenadeKey;
+  if (_hudKey(k, 0, bx) | _hudKey(k, 1, by) | _hudKey(k, 2, n) | _hudKey(k, 3, max)) {
+    const g = hudElements.grenadeBar;
+    g.clear();
+    hudPanel(g, bx, by, bw, HUD_GREN_H);
+    const iy = by + ((HUD_GREN_H - HUD_GREN_ART.length * HUD_GREN_PX) >> 1);
+    for (let i = 0; i < max; i++) hudGrenadeIcon(g, bx + 30 + i * HUD_GREN_STEP, iy, i < n);
+  }
+  const t = hudElements.grenadeKeyText;
+  _hudTint(t, n > 0 ? 0x9aa4b4 : 0x5a6a80);
+  t.x = bx + 5;
+  t.y = by + HUD_GREN_H / 2;
 }
 
 // =========================================================

@@ -485,7 +485,8 @@ function _envAddRemain(r) {
 // ---------------------------------------------------------------------
 // Explosions (E2/E4). spawnExplosion() calls this once per explosion.
 // ---------------------------------------------------------------------
-function envBlast(x, y, R, byPlayer = false, src = SRC_EXPLOSIVE) {
+// wet: a water geyser (N1): sway/topple as usual but never scorches
+function envBlast(x, y, R, byPlayer = false, src = SRC_EXPLOSIVE, dmg = undefined, wet = false) {
   if (!(R > 0)) return;
   const bfg = src === SRC_BFG || R >= CFG.ENV_BFG_RADIUS;
   const seq = ++_envBlastSeq;
@@ -505,14 +506,14 @@ function envBlast(x, y, R, byPlayer = false, src = SRC_EXPLOSIVE) {
     const f = 1 - d / R;
     let ux, uy;
     if (d > 0.01) { ux = dx / d; uy = dy / d; } else { const a = Math.random() * Math.PI * 2; ux = Math.cos(a); uy = Math.sin(a); }
-    _envBlastOne(r, f, ux, uy, d, byPlayer, bfg);
+    _envBlastOne(r, f, ux, uy, d, byPlayer, bfg, wet);
   }
 }
 
-function _envBlastOne(r, f, ux, uy, d, byPlayer, bfg) {
+function _envBlastOne(r, f, ux, uy, d, byPlayer, bfg, wet) {
   if (r.state === 'destroyed' || r.state === 'falling' || r.state === 'fallen') return;
   const kind = r.kind;
-  const scorch = f > CFG.ENV_SCORCH_F;
+  const scorch = !wet && f > CFG.ENV_SCORCH_F;
   if (scorch && r.scorch < 3) {
     r.scorch++;
     if (r.state === 'standing') r.state = 'scorched';

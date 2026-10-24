@@ -30,6 +30,9 @@ function initAudio() {
   _buildNoisePool('big_explosion', 0.8, (i, len) => (Math.random()*2-1) * Math.pow(1-i/len, 0.2) * 2.0);
   _buildNoisePool('railgun', 0.35, (i, len) => (Math.random()*2-1) * Math.pow(1-i/len, 0.15) * 1.8);
   _buildNoisePool('bfg', 0.6, (i, len) => (Math.random()*2-1) * Math.pow(1-i/len, 0.12) * 2);
+  // N1 grenades: throw whoosh (swells then fades) and the geyser's water splash
+  _buildNoisePool('whoosh', 0.16, (i, len) => (Math.random()*2-1) * Math.sin(Math.PI*i/len) * 0.7);
+  _buildNoisePool('splash', 0.6, (i, len) => { const u = i/len; return (Math.random()*2-1) * Math.min(1, u*12) * Math.pow(1-u, 1.5); });
   _buildNoisePool('shockwave', 0.8, (i, len) => Math.sin(i/audioCtx.sampleRate*2*Math.PI*30*(1-i/len)) * Math.pow(1-i/len, 0.3));
 }
 
@@ -198,6 +201,69 @@ function playSound(type, volume=1) {
     const og = audioCtx.createGain(); og.gain.value = volume*0.7; og.connect(bus);
     osc.connect(og); osc.start(t); osc.stop(t+0.7);
     og.gain.exponentialRampToValueAtTime(0.001,t+0.7);
+  } else if (type === 'grenade') {
+    // N1: the RPG boom pitched up and shorter (same noise pool, sped up)
+    soundDur = 0.4;
+    const ns = audioCtx.createBufferSource(); ns.buffer = _getNoise('explosion');
+    ns.playbackRate.value = 1.45;
+    ns.connect(g); ns.start(t); ns.stop(t+0.34);
+    g.gain.setValueAtTime(volume*0.6,t);
+    g.gain.exponentialRampToValueAtTime(0.001,t+0.34);
+    const osc = audioCtx.createOscillator();
+    osc.type='sine'; osc.frequency.setValueAtTime(95,t);
+    osc.frequency.exponentialRampToValueAtTime(24,t+0.28);
+    const og = audioCtx.createGain(); og.gain.value = volume*0.45; og.connect(bus);
+    osc.connect(og); osc.start(t); osc.stop(t+0.28);
+    og.gain.exponentialRampToValueAtTime(0.001,t+0.28);
+  } else if (type === 'geyser') {
+    // N1: underwater blast - a low-passed, softer boom plus a watery splash
+    soundDur = 0.75;
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = 'lowpass'; lp.frequency.value = 380; lp.Q.value = 0.7;
+    lp.connect(g);
+    const ns = audioCtx.createBufferSource(); ns.buffer = _getNoise('explosion');
+    ns.connect(lp); ns.start(t); ns.stop(t+0.45);
+    g.gain.setValueAtTime(volume*0.5,t);
+    g.gain.exponentialRampToValueAtTime(0.001,t+0.45);
+    const osc = audioCtx.createOscillator();
+    osc.type='sine'; osc.frequency.setValueAtTime(48,t);
+    osc.frequency.exponentialRampToValueAtTime(14,t+0.35);
+    const og = audioCtx.createGain(); og.gain.value = volume*0.4; og.connect(bus);
+    osc.connect(og); osc.start(t); osc.stop(t+0.35);
+    og.gain.exponentialRampToValueAtTime(0.001,t+0.35);
+    // Splash: the column breaking the surface, just after the thump
+    const sp = audioCtx.createBufferSource(); sp.buffer = _getNoise('splash');
+    const bp = audioCtx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.setValueAtTime(900,t+0.05);
+    bp.frequency.exponentialRampToValueAtTime(2600,t+0.6); bp.Q.value = 0.8;
+    const sg = audioCtx.createGain(); sg.gain.value = volume*0.35; sg.connect(bus);
+    sp.connect(bp); bp.connect(sg); sp.start(t+0.05); sp.stop(t+0.65);
+  } else if (type === 'grenade_throw') {
+    // N1: pin click (two metallic ticks) + a small whoosh as it leaves the hand
+    soundDur = 0.22;
+    const osc = audioCtx.createOscillator();
+    osc.type='square'; osc.frequency.setValueAtTime(2600,t);
+    osc.frequency.setValueAtTime(3400,t+0.035);
+    osc.connect(g); osc.start(t); osc.stop(t+0.05);
+    g.gain.setValueAtTime(volume*0.1,t);
+    g.gain.setValueAtTime(0.0001,t+0.012);
+    g.gain.setValueAtTime(volume*0.07,t+0.035);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.05);
+    const ns = audioCtx.createBufferSource(); ns.buffer = _getNoise('whoosh');
+    const bp = audioCtx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.setValueAtTime(700,t+0.04);
+    bp.frequency.exponentialRampToValueAtTime(2000,t+0.2); bp.Q.value = 1.2;
+    const ng = audioCtx.createGain(); ng.gain.value = volume*0.35; ng.connect(bus);
+    ns.connect(bp); bp.connect(ng); ns.start(t+0.04); ns.stop(t+0.2);
+  } else if (type === 'grenade_bounce') {
+    // N1: a short metallic tick on the ground/obstacle
+    soundDur = 0.06;
+    const osc = audioCtx.createOscillator();
+    osc.type='triangle'; osc.frequency.setValueAtTime(1900,t);
+    osc.frequency.exponentialRampToValueAtTime(1100,t+0.04);
+    osc.connect(g); osc.start(t); osc.stop(t+0.045);
+    g.gain.setValueAtTime(volume*0.25,t);
+    g.gain.exponentialRampToValueAtTime(0.001,t+0.045);
   } else if (type === 'hit') {
     soundDur = 0.06;
     const ns = audioCtx.createBufferSource(); ns.buffer = _getNoise('hit');

@@ -62,6 +62,7 @@ let mouseJustPressed = false;
 let mouseRightDown = false;
 let mouseRightJustPressed = false;
 let mouseWorldX = 0, mouseWorldY = 0;
+let mouseGroundX = 0, mouseGroundY = 0; // raw cursor ground point (before the G13 pick)
 let floatingTexts = [];
 
 // Entity pools
