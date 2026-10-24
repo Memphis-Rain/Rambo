@@ -61,12 +61,13 @@ test.describe('T4 input', () => {
     await page.mouse.move(w / 2 + 200, h / 2);
     const mag0 = await game.eval(() => player.magAmmo);
     await page.mouse.down();
-    await page.waitForFunction(() => bullets.some((b) => b.owner === 'player'));
-    await page.mouse.up();
-    const shot = await game.eval(() => {
+    // Capture the bullet in the same tick it's seen; it can expire before a second evaluate.
+    const handle = await page.waitForFunction(() => {
       const b = bullets.find((b) => b.owner === 'player');
-      return { vx: b.vx, vy: b.vy, mag: player.magAmmo };
+      return b && { vx: b.vx, vy: b.vy, mag: player.magAmmo };
     });
+    const shot = await handle.jsonValue();
+    await page.mouse.up();
     expect(shot.mag).toBeLessThan(mag0);
     // Cursor is to the right of the player on screen, so the bullet moves right on screen.
     const screenVx = shot.vx - shot.vy; // toScreen x = wx - wy
@@ -221,24 +222,37 @@ test.describe('T6 perf', () => {
         spawnEnemy(i % 4, player.x + Math.cos(a) * 250, player.y + Math.sin(a) * 250);
       }
     });
-    await game.page.waitForTimeout(5000);
+    // Sample CPU frame time across the whole window: perfLog.totalCpuMs is a single
+    // frame and gets overwritten every frame, so one GC spike would make it flaky.
+    await game.eval(() => {
+      window.__t6 = { cpu: [], timer: setInterval(() => window.__t6.cpu.push(perfLog.totalCpuMs), 25) };
+    });
+    await game.advance(5);
     const perf = await game.eval(() => {
+      clearInterval(window.__t6.timer);
+      const cpu = window.__t6.cpu.slice().sort((a, b) => a - b);
+      const pct = (q) => cpu[Math.min(cpu.length - 1, Math.floor(q * cpu.length))];
       const gl = document.createElement('canvas').getContext('webgl');
       const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
       return {
-        fps: perfLog.fps, updateMs: perfLog.updateMs, renderMs: perfLog.renderMs,
-        cpuMs: perfLog.totalCpuMs, enemies: enemies.length,
+        fps: perfLog.fps, // already averaged over the last 60 frames
+        samples: cpu.length,
+        cpuMedianMs: pct(0.5), cpuP90Ms: pct(0.9), cpuMaxMs: cpu[cpu.length - 1],
+        cpuMeanMs: cpu.reduce((a, b) => a + b, 0) / cpu.length,
+        enemies: enemies.length,
         gpu: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : 'unknown',
       };
     });
     await testInfo.attach('perf.json', { body: JSON.stringify(perf, null, 2), contentType: 'application/json' });
-    console.log(`[T6] fps=${perf.fps} cpu=${perf.cpuMs.toFixed(1)}ms update=${perf.updateMs.toFixed(1)}ms render=${perf.renderMs.toFixed(1)}ms enemies=${perf.enemies} gpu="${perf.gpu}" (min fps ${minFps})`);
+    const summary = `fps=${perf.fps} cpu median=${perf.cpuMedianMs.toFixed(1)}ms p90=${perf.cpuP90Ms.toFixed(1)}ms max=${perf.cpuMaxMs.toFixed(1)}ms (${perf.samples} samples) enemies=${perf.enemies} gpu="${perf.gpu}"`;
+    console.log(`[T6] ${summary} (min fps ${minFps})`);
+    testInfo.annotations.push({ type: 'perf', description: summary });
+    expect(perf.samples).toBeGreaterThan(20);
     expect(perf.enemies).toBeGreaterThanOrEqual(40);
-    // Q2: CPU frame time is meaningful everywhere.
-    expect(perf.cpuMs).toBeLessThan(12);
+    // Q2: CPU frame time is meaningful everywhere; judge the typical frame, not a spike.
+    expect(perf.cpuMedianMs).toBeLessThan(12);
     // With software WebGL (headless/CI) fps measures SwiftShader, not the game: record it only.
     const softwareGl = /swiftshader|llvmpipe|software/i.test(perf.gpu);
-    testInfo.annotations.push({ type: 'perf', description: `fps=${perf.fps} cpu=${perf.cpuMs.toFixed(1)}ms gpu=${perf.gpu}` });
     if (!softwareGl) expect(perf.fps).toBeGreaterThanOrEqual(minFps);
   });
 });
