@@ -154,7 +154,7 @@ const INSTALL_W2 = ({ h, site }) => {
 test.describe('W2 wading', () => {
   test.skip(!LANDED.W2, 'W2 not landed (tests/milestones.js)');
 
-  test('W2: the player, all 12 enemy types and a boss show <= 55% of their dry body height in water, and the waterline ramps in and out without popping', async ({ game }, testInfo) => {
+  test('W2: the player, all 12 enemy types and a boss show <= 55% of their dry body height in water, and the waterline ramps in and out without popping (>= 0.2 game-s, 10-90%)', async ({ game }, testInfo) => {
     test.setTimeout(T(300_000));
     await startCalm(game);
     await postFxOff(game);
@@ -187,6 +187,13 @@ test.describe('W2 wading', () => {
           prev = x;
         }
         expect(mid, `${r.who} ${phase}: in-between heights (a ramp, not a pop)`).toBeGreaterThanOrEqual(2);
+        // Ralph: frame-rate proof. The transition from 10% to 90% of the cut takes >= 0.2 game-s,
+        // which also catches a "fast ramp" that per-frame bounds could miss at low fps.
+        const cut = to - from;
+        const at10 = recs.find((x) => (x.h - from) / cut >= 0.1);
+        const at90 = recs.find((x) => (x.h - from) / cut >= 0.9);
+        expect(at10 && at90, `${r.who} ${phase}: the transition completes`).toBeTruthy();
+        expect(at90.t - at10.t, `${r.who} ${phase}: 10% -> 90% of the cut takes >= 0.2 game-s`).toBeGreaterThanOrEqual(0.2 - 1e-6);
       }
     }
   });
