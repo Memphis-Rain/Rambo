@@ -164,6 +164,13 @@ Because of M1, art must read at 1/3 resolution:
     - With a zero-spread weapon (e.g. Railgun), aiming at the **head, torso and legs** of each of the 12 enemy types and a boss, from 4 iso directions, at x1 and x3, gives ≥ 95% hits each.
     - Aiming 1 body-width beside the drawn sprite misses.
     - An enemy standing behind another doesn't steal a shot aimed at the front enemy's head (picking takes the topmost).
+  - **G13c. Explosives that hit a body detonate at the target's feet.** Ruling, 2026-10-24, on Anna's finding:
+    - On 96168fd, a rocket detonates where it enters the column. For a target screen-below the shooter that entry is the column top, up to 135u from the feet (Juggernaut). The splash then misses the target it hit and can land on enemies behind it.
+    - Rule: when a contact-detonating projectile (RPG, and any other contact explosive) hits an enemy's body region, foot circle or column, the explosion point is that **enemy's ground position** (e.x, e.y). The splash centre, scorch decal (J2), debris (J3), and blast forces on the environment (E-series) all use that point.
+    - Ground hits, barrels and trunks don't change.
+    - Why: the splash has to land on the enemy it hit and on its world neighbours. A world point 135u off is wrong in world terms, even if it's drawn over the head.
+    - Q4: the direct-hit damage and the splash radius and falloff don't change. Only the centre moves to where the target stands.
+    - Acceptance: an RPG aimed at the head, torso and legs of each enemy type and a boss, from 4 directions including screen-below, detonates within 3u of the target's ground position, and the target takes full splash damage (f = 1 at d ≈ 0).
 - **G11. Bomber chain carry-over (bug fix, found by Anna in T3).**
   - Today `processPendingDamage()` runs at most 3 rounds per frame, then `_pendingDamage.length = 0` throws away the damage still queued. A long bomber chain dies out after about 6 links.
   - Keep the 3-rounds-per-frame anti-recursion cap, but **carry the leftover queue to the next frame** instead of discarding it.
