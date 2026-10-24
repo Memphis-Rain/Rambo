@@ -115,6 +115,7 @@ Because of M1, art must read at 1/3 resolution:
 - **G4. Persistent splatter decals**:
   - Ground splats stay for the session, up to `CFG.MAX_BLOOD_POOLS` (oldest recycled first).
   - Render them through the existing batched blood-pool path. Draw-call count must not grow with the number of splats.
+  - **Amended (Ralph, after review):** baked decal chunks are allowed. The draw count must stay **bounded at ≤ 16** at `MAX_BLOOD_POOLS`. Josh's raise to 2000 is accepted on that bound, and on Q2 holding.
 - **G5. Gibs**:
   - Explosive, BFG, Railgun and overkill deaths (damage ≥ 2× remaining HP) burst into 5–8 chunks: head, limbs and torso bits.
   - Chunks bounce with z-gravity, leave smear trails and settle as decals.
@@ -126,6 +127,10 @@ Because of M1, art must read at 1/3 resolution:
   - Josh adds `let hitStopTimer = 0` in `combat.js`. It is set to 0.03–0.06 s on big kills or explosions.
   - The main loop skips `update()` while it's above 0, but still renders.
   - It never stacks above 0.1 s.
+  - **Amended (Ralph, after review):** a single stop is at most **0.06 s**, and that includes bosses. A hit-stop can only start at least **0.3 s** after the previous one ended.
+  - Triggers are limited to **boss kills and explosions with radius ≥ 100**. Ordinary overkill and gib deaths do NOT hit-stop.
+  - Without these limits, fast weapons stalled the simulation to about half speed at 10 kills/s.
+  - Acceptance: over 10 s of 10 kills/s with the Minigun, the total simulated time is ≥ 90% of wall time.
 - **G11. Bomber chain carry-over (bug fix, found by Anna in T3).**
   - Today `processPendingDamage()` runs at most 3 rounds per frame, then `_pendingDamage.length = 0` throws away the damage still queued. A long bomber chain dies out after about 6 links.
   - Keep the 3-rounds-per-frame anti-recursion cap, but **carry the leftover queue to the next frame** instead of discarding it.
