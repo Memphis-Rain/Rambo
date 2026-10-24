@@ -287,6 +287,15 @@ Principles:
   - **(c) D3b measures only what the bot controls:** shots stopped by an environment object **before reaching the target's distance**. Misses that fly on past the target into trees behind it don't count. The bar stays < 15%.
   - **(d) The D3a kill-rate bar applies in normal terrain.** Forest-heavy runs are recorded as informational.
   - **(e) Canopy fade (#10): YES.** Tree sprites whose bounds cover the **player** fade to ~40%, using an ordered-dither (retro) or a stepped alpha, over 0.15 s, and restore when the player leaves. Sprite alpha only, no rebake.
+- **E12. Remains must not grow per-frame cost (Ralph, after Anna's c8b2144 baseline).**
+  - On the real GPU, pinned to CCD0, a 5-minute gore session slowed from 4.0 → 6.0 ms (ratio **1.50**, bar 1.15). Unpinned it was 1.78.
+  - The cause is accumulated M8 state: each stop adds a remains Graphics (2 → 17 with only 3 loaded chunks), there's per-log rect geometry, and envLogs is scanned in full every frame.
+  - Required:
+    - The remains of a chunk are **baked to a RenderTexture once per settle-batch** and drawn as **one sprite per chunk**, so render cost is constant in the number of felled trees.
+    - Log collision is queried through a per-chunk spatial bucket.
+  - Acceptance: perf:sustained, 5 min, pinned: ratio ≤ 1.15 **with remains persisting**, and the 40+gore budget holds.
+- **E8 clarification.** "A BFG felling 10+ trees" means **any single frame's explosion(s) that fell 10+ trees in total**, whether from one BFG or several. Over the following 3 s, no frame may exceed 16.7 ms (pinned). Anna's perf:bfg showed 2 frames at 17.4 ms, which is a FAIL that the E12 coalescing must fix.
+- **P1(a) reminder.** The 3 ms target is `buildMs + updateMs` only (corrected in e38b514), not totalCpuMs.
 - **E9. Test hooks.**
   - `envState(id)` returns `{ state: 'standing'|'scorched'|'falling'|'fallen'|'destroyed', hp, sway }`.
   - `envStats()` returns `{ active, debris, felled }`.
