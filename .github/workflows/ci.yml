@@ -44,7 +44,7 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: E2E tests (T4-T11), shard ${{ matrix.shard }}/4
-        run: npx playwright test --grep-invert @perf --shard=${{ matrix.shard }}/4
+        run: npx playwright test --grep-invert "@perf|@long" --shard=${{ matrix.shard }}/4
       - name: Upload Playwright report and screenshots
         if: always()
         uses: actions/upload-artifact@v7
@@ -57,7 +57,13 @@ jobs:
 
   perf:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Perf/statistical tests measure fixed GAME time and @long tests fire hundreds of real
+    # shots; at the runner's ~4 fps a single test can take ~11 min, so they are sharded too.
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -68,13 +74,13 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       # Relative criteria only on CI (Q2a); absolute ms budgets are skipped or recorded.
-      - name: Perf and statistical tests (@perf)
-        run: npx playwright test --grep @perf
+      - name: Perf, statistical and long tests (@perf, @long)
+        run: npx playwright test --grep "@perf|@long" --shard=${{ matrix.shard }}/4
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-report-perf
+          name: playwright-report-perf-shard-${{ matrix.shard }}
           path: |
             playwright-report/
             test-results/
