@@ -196,6 +196,20 @@ Because of M1, art must read at 1/3 resolution:
   - **Find the root cause first, with evidence:** a profile or a bisect showing what grows. Then fix it.
   - Prefer an approach that doesn't rebuild geometry every frame: bake the water mask once per chunk and animate it through a shader, a uniform, or a tiling offset.
   - Acceptance: Q2a's sustained criterion.
+  - **P1 root cause (Josh, with evidence in `worktrees/josh/.scratch/p1-investigation/`):**
+    - Nothing in the game grows. The ~60 s step is the OS moving the renderer onto the busier CCD of the 2-CCD Ryzen 9950X3D, which makes the same JS ~1.6× slower.
+    - Flipping CPU affinity mid-run recovers it, and steps it again, instantly. A run pinned to CCD0 doesn't step (ratio ~1.09).
+  - **P1 decision (Ralph):**
+    - (a) **Fix the biggest real cost anyway.** `renderPixiWaterOverlay` rebuilds ~3300 rects every frame (~3.7 ms of the 5.0 ms late-state total). Bake the camo per chunk once, and animate the drift with a stepped tiling or texture offset (≤ 10 Hz).
+      - Target: water overlay ≤ 0.3 ms per frame, and totalCpuMs (40 + gore) median ≤ 3 ms **unpinned** at minute 2.
+      - That makes the scheduler's slow-CCD penalty irrelevant on real machines.
+    - (b) **Measurement protocol (Q2a):**
+      - Sustained-ratio runs on the reference machine pin the browser to CCD0 (`ProcessorAffinity = 0xFFFF` after launch). They also record an unpinned run, which is informational.
+      - The CI relative check runs as-is: GitHub runners have no CCD split.
+- **W1. Water camo translucency (bug found in P1, decision Ralph).**
+  - `g.alpha` was set per block, but only the final `g.alpha = 1` applied, so the camo has always drawn opaque instead of the intended 0.15–0.37.
+  - Restore the intended translucency through per-fill alpha. Expose it as `CFG.WATER_CAMO_ALPHA_SCALE` (1 = as designed, and a higher value moves it back toward opaque).
+  - Josh supplies before/after screenshots at x3 with dither on. Ralph picks the shipped value from them.
 - **P2. Honest instrumentation.** `perfLog` and F4 include the retro pass and `app.render` (Q2a), and report them as separate lines too.
 - **P3. Chunk-generation budget.** At most ~4 ms of chunk baking per frame. Queue the rest and bake nearest-first over the following frames; chunks just off-screen are pre-baked.
   - Acceptance: walking continuously for 30 s produces no frame over 16.7 ms that is caused by terrain.
