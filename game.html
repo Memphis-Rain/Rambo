@@ -27,6 +27,7 @@ canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh;ima
 #start-btn{font-family:'Press Start 2P',monospace;font-size:32px;padding:16px 32px;background:none;border:none;color:#ffe000;cursor:pointer;letter-spacing:4px;text-shadow:4px 4px 0 #a00;pointer-events:all;animation:press-blink 1s steps(1,end) infinite}
 #start-btn:hover{color:#fff;animation:none}
 #start-btn:disabled{animation:none;opacity:.35;cursor:wait}
+#boot-error{display:none;max-width:640px;margin-top:16px;font-family:'Press Start 2P',monospace;font-size:12px;line-height:2;color:#ff6060;text-align:center}
 @keyframes press-blink{0%{opacity:1}70%{opacity:0}}
 @media (max-width:760px),(max-height:640px){
   #start-screen h1{font-size:48px;margin-bottom:16px}
@@ -37,7 +38,8 @@ canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh;ima
 }
 
 /* H3: kill-streak / wave banners */
-.notification{position:absolute;top:28%;left:16px;right:16px;text-align:center;font-family:'Press Start 2P',monospace;-webkit-font-smoothing:none;font-smooth:never;font-size:40px;line-height:1.5;color:#ffe000;text-shadow:-4px 0 0 #000,4px 0 0 #000,0 -4px 0 #000,0 4px 0 #000,-4px -4px 0 #000,4px -4px 0 #000,-4px 4px 0 #000,8px 8px 0 #000;opacity:0;pointer-events:none;white-space:normal;animation:notif-pop .45s ease-out both,notif-cycle .32s steps(1,end) infinite}
+.notification{position:absolute;top:28%;left:16px;right:16px;text-align:center;font-family:'Press Start 2P',monospace;-webkit-font-smoothing:none;font-smooth:never;font-size:40px;line-height:1.5;color:#ffe000;text-shadow:-4px 0 0 #000,4px 0 0 #000,0 -4px 0 #000,0 4px 0 #000,-4px -4px 0 #000,4px -4px 0 #000,-4px 4px 0 #000,8px 8px 0 #000;opacity:0;pointer-events:none;white-space:normal}
+.notification.show{animation:notif-pop .45s ease-out both,notif-cycle .32s steps(1,end) infinite}
 .notification.small{font-size:24px;text-shadow:-3px 0 0 #000,3px 0 0 #000,0 -3px 0 #000,0 3px 0 #000,-3px -3px 0 #000,3px -3px 0 #000,-3px 3px 0 #000,6px 6px 0 #000}
 @keyframes notif-pop{0%{transform:scale(.2)}45%{transform:scale(1.35)}70%{transform:scale(.88)}85%{transform:scale(1.08)}100%{transform:scale(1)}}
 @keyframes notif-cycle{0%{color:#ffe000}25%{color:#ff8c00}50%{color:#ff2020}75%{color:#fff}}
@@ -71,6 +73,7 @@ canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh;ima
     F3 DEBUG OVERLAY &nbsp;-&nbsp; F4 PERF DUMP
   </div>
   <button id="start-btn" onclick="startGame()" disabled>PRESS START</button>
+  <div id="boot-error"></div>
 </div>
 
 <!-- PixiJS v8 - WebGL Rendering Engine (local) -->

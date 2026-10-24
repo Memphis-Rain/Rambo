@@ -138,7 +138,8 @@ function showNotification(text, duration=2) {
   notifText = text;
   notifTimer = duration;
   notifEl.textContent = text;
-  notifEl.className = text.length > 18 ? 'notification small' : 'notification';
+  // .show runs the bounce + colour cycle; removed again once faded out
+  notifEl.className = text.length > 18 ? 'notification small show' : 'notification show';
   // Restart the bounce-in for every new message
   notifEl.style.animation = 'none';
   void notifEl.offsetWidth;
@@ -150,7 +151,7 @@ function updateNotification(dt) {
   if(notifTimer > 0) {
     notifTimer -= dt;
     if(notifTimer <= 0.5) notifEl.style.opacity = notifTimer / 0.5;
-    if(notifTimer <= 0) notifEl.style.opacity = 0;
+    if(notifTimer <= 0) { notifEl.style.opacity = 0; notifEl.classList.remove('show'); }
   }
 }
 
@@ -439,17 +440,34 @@ function startGame() {
   console.log('[RAMBO] Mission started');
 }
 
+// Boot failure (no WebGL, blocked GPU...): say so on the title instead of
+// leaving a disabled START button with no explanation
+function showBootError(err) {
+  console.error('[RAMBO] Boot failed:', err);
+  const startBtn = document.getElementById('start-btn');
+  if (startBtn) { startBtn.disabled = true; startBtn.textContent = 'WEBGL UNAVAILABLE'; }
+  const hint = document.getElementById('boot-error');
+  if (hint) {
+    hint.textContent = 'THIS GAME NEEDS WEBGL. ENABLE HARDWARE ACCELERATION OR TRY ANOTHER BROWSER.';
+    hint.style.display = 'block';
+  }
+}
+
 // Initialize (async for PixiJS)
 (async function init() {
-  const fontReady = loadHudFont(); // H1: fetch the pixel font while PixiJS starts
-  await initPixiApp();
-  initRetro();
-  // The HUD creates its Text on the first START/demo; the font must be ready by then
-  await fontReady;
-  initInput();
-  lastTime = performance.now();
-  app.ticker.add(gameLoop, null, PIXI.UPDATE_PRIORITY.HIGH);
-  const startBtn = document.getElementById('start-btn');
-  if (startBtn) startBtn.disabled = false;
-  console.log('Game ready. Press START to begin.');
+  try {
+    const fontReady = loadHudFont(); // H1: fetch the pixel font while PixiJS starts
+    await initPixiApp();
+    initRetro();
+    // The HUD creates its Text on the first START/demo; the font must be ready by then
+    await fontReady;
+    initInput();
+    lastTime = performance.now();
+    app.ticker.add(gameLoop, null, PIXI.UPDATE_PRIORITY.HIGH);
+    const startBtn = document.getElementById('start-btn');
+    if (startBtn) startBtn.disabled = false;
+    console.log('Game ready. Press START to begin.');
+  } catch (err) {
+    showBootError(err);
+  }
 })();
