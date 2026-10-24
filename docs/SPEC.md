@@ -137,6 +137,15 @@ Because of M1, art must read at 1/3 resolution:
   - Fix: use a **swept segment-vs-circle test from the previous to the current position for ALL bullets** (player and enemy).
   - Pierce semantics stay the same: each bullet damages a given enemy at most once, and a non-piercing bullet hits the **nearest** enemy along the segment.
   - Q4 exception: this restores the intended weapon stats and doesn't change them. Unit-test the Railgun hit rate (≥ 95% of aimed shots on a stationary target at 300 units), plus the non-pierce "nearest first" rule.
+  - **G12a. Pierce damage preserves the 60 fps balance (decision, Ralph, after review).**
+    - The old code had no pierce bookkeeping. A piercing round damaged an enemy on **every 60 Hz frame** it overlapped it.
+    - Big targets therefore took several hits, e.g. Plasma did 9 hits to a Juggernaut boss and 3 to a Tank. That was effectively the weapon balance, but it depended on frame rate.
+    - "Once per enemy" alone would nerf Plasma, Disintegrator and Railgun against big targets by up to 9×, which breaks Q4.
+    - Rule: a piercing bullet hits each enemy once per pass, dealing `dmg × max(1, round(chord / (speed / 60)))`, where `chord` is the length of the bullet's path inside the enemy's hit circle.
+    - That reproduces the old 60 fps damage at **any** frame rate.
+    - Show one merged damage number per pass (G8).
+    - Acceptance (unit): for Plasma, Disintegrator and Railgun against a Tank and against a Juggernaut boss, the new damage per pass is within ±1 hit of the old 60 fps simulation, and identical at 30, 60 and 144 fps.
+  - **G12b.** Explosive barrels use the same swept test, so rounds no longer tunnel through barrels. On a non-piercing bullet's path, the nearest of enemy or barrel takes the hit.
 - **G11. Bomber chain carry-over (bug fix, found by Anna in T3).**
   - Today `processPendingDamage()` runs at most 3 rounds per frame, then `_pendingDamage.length = 0` throws away the damage still queued. A long bomber chain dies out after about 6 links.
   - Keep the 3-rounds-per-frame anti-recursion cap, but **carry the leftover queue to the next frame** instead of discarding it.
