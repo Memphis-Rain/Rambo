@@ -194,6 +194,16 @@ function _envDefaultHp(type) {
   }
 }
 
+// E13: trunk HP by type (0 = no trunk to fell)
+function _envTrunkMax(type) {
+  switch (type) {
+    case 'tree': return CFG.ENV_TRUNK_HP_TREE;
+    case 'pine': return CFG.ENV_TRUNK_HP_PINE;
+    case 'deadtree': return CFG.ENV_TRUNK_HP_DEAD;
+    default: return 0;
+  }
+}
+
 // Get or create the record of an object
 function _envRecord(o) {
   let r = envObjState(o);
@@ -215,6 +225,9 @@ function _envRecord(o) {
     ax: 0, ay: 0, bx: 0, by: 0,
     active: false, queued: false, blastSeq: 0,
     inLogs: false, inRemains: false, pruned: false,
+    // E13: trunk HP, dominant recent shot direction (dmg-weighted, decaying)
+    trunkHp: _envTrunkMax(o.type), trunkMax: _envTrunkMax(o.type),
+    shotX: 0, shotY: 0, shotT: 0, notch: false, notchDirX: 0, notchDirY: 0,
   };
   _envStore.set(r.id, r);
   o._env = r;
@@ -234,7 +247,8 @@ function _envActivate(r) {
 
 // A record that only sways (no lasting change): safe to evict / forget
 function _envSwayOnly(r) {
-  return r.state === 'standing' && r.scorch === 0 && !r.cracked && r.hp >= r.maxHp && !r.queued && !r.remain;
+  return r.state === 'standing' && r.scorch === 0 && !r.cracked && r.hp >= r.maxHp && !r.queued && !r.remain &&
+    r.trunkHp >= r.trunkMax;
 }
 
 // Remove r from the active set (index i) and put it to sleep; a sway-only
@@ -485,8 +499,10 @@ function _envAddRemain(r) {
 // ---------------------------------------------------------------------
 // Explosions (E2/E4). spawnExplosion() calls this once per explosion.
 // ---------------------------------------------------------------------
-// wet: a water geyser (N1): sway/topple as usual but never scorches
-function envBlast(x, y, R, byPlayer = false, src = SRC_EXPLOSIVE, dmg = undefined, wet = false) {
+// dmg: the explosion's own damage (E13 trunk HP loses f x dmg; default
+// CFG.ENV_BLAST_DMG for sources without a round). wet: a water geyser (N1):
+// sway/topple as usual but never scorches
+function envBlast(x, y, R, byPlayer = false, src = SRC_EXPLOSIVE, dmg = CFG.ENV_BLAST_DMG, wet = false) {
   if (!(R > 0)) return;
   const bfg = src === SRC_BFG || R >= CFG.ENV_BFG_RADIUS;
   const seq = ++_envBlastSeq;
@@ -506,11 +522,11 @@ function envBlast(x, y, R, byPlayer = false, src = SRC_EXPLOSIVE, dmg = undefine
     const f = 1 - d / R;
     let ux, uy;
     if (d > 0.01) { ux = dx / d; uy = dy / d; } else { const a = Math.random() * Math.PI * 2; ux = Math.cos(a); uy = Math.sin(a); }
-    _envBlastOne(r, f, ux, uy, d, byPlayer, bfg, wet);
+    _envBlastOne(r, f, ux, uy, d, byPlayer, bfg, wet, dmg);
   }
 }
 
-function _envBlastOne(r, f, ux, uy, d, byPlayer, bfg, wet) {
+function _envBlastOne(r, f, ux, uy, d, byPlayer, bfg, wet, dmg) {
   if (r.state === 'destroyed' || r.state === 'falling' || r.state === 'fallen') return;
   const kind = r.kind;
   const scorch = !wet && f > CFG.ENV_SCORCH_F;
@@ -529,6 +545,8 @@ function _envBlastOne(r, f, ux, uy, d, byPlayer, bfg, wet) {
       _envTopple(r, ux, uy, d / CFG.ENV_SHOCK_SPEED, byPlayer);
       return;
     }
+    // E13: the blast also eats into the trunk (E2 thresholds above still win)
+    if (kind !== ENVK_BUSH && _envTrunkDamage(r, f * dmg, ux, uy, byPlayer)) return;
     _envSway(r, ux, uy, f * CFG.ENV_SWAY_IMPULSE);
     if (kind !== ENVK_DEAD) _envLeafBurst(r, Math.round(f * CFG.ENV_LEAF_BURST), ux, uy, 0.5 + f);
     if (scorch) _envSmokePuff(r.x, r.y, kind === ENVK_BUSH ? 8 : Math.max(16, r.height * 0.6), 3);
@@ -544,20 +562,49 @@ function _envBlastOne(r, f, ux, uy, d, byPlayer, bfg, wet) {
   }
 }
 
+// E13: wear the trunk down by dmg pushed along world direction (ux, uy).
+// The dmg-weighted push directions decay with CFG.ENV_SHOT_TAU (game time);
+// at 0 HP the tree topples along that dominant direction (away from the
+// shooters). Returns true if this felled the tree.
+function _envTrunkDamage(r, dmg, ux, uy, byPlayer) {
+  if (!(r.trunkMax > 0) || !(dmg > 0)) return false;
+  if (r.state !== 'standing' && r.state !== 'scorched') return false;
+  const k = Math.exp(-Math.max(0, gameTime - r.shotT) / CFG.ENV_SHOT_TAU);
+  r.shotX = r.shotX * k + ux * dmg;
+  r.shotY = r.shotY * k + uy * dmg;
+  r.shotT = gameTime;
+  const sl = Math.sqrt(r.shotX * r.shotX + r.shotY * r.shotY);
+  const dx = sl > 1e-6 ? r.shotX / sl : ux, dy = sl > 1e-6 ? r.shotY / sl : uy;
+  r.trunkHp = Math.max(0, r.trunkHp - dmg);
+  if (r.trunkHp <= r.trunkMax * CFG.ENV_TRUNK_NOTCH) {
+    if (!r.notch) _envDebrisBurst(r.x, r.y, 6, 3, DEBRIS_BARK, r.kind === ENVK_DEAD ? ENV_DEADWOOD_COLORS : ENV_BARK_COLORS, -dx, -dy, 0.6, 1.2, 2);
+    r.notch = true;
+    r.notchDirX = -dx; r.notchDirY = -dy; // the side facing the shooters
+  }
+  if (r.trunkHp > 0) return false;
+  if (r.kind === ENVK_TREE) _envLeafBurst(r, CFG.ENV_LEAF_BURST >> 1, dx, dy, 0.8);
+  _envTopple(r, dx, dy, 0, byPlayer);
+  return true;
+}
+
 // ---------------------------------------------------------------------
 // Bullets (E3/E4): combat.js calls this when a bullet path hits an env
 // blocker (trunk, stump, crate, sandbag). (hx, hy) = impact point.
 // ---------------------------------------------------------------------
-function envBulletHit(o, hx, hy, vx, vy, dmg) {
+// E13: every owner's rounds wear trunks down (byPlayer: credit for the fall);
+// a pierce pass applies dmg x CFG.ENV_TRUNK_PIERCE to a trunk
+function envBulletHit(o, hx, hy, vx, vy, dmg, byPlayer = false, pierce = false) {
   const kind = _envKind(o.type);
   const sp = Math.sqrt(vx * vx + vy * vy) || 1;
   const ux = vx / sp, uy = vy / sp;
   if (kind === ENVK_TREE || kind === ENVK_DEAD) {
     const r = envObjState(o);
     const felled = r && (r.state === 'falling' || r.state === 'fallen');
-    // bark chips fly back toward the shooter
+    // bark chips fly back toward the shooter, denser as the trunk wears (E13)
     const bark = kind === ENVK_DEAD ? ENV_DEADWOOD_COLORS : ENV_BARK_COLORS;
-    for (let i = 0; i < 3; i++) {
+    const worn = r && r.trunkMax > 0 ? 1 - r.trunkHp / r.trunkMax : 0;
+    const chips = 3 + Math.round(worn * 4);
+    for (let i = 0; i < chips; i++) {
       const a = Math.atan2(-uy, -ux) + randRange(-1.1, 1.1);
       const s = randRange(40, 120);
       const p = spawnParticle(hx, hy, Math.cos(a) * s, Math.sin(a) * s, randRange(0.5, 0.9), randRange(1, 1.8),
@@ -565,9 +612,11 @@ function envBulletHit(o, hx, hy, vx, vy, dmg) {
       p.rotSpeed = randRange(-12, 12);
     }
     if (felled) return; // stump: chips only
+    const rec = _envRecord(o);
+    if (rec.state === 'destroyed') return;
+    if (_envTrunkDamage(rec, pierce ? dmg * CFG.ENV_TRUNK_PIERCE : dmg, ux, uy, byPlayer)) return;
     if (kind === ENVK_TREE) {
-      // a leaf or two drift down from the crown, and a tiny sway (never fells)
-      const rec = _envRecord(o);
+      // a leaf or two drift down from the crown, and a tiny sway
       _envLeafBurst(rec, 1 + (Math.random() < 0.5 ? 1 : 0), ux, uy, 0.3);
       _envSway(rec, ux, uy, CFG.ENV_BULLET_SWAY);
     }
@@ -865,15 +914,22 @@ function resetEnvState() {
   envNoCredit = false;
 }
 
-// E9: { state, hp, sway } (+ scorch, cracked, fall) for an object id
+// E9: { state, hp, sway } (+ scorch, cracked, fall; E13 trunk/notch/shot dir) for an object id
 function envState(id) {
   const r = _envStore.get(id);
-  if (r) return { state: r.state, hp: r.hp, sway: r.sway, scorch: r.scorch, cracked: r.cracked, fall: r.fall };
-  let hp = CFG.ENV_TREE_HP;
-  for (let i = 0; i < envObjects.length; i++) {
-    if (envObjects[i].id === id) { hp = _envDefaultHp(envObjects[i].type); break; }
+  if (r) {
+    const sl = Math.sqrt(r.shotX * r.shotX + r.shotY * r.shotY) || 1;
+    return { state: r.state, hp: r.hp, sway: r.sway, scorch: r.scorch, cracked: r.cracked, fall: r.fall,
+      trunkHp: r.trunkHp, trunkMax: r.trunkMax, notch: r.notch, notchDirX: r.notchDirX, notchDirY: r.notchDirY,
+      shotDirX: r.shotX / sl, shotDirY: r.shotY / sl, fallDirX: r.fallDirX, fallDirY: r.fallDirY };
   }
-  return { state: 'standing', hp, sway: 0, scorch: 0, cracked: false, fall: 0 };
+  let hp = CFG.ENV_TREE_HP, trunk = 0;
+  for (let i = 0; i < envObjects.length; i++) {
+    if (envObjects[i].id === id) { hp = _envDefaultHp(envObjects[i].type); trunk = _envTrunkMax(envObjects[i].type); break; }
+  }
+  return { state: 'standing', hp, sway: 0, scorch: 0, cracked: false, fall: 0,
+    trunkHp: trunk, trunkMax: trunk, notch: false, notchDirX: 0, notchDirY: 0,
+    shotDirX: 0, shotDirY: 0, fallDirX: 1, fallDirY: 0 };
 }
 
 // E9: { active, debris, felled } (+ queued, logs, stored)

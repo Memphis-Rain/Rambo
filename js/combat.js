@@ -952,7 +952,7 @@ function updateBullets(dt) {
         // Pierce rounds pass through but still chip/damage once per pass
         const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, hr);
         if(t >= 0) envBulletHit(obj, px + sdx * t, py + sdy * t, b.vx, b.vy,
-          b.dmg * pierceHits(px, py, sdx, sdy, len2, obj.x, obj.y, hr, step60));
+          b.dmg * pierceHits(px, py, sdx, sdy, len2, obj.x, obj.y, hr, step60), byPlayer, true);
       } else {
         const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, hr);
         if(t >= 0 && t < nearT){ nearT = t; nearO = obj; nearB = null; }
@@ -985,7 +985,7 @@ function updateBullets(dt) {
       if(t >= 0 && t < nearT){
         b.x = px + sdx * t; b.y = py + sdy * t;
         damagePlayer(b.dmg);
-        if(b.explosive) spawnExplosion(b.x, b.y, b.radius||60, false, SRC_EXPLOSIVE);
+        if(b.explosive) spawnExplosion(b.x, b.y, b.radius||60, false, SRC_EXPLOSIVE, null, b.dmg);
         bullets.splice(i,1);
         continue;
       }
@@ -997,7 +997,7 @@ function updateBullets(dt) {
       if(nearE) bulletHitEnemy(b, nearE, 1);
       else if(nearB) hitBarrel(nearB, b.dmg, byPlayer);
       else {
-        envBulletHit(nearO, b.x, b.y, b.vx, b.vy, b.dmg);
+        envBulletHit(nearO, b.x, b.y, b.vx, b.vy, b.dmg, byPlayer);
         // Rockets / BFG / tank shells detonate on the trunk or crate
         if(b.explosive) _bulletExplode(b);
       }
@@ -1010,11 +1010,11 @@ function updateBullets(dt) {
 // deal area damage to enemies, as on a direct hit)
 function _bulletExplode(b) {
   if(b.owner !== 'player'){
-    spawnExplosion(b.x, b.y, b.radius||60, false, SRC_EXPLOSIVE);
+    spawnExplosion(b.x, b.y, b.radius||60, false, SRC_EXPLOSIVE, null, b.dmg);
     return;
   }
   const src = b.bfg ? SRC_BFG : SRC_EXPLOSIVE;
-  spawnExplosion(b.x, b.y, b.radius, true, src);
+  spawnExplosion(b.x, b.y, b.radius, true, src, null, b.dmg);
   splashDamage(b.x, b.y, b.dmg, b.radius, src, b.vx, b.vy);
 }
 

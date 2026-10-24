@@ -128,7 +128,7 @@ function grenadeExplode(gr) {
     spawnGeyser(gr.x, gr.y, R);
     splashDamage(gr.x, gr.y, dmg, R, SRC_EXPLOSIVE, gr.vx, gr.vy);
   } else {
-    spawnExplosion(gr.x, gr.y, CFG.GRENADE_RADIUS, true, SRC_EXPLOSIVE, 'grenade');
+    spawnExplosion(gr.x, gr.y, CFG.GRENADE_RADIUS, true, SRC_EXPLOSIVE, 'grenade', dmg);
     splashDamage(gr.x, gr.y, dmg, CFG.GRENADE_RADIUS, SRC_EXPLOSIVE, gr.vx, gr.vy);
   }
 }
@@ -158,7 +158,7 @@ function spawnGeyser(x, y, R) {
   }
   addShake(Math.min(10, 2 + R * 0.05));
   playSound('geyser', Math.min(1, R / 100));
-  if (typeof envBlast === 'function') envBlast(x, y, R, true, SRC_EXPLOSIVE, undefined, true);
+  if (typeof envBlast === 'function') envBlast(x, y, R, true, SRC_EXPLOSIVE, CFG.GRENADE_DMG, true);
 }
 
 function grenadeStats() {
