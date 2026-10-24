@@ -83,3 +83,34 @@ lib/
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+## Development
+
+Requires Node.js 20+ (CI uses 24). The game itself stays plain `<script>` files with no build step; npm is only for tooling.
+
+```bash
+npm install                      # dev tooling: Vite, Vitest, Playwright, ESLint
+npx playwright install chromium  # once, for the e2e tests
+```
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Dev server at http://localhost:5173/game.html. Reloads the page when `js/` changes. |
+| `npm test` | Unit tests (Vitest). `tests/helpers/load-game.js` evaluates the game scripts in `node:vm` with PIXI/DOM stubs, so game logic runs without a browser. |
+| `npm run test:watch` | Unit tests in watch mode |
+| `npm run test:e2e` | Browser tests (Playwright, Chromium). Starts its own dev server on port 5173 and fails on any console error. Screenshots go to `playwright-report/`; view them with `npx playwright show-report`. |
+| `npm run lint` | ESLint. Catches undefined and unused variables, not style. Cross-file globals are read from each `js/*.js` file's top-level declarations, so new globals need no config change. |
+
+Test names start with their ID from `docs/SPEC.md` (e.g. `T3: ...`, `R6/R7: ...`). Tests for features that haven't landed yet are skipped until their hooks exist. In e2e, `PERF_MIN_FPS` (default 50) sets the fps bar for the T6 perf test; it is only enforced on a hardware GPU.
+
+CI (`.github/workflows/ci.yml`) runs a syntax check, lint, unit tests and e2e tests on every push and pull request.
+
+### Showcase keys
+
+| Key | Action |
+|---|---|
+| **F3** | Debug overlay |
+| **F4** | Dump performance stats to the console |
+| **F6** | Cycle pixel scale x1 → x2 → x3 → x4 (once M1 lands) |
+| **F7** | Toggle palette dither (once M1 lands) |
+| **F8** | Toggle CRT scanlines (once M1 lands) |
