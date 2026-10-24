@@ -369,6 +369,7 @@ function updateEnemies(dt) {
       e.y += e.knockbackY * dt;
       e.knockbackX *= 0.9;
       e.knockbackY *= 0.9;
+      resolveEnvCollision(e, 8 * e.size); // G2a: a hard push must not embed it in a tree/rock
       continue;
     }
     const ex0 = e.x, ey0 = e.y;
@@ -553,7 +554,7 @@ function damageEnemy(e, dmg, bulletAngle, src=SRC_BULLET) {
   // G2: knockback scales with damage; heavies and bosses resist
   const heavy = t.name === 'Heavy' || t.name === 'Tank' || t.name === 'Juggernaut';
   const resist = e.isBoss ? 0.2 : heavy ? 0.4 : 1;
-  const kb = clamp(50 + dmg * 2.5, 60, 400) * resist / t.size;
+  const kb = clamp(50 + dmg * 2.5, 60, 900) * resist / t.size; // G2a: cap 900
   e.knockbackX = Math.cos(bulletAngle) * kb;
   e.knockbackY = Math.sin(bulletAngle) * kb;
 
@@ -743,6 +744,7 @@ function updateBullets(dt) {
     b.life -= dt;
     if(b.life<=0){ bullets.splice(i,1); continue; }
 
+    const px = b.x, py = b.y; // previous position for the swept hit test (G12)
     b.x += b.vx * dt;
     b.y += b.vy * dt;
 
@@ -785,63 +787,109 @@ function updateBullets(dt) {
     }
     if(!bullets[i] || bullets[i] !== b) continue;
 
-    // Player bullet -> enemy collision
+    // G12: swept segment-vs-circle hits from the previous to the current
+    // position, so fast bullets (Railgun: ~67 units/frame) can't tunnel
+    const sdx = b.x - px, sdy = b.y - py, len2 = sdx * sdx + sdy * sdy;
     if(b.owner === 'player') {
-      for(let j=enemies.length-1;j>=0;j--){
-        const e = enemies[j];
-        const d = dist(b.x, b.y, e.x, e.y);
-        if(d < 15 * e.size) {
-          const bAngle = Math.atan2(b.vy, b.vx);
-          const src = b.disintegrate ? SRC_DISINT : b.explosive ? (b.bfg ? SRC_BFG : SRC_EXPLOSIVE) : b.beam ? SRC_RAIL : SRC_BULLET;
-
-          // === CHAIN LIGHTNING (Tesla) ===
-          if(b.chain > 0) {
-            damageEnemy(e, b.dmg, bAngle);
-            let chainFrom = {x: e.x, y: e.y};
-            let chainedSet = new Set([enemies.indexOf(e)]);
-            for(let c=0; c<b.chain; c++){
-              let closest = null, closestDist = b.chainRange;
-              for(let k=0;k<enemies.length;k++){
-                if(chainedSet.has(k)) continue;
-                const d2 = dist(chainFrom.x, chainFrom.y, enemies[k].x, enemies[k].y);
-                if(d2 < closestDist){ closest = k; closestDist = d2; }
-              }
-              if(closest !== null){
-                chainedSet.add(closest);
-                const ct = enemies[closest];
-                spawnLightning(chainFrom.x, chainFrom.y, ct.x, ct.y);
-                damageEnemy(ct, b.dmg * 0.5, Math.atan2(ct.y-chainFrom.y, ct.x-chainFrom.x));
-                chainFrom = {x: ct.x, y: ct.y};
-              }
-            }
-            bullets.splice(i,1); break;
-          }
-
-          // Disintegrator kills are handled in killEnemy (SRC_DISINT)
-          damageEnemy(e, b.dmg, bAngle, src);
-
-          if(b.explosive){
-            spawnExplosion(b.x, b.y, b.radius);
-            for(let ei=enemies.length-1; ei>=0; ei--){
-              const e2 = enemies[ei];
-              if(e2.dead) continue;
-              const d2 = dist(b.x, b.y, e2.x, e2.y);
-              if(d2 < b.radius){
-                _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: Math.atan2(e2.y-b.y, e2.x-b.x), src });
-              }
-            }
-          }
-          if(!b.pierce){ bullets.splice(i,1); break; }
+      const minX = Math.min(px, b.x), maxX = Math.max(px, b.x);
+      const minY = Math.min(py, b.y), maxY = Math.max(py, b.y);
+      if(b.pierce) {
+        // Piercing: every enemy along the segment, each at most once per bullet
+        for(let j=enemies.length-1;j>=0;j--){
+          const e = enemies[j];
+          if(e.dead) continue;
+          const r = 15 * e.size;
+          if(e.x + r < minX || e.x - r > maxX || e.y + r < minY || e.y - r > maxY) continue;
+          if(b.hits && b.hits.indexOf(e) >= 0) continue;
+          if(segCircleT(px, py, sdx, sdy, len2, e.x, e.y, r) < 0) continue;
+          (b.hits || (b.hits = [])).push(e);
+          bulletHitEnemy(b, e);
+        }
+      } else {
+        // Non-piercing: the NEAREST enemy along the segment
+        let best = null, bestT = 2;
+        for(let j=enemies.length-1;j>=0;j--){
+          const e = enemies[j];
+          if(e.dead) continue;
+          const r = 15 * e.size;
+          if(e.x + r < minX || e.x - r > maxX || e.y + r < minY || e.y - r > maxY) continue;
+          const t = segCircleT(px, py, sdx, sdy, len2, e.x, e.y, r);
+          if(t >= 0 && t < bestT){ bestT = t; best = e; }
+        }
+        if(best){
+          b.x = px + sdx * bestT; b.y = py + sdy * bestT; // impact point
+          bulletHitEnemy(b, best);
+          bullets.splice(i,1);
         }
       }
     } else {
       // Enemy bullet -> player
-      const d = dist(b.x, b.y, player.x, player.y);
-      if(d < 16){
+      const t = segCircleT(px, py, sdx, sdy, len2, player.x, player.y, 16);
+      if(t >= 0){
+        b.x = px + sdx * t; b.y = py + sdy * t;
         damagePlayer(b.dmg);
         if(b.explosive) spawnExplosion(b.x, b.y, b.radius||60);
         bullets.splice(i,1);
         continue;
+      }
+    }
+  }
+}
+
+// Smallest t in [0,1] where segment (x0,y0)+t*(dx,dy) enters the circle, or -1.
+// len2 = dx*dx + dy*dy. A segment starting inside the circle hits at t = 0.
+function segCircleT(x0, y0, dx, dy, len2, cx, cy, r) {
+  const fx = x0 - cx, fy = y0 - cy;
+  const c = fx * fx + fy * fy - r * r;
+  if (c <= 0) return 0;
+  if (len2 === 0) return -1;
+  const bb = fx * dx + fy * dy;
+  if (bb >= 0) return -1; // moving away from the centre
+  const disc = bb * bb - len2 * c;
+  if (disc < 0) return -1;
+  const t = (-bb - Math.sqrt(disc)) / len2;
+  return t <= 1 ? t : -1;
+}
+
+// Apply one player bullet hit (chain lightning, damage, explosion)
+function bulletHitEnemy(b, e) {
+  const bAngle = Math.atan2(b.vy, b.vx);
+  const src = b.disintegrate ? SRC_DISINT : b.explosive ? (b.bfg ? SRC_BFG : SRC_EXPLOSIVE) : b.beam ? SRC_RAIL : SRC_BULLET;
+
+  // === CHAIN LIGHTNING (Tesla) ===
+  if(b.chain > 0) {
+    damageEnemy(e, b.dmg, bAngle);
+    let chainFrom = {x: e.x, y: e.y};
+    let chainedSet = new Set([enemies.indexOf(e)]);
+    for(let c=0; c<b.chain; c++){
+      let closest = null, closestDist = b.chainRange;
+      for(let k=0;k<enemies.length;k++){
+        if(chainedSet.has(k)) continue;
+        const d2 = dist(chainFrom.x, chainFrom.y, enemies[k].x, enemies[k].y);
+        if(d2 < closestDist){ closest = k; closestDist = d2; }
+      }
+      if(closest !== null){
+        chainedSet.add(closest);
+        const ct = enemies[closest];
+        spawnLightning(chainFrom.x, chainFrom.y, ct.x, ct.y);
+        damageEnemy(ct, b.dmg * 0.5, Math.atan2(ct.y-chainFrom.y, ct.x-chainFrom.x));
+        chainFrom = {x: ct.x, y: ct.y};
+      }
+    }
+    return;
+  }
+
+  // Disintegrator kills are handled in killEnemy (SRC_DISINT)
+  damageEnemy(e, b.dmg, bAngle, src);
+
+  if(b.explosive){
+    spawnExplosion(b.x, b.y, b.radius);
+    for(let ei=enemies.length-1; ei>=0; ei--){
+      const e2 = enemies[ei];
+      if(e2.dead) continue;
+      const d2 = dist(b.x, b.y, e2.x, e2.y);
+      if(d2 < b.radius){
+        _pendingDamage.push({ target: e2, dmg: b.dmg * (1-d2/b.radius) * 0.7, angle: Math.atan2(e2.y-b.y, e2.x-b.x), src });
       }
     }
   }
