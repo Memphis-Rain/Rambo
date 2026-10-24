@@ -280,7 +280,7 @@ function updatePlayer(dt) {
               explosive: wep.explosive, radius: wep.radius||0,
               glow: wep.glow, chain: wep.chain||0, chainRange: wep.chainRange||0,
               beam: wep.beam, disintegrate: wep.disintegrate,
-              bfg: wep.name === 'BFG',
+              bfg: wep.name === 'BFG', fresh: true,
             });
           }
         }
@@ -761,71 +761,48 @@ function updateBullets(dt) {
         0.1, 2, b.color, 'trail', OPT_TRAIL, 18, 0);
     }
 
-    // Barrel collisions
+    // G12/G12b: swept segment-vs-circle tests from the previous to the
+    // current position, so fast rounds (Railgun: ~67 units/frame) can't tunnel
+    const sdx = b.x - px, sdy = b.y - py, len2 = sdx * sdx + sdy * sdy;
+    const minX = Math.min(px, b.x), maxX = Math.max(px, b.x);
+    const minY = Math.min(py, b.y), maxY = Math.max(py, b.y);
+    const step60 = Math.sqrt(b.vx * b.vx + b.vy * b.vy) / 60; // path per 60 Hz frame
+    const fresh = b.fresh; b.fresh = false;
+    let nearT = 2, nearE = null, nearB = null;
+
+    // Explosive barrels (G12b)
     for(const obj of envObjects){
-      if(obj.type==='barrel' && !obj.exploded){
-        const bd = dist(b.x, b.y, obj.x, obj.y);
-        if(bd < 14){
-          obj.hp -= b.dmg;
-          if(obj.hp <= 0){
-            obj.exploded = true;
-            // BIGGER barrel explosion (radius 220, damages enemies more)
-            spawnExplosion(obj.x, obj.y, 220);
-            for(let ei=enemies.length-1; ei>=0; ei--){
-              const e2 = enemies[ei];
-              if(e2.dead) continue;
-              const ed = dist(obj.x, obj.y, e2.x, e2.y);
-              if(ed < 220) _pendingDamage.push({ target: e2, dmg: 200*(1-ed/220), angle: Math.atan2(e2.y-obj.y, e2.x-obj.x), src: SRC_EXPLOSIVE });
-            }
-            const pd = dist(obj.x, obj.y, player.x, player.y);
-            if(pd < 220) damagePlayer(80*(1-pd/220));
-            score += 50;
-          }
-          if(!b.pierce && !b.explosive){ bullets.splice(i,1); break; }
-        }
+      if(obj.type !== 'barrel' || obj.exploded) continue;
+      if(obj.x + 14 < minX || obj.x - 14 > maxX || obj.y + 14 < minY || obj.y - 14 > maxY) continue;
+      if(b.pierce){
+        if(entersCircle(px, py, sdx, sdy, len2, obj.x, obj.y, 14, fresh))
+          hitBarrel(obj, b.dmg * pierceHits(px, py, sdx, sdy, len2, obj.x, obj.y, 14, step60));
+      } else {
+        const t = segCircleT(px, py, sdx, sdy, len2, obj.x, obj.y, 14);
+        if(t >= 0 && t < nearT){ nearT = t; nearB = obj; }
       }
     }
-    if(!bullets[i] || bullets[i] !== b) continue;
 
-    // G12: swept segment-vs-circle hits from the previous to the current
-    // position, so fast bullets (Railgun: ~67 units/frame) can't tunnel
-    const sdx = b.x - px, sdy = b.y - py, len2 = sdx * sdx + sdy * sdy;
     if(b.owner === 'player') {
-      const minX = Math.min(px, b.x), maxX = Math.max(px, b.x);
-      const minY = Math.min(py, b.y), maxY = Math.max(py, b.y);
-      if(b.pierce) {
-        // Piercing: every enemy along the segment, each at most once per bullet
-        for(let j=enemies.length-1;j>=0;j--){
-          const e = enemies[j];
-          if(e.dead) continue;
-          const r = 15 * e.size;
-          if(e.x + r < minX || e.x - r > maxX || e.y + r < minY || e.y - r > maxY) continue;
-          if(b.hits && b.hits.indexOf(e) >= 0) continue;
-          if(segCircleT(px, py, sdx, sdy, len2, e.x, e.y, r) < 0) continue;
-          (b.hits || (b.hits = [])).push(e);
-          bulletHitEnemy(b, e);
-        }
-      } else {
-        // Non-piercing: the NEAREST enemy along the segment
-        let best = null, bestT = 2;
-        for(let j=enemies.length-1;j>=0;j--){
-          const e = enemies[j];
-          if(e.dead) continue;
-          const r = 15 * e.size;
-          if(e.x + r < minX || e.x - r > maxX || e.y + r < minY || e.y - r > maxY) continue;
+      for(let j=enemies.length-1;j>=0;j--){
+        const e = enemies[j];
+        if(e.dead) continue;
+        const r = 15 * e.size;
+        if(e.x + r < minX || e.x - r > maxX || e.y + r < minY || e.y - r > maxY) continue;
+        if(b.pierce){
+          // G12a: one hit per pass, worth as many hits as the old per-60Hz-frame
+          // overlap gave (chord / step), so balance holds at any frame rate
+          if(entersCircle(px, py, sdx, sdy, len2, e.x, e.y, r, fresh))
+            bulletHitEnemy(b, e, pierceHits(px, py, sdx, sdy, len2, e.x, e.y, r, step60));
+        } else {
           const t = segCircleT(px, py, sdx, sdy, len2, e.x, e.y, r);
-          if(t >= 0 && t < bestT){ bestT = t; best = e; }
-        }
-        if(best){
-          b.x = px + sdx * bestT; b.y = py + sdy * bestT; // impact point
-          bulletHitEnemy(b, best);
-          bullets.splice(i,1);
+          if(t >= 0 && t < nearT){ nearT = t; nearE = e; nearB = null; }
         }
       }
     } else {
-      // Enemy bullet -> player
+      // Enemy bullet -> player (unless a barrel is nearer on its path)
       const t = segCircleT(px, py, sdx, sdy, len2, player.x, player.y, 16);
-      if(t >= 0){
+      if(t >= 0 && t < nearT){
         b.x = px + sdx * t; b.y = py + sdy * t;
         damagePlayer(b.dmg);
         if(b.explosive) spawnExplosion(b.x, b.y, b.radius||60);
@@ -833,6 +810,53 @@ function updateBullets(dt) {
         continue;
       }
     }
+
+    // Non-piercing: the nearest enemy or barrel on the path takes the hit
+    if(nearE || nearB){
+      b.x = px + sdx * nearT; b.y = py + sdy * nearT; // impact point
+      if(nearE) bulletHitEnemy(b, nearE, 1);
+      else hitBarrel(nearB, b.dmg);
+      bullets.splice(i,1);
+    }
+  }
+}
+
+// A piercing round counts a hit when its path ENTERS the circle; a round
+// that spawned inside one (point-blank) counts on its first update only
+function entersCircle(x0, y0, dx, dy, len2, cx, cy, r, fresh) {
+  const fx = x0 - cx, fy = y0 - cy;
+  if (fx * fx + fy * fy <= r * r) return !!fresh;
+  return segCircleT(x0, y0, dx, dy, len2, cx, cy, r) >= 0;
+}
+
+// G12a: how many 60 Hz frames the old code would have overlapped the circle:
+// max(1, round(chord / step)), chord = the path's length inside the circle
+function pierceHits(x0, y0, dx, dy, len2, cx, cy, r, step60) {
+  let chord = 2 * r;
+  if (len2 > 0) {
+    const fx = cx - x0, fy = cy - y0;
+    const proj = fx * dx + fy * dy;
+    const perp2 = fx * fx + fy * fy - proj * proj / len2;
+    chord = 2 * Math.sqrt(Math.max(0, r * r - perp2));
+  }
+  return step60 > 0 ? Math.max(1, Math.round(chord / step60)) : 1;
+}
+
+function hitBarrel(obj, dmg) {
+  obj.hp -= dmg;
+  if(obj.hp <= 0 && !obj.exploded){
+    obj.exploded = true;
+    // BIGGER barrel explosion (radius 220, damages enemies more)
+    spawnExplosion(obj.x, obj.y, 220);
+    for(let ei=enemies.length-1; ei>=0; ei--){
+      const e2 = enemies[ei];
+      if(e2.dead) continue;
+      const ed = dist(obj.x, obj.y, e2.x, e2.y);
+      if(ed < 220) _pendingDamage.push({ target: e2, dmg: 200*(1-ed/220), angle: Math.atan2(e2.y-obj.y, e2.x-obj.x), src: SRC_EXPLOSIVE });
+    }
+    const pd = dist(obj.x, obj.y, player.x, player.y);
+    if(pd < 220) damagePlayer(80*(1-pd/220));
+    score += 50;
   }
 }
 
@@ -851,8 +875,9 @@ function segCircleT(x0, y0, dx, dy, len2, cx, cy, r) {
   return t <= 1 ? t : -1;
 }
 
-// Apply one player bullet hit (chain lightning, damage, explosion)
-function bulletHitEnemy(b, e) {
+// Apply one player bullet hit (chain lightning, damage, explosion);
+// mult > 1 for a piercing pass through a big target (G12a)
+function bulletHitEnemy(b, e, mult = 1) {
   const bAngle = Math.atan2(b.vy, b.vx);
   const src = b.disintegrate ? SRC_DISINT : b.explosive ? (b.bfg ? SRC_BFG : SRC_EXPLOSIVE) : b.beam ? SRC_RAIL : SRC_BULLET;
 
@@ -880,7 +905,7 @@ function bulletHitEnemy(b, e) {
   }
 
   // Disintegrator kills are handled in killEnemy (SRC_DISINT)
-  damageEnemy(e, b.dmg, bAngle, src);
+  damageEnemy(e, b.dmg * mult, bAngle, src);
 
   if(b.explosive){
     spawnExplosion(b.x, b.y, b.radius);
