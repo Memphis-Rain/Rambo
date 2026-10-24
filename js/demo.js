@@ -428,14 +428,10 @@ function _demoBot(dt) {
     if (dx > 170 || dx < -170 || dy > 170 || dy < -170) continue;
     _demoObs[obsN++] = o;
   }
-  // E5: fallen-log capsules near us are obstacles too
-  let logN = 0;
-  for (let i = 0; i < envLogs.length; i++) {
-    const r = envLogs[i];
-    const m = 170 + r.logLen;
-    if (r.x - p.x > m || p.x - r.x > m || r.y - p.y > m || p.y - r.y > m) continue;
-    _demoLogs[logN++] = r;
-  }
+  // E11: fallen logs near us are hurdles (slow to climb): a mild penalty,
+  // never boxing the bot in (chunk-bucketed query)
+  const logN = envLogsNear(p.x, p.y, 170);
+  for (let i = 0; i < logN; i++) _demoLogs[i] = envLogHits[i];
 
   let bestM = -1, bestScore = -Infinity, curScore = -Infinity;
   for (let mi = 0; mi < moves.length; mi++) {
@@ -481,7 +477,7 @@ function _demoBot(dt) {
       const rr = r.logR + 16;
       for (let step = 22; step <= 66; step += 22) {
         const d2 = envSegDist2(p.x + m.dx * step, p.y + m.dy * step, r);
-        if (d2 < rr * rr) { sc -= 1.5 * (1 - Math.sqrt(d2) / rr) * 2 * (88 - step) / 66; break; }
+        if (d2 < rr * rr) { sc -= 0.6 * (1 - Math.sqrt(d2) / rr) * 2 * (88 - step) / 66; break; }
       }
     }
     _demoPhys[mi] = sc - sc0; // water + obstacle penalty of this move

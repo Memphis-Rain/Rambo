@@ -25,14 +25,18 @@
 //   cracked   boulder/ruins cracked (still solid)
 //   fall      0..1 topple rotation progress about the base (eased; 1 = flat)
 //   fallDirX, fallDirY  world unit vector the tree falls toward
-//   baked     true once a felled tree's stump + log decals exist: from then
-//             HIDE the standing sprite (the decals replace it). While
+//   baked     true once a felled tree's stump + log remain exists: from then
+//             HIDE the standing sprite (the remain replaces it). While
 //             state is 'falling' or ('fallen' && !baked) draw the tree rotated
-//             by `fall` along fallDir (foreshortened in iso).
+//             by `fall` along fallDir (foreshortened in iso). A 'falling'
+//             tree may wait (shock front / stagger / active-set queue) with
+//             fall = 0: it still looks standing and keeps its trunk collision
+//             until the fall starts (`snapped` = trunk has snapped).
 //   destroyed objects (state 'destroyed': crate, sandbag, bush, boulder,
 //             ruins, exploded barrel): hide the sprite (debris/decals remain).
 //   type, x, y, height, radius  copied from the object
 //   logLen, logR, stumpR        felled-tree geometry (world units)
+//   logGone   the log was splintered by an explosion (E11): stump only
 //
 // Debris (flying pieces): global array `envDebris`, pooled. Fields per piece:
 //   x, y (world), z (height above ground, screen-up), rot (radians),
@@ -49,11 +53,25 @@
 //   remain 'log': x, y = stump base, ax, ay, bx, by = log capsule (world),
 //     logR, stumpR, variant (0 tree, 1 pine, 2 dead tree), scorch (0-3),
 //     barkColor, cutColor, fallDirX/fallDirY.
+//     Fallen crown (flattened, darker canopy blob lying at the far end):
+//       crownX, crownY  world centre (log end pushed ~0.35 x crownR further
+//                       along fallDir)
+//       crownR          world radius (~0.75 x canopy radius; 0 = no crown,
+//                       dead trees)
+//       crownColor      0xRRGGBB (leaf/needle green x 0.6, darker with scorch)
+//       crownVariant    0 broadleaf, 1 pine
+//     logGone   true once an explosion splintered the log (E11): draw only
+//               the stump, NO log and NO crown (envRemainsVersion bumps)
 //   remain 'rubble': x, y, type ('boulder'|'ruins'), radius, remainColor.
 //
 // Hooks (E9): envState(id), envStats(), resetEnvState(), envBlast(),
-// updateEnv(dt); globals envLogs (fallen-log capsules), envDebris,
-// envRemains, envRemainsVersion.
+// updateEnv(dt); globals envLogs (every intact fallen-log capsule; hook/debug only,
+// never scanned per frame), envDebris, envRemains, envRemainsVersion.
+// Spatial query: envLogsNear(x, y, rad) -> n; the logs whose capsule may lie
+// within rad of (x, y) are envLogHits[0..n-1] (shared buffer, reused by the
+// next query). E11: logs are hurdles: envLogSlow(x, y, rad) is the speed
+// factor (CFG.ENV_LOG_CLIMB while overlapping a capsule, else 1); an
+// explosion with f > CFG.ENV_LOG_SPLINTER_F splinters a log (capsule gone).
 // =====================================================================
 
 const DEBRIS_WOOD = 0, DEBRIS_SAND = 1, DEBRIS_STONE = 2, DEBRIS_BARK = 3, DEBRIS_LEAF = 4;
@@ -78,6 +96,12 @@ let _envAnon = 0;              // ids for objects created without one (tests)
 const _envActive = [];         // E8: records being simulated
 const _envQueue = [];          // topples waiting for a free active slot
 const envLogs = [];            // E5: records of felled trees (log capsules)
+// E5: logs bucketed by terrain chunk (numeric key cx * 100003 + cy); a log
+// sits in every chunk its capsule AABB touches. Queries only visit the
+// chunks around the entity, so cost does not grow with logs felled elsewhere.
+const _envLogGrid = new Map();
+const envLogHits = [];         // envLogsNear() result buffer
+let _envLogQ = 0;              // query stamp (dedup logs spanning chunks)
 // E10: structural remains (stump + log of felled trees, rubble footprint of
 // shattered boulders/ruins) are WORLD STATE, not gore decals: the renderer
 // bakes them per chunk from this list, so gore can never recycle them.
@@ -87,8 +111,11 @@ const envDebris = [];          // E4: flying debris pieces
 const _envDebrisFree = [];
 let _envFelled = 0;
 let _envBlastSeq = 0;
-let _envToppleFrameN = 0;      // topples started this frame (staggering)
+let _envToppleFrameN = 0;      // topples activated this frame (staggering)
 let _envLandFrameN = 0;        // landings processed this frame
+let _envInLoop = false;        // inside the active-set loop (no eviction then)
+let _envFrame = 0;             // updateEnv frame stamp (object liveness)
+let _envSweepT = 0;            // store sweep timer (E7 memory)
 // E6: set while a falling tree NOT caused by the player hurts enemies;
 // killEnemy() then awards no score / combo / kill / special charge
 let envNoCredit = false;
@@ -102,6 +129,7 @@ const ENV_SAND_COLORS = [0xa08e60, 0xb8a474, 0xcfbf8e];
 const ENV_STONE_COLORS = [0x56564c, 0x62625a, 0x828278, 0x74746a];
 const ENV_RUIN_COLORS = [0x7a766c, 0x9a968a, 0x5e5a52];
 const ENV_CUT_WOOD = 0xc8a070;
+const ENV_CROWN_TREE = 0x22bb55, ENV_CROWN_PINE = 0x11aa44; // canopy greens of the tree sprites (procedural-tree3d.js)
 const _ENV_DEBRIS_DECAL = [DECAL_WOOD, DECAL_SAND, DECAL_RUBBLE, DECAL_WOOD, DECAL_LEAF]; // by DEBRIS_* kind
 
 const OPT_LEAF = { friction: 0.95, shrink: false, zGravity: 90, fadeStart: 0.25 };
@@ -148,7 +176,9 @@ function _envApplyObj(o, r) {
     return;
   }
   if (r.state === 'destroyed') o.collision = 0;
-  else if (r.state === 'falling' || r.state === 'fallen') o.collision = r.stumpR;
+  // collision follows what is drawn: a tree waiting to fall (fall = 0)
+  // still shows its trunk, so it keeps blocking with it
+  else if (r.state === 'fallen' || (r.state === 'falling' && r.snapped)) o.collision = r.stumpR;
   else if (r.baseCol) o.collision = r.baseCol;
 }
 
@@ -167,7 +197,7 @@ function _envDefaultHp(type) {
 // Get or create the record of an object
 function _envRecord(o) {
   let r = envObjState(o);
-  if (r) return r;
+  if (r && !r.pruned) return r;
   const kind = _envKind(o.type);
   const hp = _envDefaultHp(o.type);
   const dead = kind === ENVK_DEAD;
@@ -179,11 +209,12 @@ function _envRecord(o) {
     scorch: 0, cracked: false,
     sway: 0, swayV: 0, swayDirX: 1, swayDirY: 0,
     fall: 0, fallT: 0, fallDur: 0, fallDelay: 0, fallDirX: 1, fallDirY: 0,
-    byPlayer: false, landed: false, baked: false, bakeT: 0,
+    snapped: false, byPlayer: false, landed: false, baked: false, bakeT: 0,
     logLen: 0, logR: dead ? CFG.ENV_LOG_R * 0.7 : CFG.ENV_LOG_R,
     stumpR: dead ? CFG.ENV_STUMP_R * 0.8 : CFG.ENV_STUMP_R,
     ax: 0, ay: 0, bx: 0, by: 0,
     active: false, queued: false, blastSeq: 0,
+    inLogs: false, inRemains: false, pruned: false,
   };
   _envStore.set(r.id, r);
   o._env = r;
@@ -192,11 +223,58 @@ function _envRecord(o) {
 
 function _envSyncObj(r) { if (r.obj) _envApplyObj(r.obj, r); }
 
+// Cosmetic activation (sway): never takes a slot a queued topple is waiting for
 function _envActivate(r) {
   if (r.active) return true;
-  if (_envActive.length >= CFG.ENV_ACTIVE_MAX) return false;
+  if (_envActive.length >= CFG.ENV_ACTIVE_MAX || _envQueue.length) return false;
   r.active = true;
   _envActive.push(r);
+  return true;
+}
+
+// A record that only sways (no lasting change): safe to evict / forget
+function _envSwayOnly(r) {
+  return r.state === 'standing' && r.scorch === 0 && !r.cracked && r.hp >= r.maxHp && !r.queued && !r.remain;
+}
+
+// Remove r from the active set (index i) and put it to sleep; a sway-only
+// record is dropped from the store too (E7 memory: nothing to persist)
+function _envSleep(r, i) {
+  r.sway = 0; r.swayV = 0;
+  r.active = false;
+  const last = _envActive.pop();
+  if (last !== r) _envActive[i] = last;
+  if (_envSwayOnly(r)) _envForget(r);
+}
+
+function _envForget(r) {
+  if (_envStore.get(r.id) === r) _envStore.delete(r.id);
+  r.pruned = true;
+  if (r.obj && r.obj._env === r) r.obj._env = null;
+  r.obj = null;
+}
+
+// E8: a topple always wins a slot: when the set is full, evict a record that
+// is only swaying (it just loses its cosmetic sway). Not while updateEnv
+// iterates the set (a landing can set off a bomber -> blast -> topple); such
+// topples queue and get a slot at the next drain, a frame later.
+function _envActivateTopple(r) {
+  if (r.active) return true;
+  if (_envActive.length >= CFG.ENV_ACTIVE_MAX) {
+    if (_envInLoop) return false;
+    let j = _envActive.length - 1;
+    for (; j >= 0; j--) {
+      const a = _envActive[j];
+      if (a.state !== 'falling' && !(a.state === 'fallen' && !a.baked)) break;
+    }
+    if (j < 0) return false; // every slot is a falling/settling tree
+    _envSleep(_envActive[j], j);
+  }
+  r.active = true;
+  _envActive.push(r);
+  // stagger simultaneous topple starts (shock front + a few frames each)
+  r.fallDelay += _envToppleFrameN * CFG.ENV_TOPPLE_STAGGER;
+  _envToppleFrameN++;
   return true;
 }
 
@@ -287,15 +365,18 @@ function _envTopple(r, ux, uy, delay, byPlayer) {
   r.fallDirX = ux; r.fallDirY = uy;
   r.fall = 0; r.fallT = 0;
   r.fallDur = randRange(CFG.ENV_FALL_MIN, CFG.ENV_FALL_MAX);
-  // E8: stagger simultaneous topples (shock front + a few frames each)
-  r.fallDelay = delay + _envToppleFrameN * CFG.ENV_TOPPLE_STAGGER;
-  _envToppleFrameN++;
+  r.fallDelay = delay; // shock front; E8 stagger is added when it gets a slot
+  r.snapped = false;   // the trunk snaps (stump-only collision) when the fall starts
   r.byPlayer = !!byPlayer;
   r.logLen = Math.max(20, (r.height || 50) * CFG.ENV_LOG_LEN);
-  _envSyncObj(r); // trunk snapped: only the stump still blocks
-  // snap: bark splinters at the base
-  _envDebrisBurst(r.x, r.y, 4, 3, DEBRIS_BARK, r.kind === ENVK_DEAD ? ENV_DEADWOOD_COLORS : ENV_BARK_COLORS, ux, uy, 0.7, 1.2, 2.2);
-  if (!_envActivate(r) && !r.queued) { r.queued = true; _envQueue.push(r); }
+  if (!_envActivateTopple(r) && !r.queued) { r.queued = true; _envQueue.push(r); }
+}
+
+// The fall starts: trunk snaps, only the stump still blocks
+function _envSnap(r) {
+  r.snapped = true;
+  _envSyncObj(r);
+  _envDebrisBurst(r.x, r.y, 4, 3, DEBRIS_BARK, r.kind === ENVK_DEAD ? ENV_DEADWOOD_COLORS : ENV_BARK_COLORS, r.fallDirX, r.fallDirY, 0.7, 1.2, 2.2);
 }
 
 function _envDestroy(r, ux, uy, power) {
@@ -345,7 +426,7 @@ function _envLand(r) {
   const ux = r.fallDirX, uy = r.fallDirY;
   r.ax = r.x + ux * (r.stumpR + 2); r.ay = r.y + uy * (r.stumpR + 2);
   r.bx = r.x + ux * r.logLen; r.by = r.y + uy * r.logLen;
-  if (envLogs.indexOf(r) < 0) envLogs.push(r);
+  if (!r.inLogs && !r.logGone) { r.inLogs = true; envLogs.push(r); _envLogInsert(r); }
   _envFelled++;
   r.bakeT = CFG.ENV_BAKE_DELAY;
 
@@ -385,11 +466,19 @@ function _envBake(r) {
   r.variant = r.type === 'pine' ? 1 : r.kind === ENVK_DEAD ? 2 : 0;
   r.barkColor = shadeHex(r.kind === ENVK_DEAD ? ENV_DEADWOOD_COLORS[0] : ENV_BARK_COLORS[0], 1 - r.scorch * 0.15);
   r.cutColor = ENV_CUT_WOOD;
+  // E10: the crown lies flattened (and darker) at the log's far end
+  const pine = r.type === 'pine';
+  r.crownVariant = pine ? 1 : 0;
+  r.crownR = r.kind === ENVK_TREE ? r.radius * CFG.ENV_CROWN_R : 0;
+  const push = r.crownR * CFG.ENV_CROWN_PUSH;
+  r.crownX = r.bx + r.fallDirX * push;
+  r.crownY = r.by + r.fallDirY * push;
+  r.crownColor = shadeHex(pine ? ENV_CROWN_PINE : ENV_CROWN_TREE, CFG.ENV_CROWN_DARK * (1 - 0.18 * r.scorch));
   _envAddRemain(r);
 }
 
 function _envAddRemain(r) {
-  if (envRemains.indexOf(r) < 0) envRemains.push(r);
+  if (!r.inRemains) { r.inRemains = true; envRemains.push(r); }
   envRemainsVersion++;
 }
 
@@ -400,6 +489,7 @@ function envBlast(x, y, R, byPlayer = false, src = SRC_EXPLOSIVE) {
   if (!(R > 0)) return;
   const bfg = src === SRC_BFG || R >= CFG.ENV_BFG_RADIUS;
   const seq = ++_envBlastSeq;
+  _envSplinterLogs(x, y, R); // E11
   for (let i = 0; i < envObjects.length; i++) {
     const o = envObjects[i];
     const dx = o.x - x, dy = o.y - y;
@@ -524,29 +614,112 @@ function envSegDist2(px, py, r) {
   return qx * qx + qy * qy;
 }
 
-// Push an entity (circle) out of every fallen-log capsule (movement only:
-// bullets fly over logs)
-function resolveEnvLogs(entity, entityRadius) {
-  for (let i = 0; i < envLogs.length; i++) {
-    const r = envLogs[i];
-    const rr = entityRadius + r.logR;
-    const ex = entity.x, ey = entity.y;
-    if (ex < Math.min(r.ax, r.bx) - rr || ex > Math.max(r.ax, r.bx) + rr ||
-        ey < Math.min(r.ay, r.by) - rr || ey > Math.max(r.ay, r.by) + rr) continue;
-    const dx = r.bx - r.ax, dy = r.by - r.ay;
-    const l2 = dx * dx + dy * dy;
-    let t = l2 > 0 ? ((ex - r.ax) * dx + (ey - r.ay) * dy) / l2 : 0;
-    t = t < 0 ? 0 : t > 1 ? 1 : t;
-    const qx = r.ax + dx * t, qy = r.ay + dy * t;
-    let ox = ex - qx, oy = ey - qy;
-    const d2 = ox * ox + oy * oy;
-    if (d2 >= rr * rr) continue;
-    let d = Math.sqrt(d2);
-    if (d < 1e-4) { ox = -r.fallDirY; oy = r.fallDirX; d = 1; } // on the axis: push sideways
-    else { ox /= d; oy /= d; }
-    const push = rr - (d2 < 1e-8 ? 0 : d);
-    entity.x += ox * push;
-    entity.y += oy * push;
+function _envLogInsert(r) {
+  const cs = CFG.CHUNK_SIZE * CFG.TILE_SIZE, m = r.logR;
+  const x0 = Math.floor((Math.min(r.ax, r.bx) - m) / cs), x1 = Math.floor((Math.max(r.ax, r.bx) + m) / cs);
+  const y0 = Math.floor((Math.min(r.ay, r.by) - m) / cs), y1 = Math.floor((Math.max(r.ay, r.by) + m) / cs);
+  for (let cx = x0; cx <= x1; cx++) {
+    for (let cy = y0; cy <= y1; cy++) {
+      const k = cx * 100003 + cy;
+      let a = _envLogGrid.get(k);
+      if (!a) { a = []; _envLogGrid.set(k, a); }
+      a.push(r);
+    }
+  }
+}
+
+// Logs whose capsule may come within rad of (x, y): envLogHits[0..n-1].
+// Visits only the chunks the query box touches (1-4 for an entity).
+function envLogsNear(x, y, rad) {
+  if (!envLogs.length) return 0;
+  const cs = CFG.CHUNK_SIZE * CFG.TILE_SIZE;
+  const x0 = Math.floor((x - rad) / cs), x1 = Math.floor((x + rad) / cs);
+  const y0 = Math.floor((y - rad) / cs), y1 = Math.floor((y + rad) / cs);
+  const q = ++_envLogQ;
+  let n = 0;
+  for (let cx = x0; cx <= x1; cx++) {
+    for (let cy = y0; cy <= y1; cy++) {
+      const a = _envLogGrid.get(cx * 100003 + cy);
+      if (!a) continue;
+      for (let i = 0; i < a.length; i++) {
+        const r = a[i];
+        if (r._logQ === q) continue;
+        r._logQ = q;
+        const m = rad + r.logR;
+        if (x < (r.ax < r.bx ? r.ax : r.bx) - m || x > (r.ax > r.bx ? r.ax : r.bx) + m ||
+            y < (r.ay < r.by ? r.ay : r.by) - m || y > (r.ay > r.by ? r.ay : r.by) + m) continue;
+        envLogHits[n++] = r;
+      }
+    }
+  }
+  return n;
+}
+
+// E11: logs are hurdles, not walls: anyone whose circle overlaps a log
+// capsule climbs over it at CFG.ENV_LOG_CLIMB x speed (bullets fly over).
+// Returns the speed factor for an entity of radius rad at (x, y).
+function envLogSlow(x, y, rad) {
+  const n = envLogsNear(x, y, rad);
+  for (let i = 0; i < n; i++) {
+    const r = envLogHits[i];
+    const rr = rad + r.logR;
+    if (envSegDist2(x, y, r) < rr * rr) return CFG.ENV_LOG_CLIMB;
+  }
+  return 1;
+}
+
+// E11: an explosion splinters the logs it hits hard (f > CFG.ENV_LOG_SPLINTER_F,
+// f = 1 - distance to the log segment / R): the capsule goes, wood flies,
+// the stump stays (remain record: logGone = true)
+function _envSplinterLogs(x, y, R) {
+  const n = envLogsNear(x, y, R);
+  if (!n) return;
+  const th = 1 - CFG.ENV_LOG_SPLINTER_F;
+  let k = 0;
+  for (let i = 0; i < n; i++) _envSplinterBuf[k++] = envLogHits[i]; // the query buffer is reused below
+  for (let i = 0; i < k; i++) {
+    const r = _envSplinterBuf[i];
+    _envSplinterBuf[i] = null;
+    const d2 = envSegDist2(x, y, r);
+    if (d2 >= R * R * th * th) continue;
+    _envSplinterLog(r, x, y);
+  }
+}
+const _envSplinterBuf = [];
+
+function _envSplinterLog(r, x, y) {
+  r.logGone = true;
+  _envLogRemove(r);
+  const bark = r.kind === ENVK_DEAD ? ENV_DEADWOOD_COLORS : ENV_BARK_COLORS;
+  for (let j = 0; j < 4; j++) {
+    const t = (j + 0.5) / 4;
+    const px = r.ax + (r.bx - r.ax) * t, py = r.ay + (r.by - r.ay) * t;
+    let ux = px - x, uy = py - y;
+    const d = Math.sqrt(ux * ux + uy * uy);
+    if (d > 0.01) { ux /= d; uy /= d; } else { ux = 0; uy = 0; }
+    _envDebrisBurst(px, py, 3, 3, DEBRIS_WOOD, ENV_CRATE_COLORS, ux, uy, 0.9, 1.4, 3);
+    _envDebrisBurst(px, py, 3, 1, DEBRIS_BARK, bark, ux, uy, 0.8, 1.2, 2.2);
+  }
+  _envDust((r.ax + r.bx) * 0.5, (r.ay + r.by) * 0.5, 4, r.logLen * 0.4);
+  envRemainsVersion++;
+}
+
+function _envLogRemove(r) {
+  if (!r.inLogs) return;
+  r.inLogs = false;
+  const i = envLogs.indexOf(r);
+  if (i >= 0) { envLogs[i] = envLogs[envLogs.length - 1]; envLogs.pop(); }
+  const cs = CFG.CHUNK_SIZE * CFG.TILE_SIZE, m = r.logR;
+  const x0 = Math.floor((Math.min(r.ax, r.bx) - m) / cs), x1 = Math.floor((Math.max(r.ax, r.bx) + m) / cs);
+  const y0 = Math.floor((Math.min(r.ay, r.by) - m) / cs), y1 = Math.floor((Math.max(r.ay, r.by) + m) / cs);
+  for (let cx = x0; cx <= x1; cx++) {
+    for (let cy = y0; cy <= y1; cy++) {
+      const k = cx * 100003 + cy, a = _envLogGrid.get(k);
+      if (!a) continue;
+      const j = a.indexOf(r);
+      if (j >= 0) { a[j] = a[a.length - 1]; a.pop(); }
+      if (!a.length) _envLogGrid.delete(k);
+    }
   }
 }
 
@@ -554,23 +727,30 @@ function resolveEnvLogs(entity, entityRadius) {
 // Update (called from update(dt) in main.js)
 // ---------------------------------------------------------------------
 function updateEnv(dt) {
-  _envToppleFrameN = 0;
   _envLandFrameN = 0;
+  const frame = ++_envFrame;
 
-  // E7: attach persisted state to objects spawned since last frame
+  // E7: attach persisted state to objects spawned since last frame; stamp
+  // the live ones (the store sweep detaches records of unloaded objects)
   for (let i = 0; i < envObjects.length; i++) {
     const o = envObjects[i];
     if (o._envAt !== _envEpoch) envObjState(o);
+    o._envSeen = frame;
   }
+  _envSweepT -= dt;
+  if (_envSweepT <= 0) { _envSweepT = CFG.ENV_STORE_SWEEP; _envSweepStore(frame); }
 
-  // E8: queued topples take free slots
-  while (_envQueue.length && _envActive.length < CFG.ENV_ACTIVE_MAX) {
-    const r = _envQueue.shift();
+  // E8: queued topples take free slots first (evicting sway-only records),
+  // so bullet sways can never starve them
+  while (_envQueue.length) {
+    const r = _envQueue[0];
+    if (!_envActivateTopple(r)) break;
+    _envQueue.shift();
     r.queued = false;
-    _envActivate(r);
   }
 
   const K = CFG.ENV_SWAY_K, C = CFG.ENV_SWAY_DAMP;
+  _envInLoop = true;
   for (let i = _envActive.length - 1; i >= 0; i--) {
     const r = _envActive[i];
     // Damped spring sway (semi-implicit Euler, stable at dt <= 0.05)
@@ -583,6 +763,7 @@ function updateEnv(dt) {
     if (r.state === 'falling') {
       if (r.fallDelay > 0) r.fallDelay -= dt;
       else {
+        if (!r.snapped) _envSnap(r);
         r.fallT += dt;
         const k = Math.min(1, r.fallT / r.fallDur);
         r.fall = k * k; // accelerates like a real topple
@@ -597,16 +778,22 @@ function updateEnv(dt) {
     }
     // Sleep once settled
     const moving = r.state === 'falling' || (r.state === 'fallen' && !r.baked);
-    if (!moving && r.sway < 0.01 && r.sway > -0.01 && r.swayV < 0.05 && r.swayV > -0.05) {
-      r.sway = 0; r.swayV = 0;
-      r.active = false;
-      const last = _envActive.pop();
-      if (last !== r) _envActive[i] = last;
-    }
+    if (!moving && r.sway < 0.01 && r.sway > -0.01 && r.swayV < 0.05 && r.swayV > -0.05) _envSleep(r, i);
   }
+  _envInLoop = false;
+  _envToppleFrameN = 0; // after the loop: counts topples from bullets (before updateEnv) too
 
   updateEnvDebris(dt);
+}
 
+// E7 memory: records of objects no longer in envObjects (chunk unloaded)
+// drop their object reference (envObjState re-attaches on regeneration),
+// and sway-only records at rest are forgotten.
+function _envSweepStore(frame) {
+  for (const r of _envStore.values()) {
+    if (r.obj && r.obj._envSeen !== frame) r.obj = null;
+    if (!r.active && _envSwayOnly(r)) _envForget(r);
+  }
 }
 
 function updateEnvDebris(dt) {
@@ -664,6 +851,9 @@ function resetEnvState() {
   _envActive.length = 0;
   _envQueue.length = 0;
   envLogs.length = 0;
+  _envLogGrid.clear();
+  _envInLoop = false;
+  _envSweepT = 0;
   envRemains.length = 0;
   envRemainsVersion++;
   for (const d of envDebris) _envDebrisFree.push(d);

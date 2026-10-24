@@ -71,6 +71,15 @@ const CFG = {
   ENV_TOPPLE_STAGGER: 0.035,   // E8: extra delay per topple started in the same frame (s)
   ENV_LAND_PER_FRAME: 3,       // E8: trunk landings processed per frame
   ENV_BAKE_DELAY: 0.25,        // landed log rests this long before baking (s)
+  ENV_STORE_SWEEP: 1,          // E7: s between persistence-store sweeps (detach unloaded objects, forget sway-only records)
+  ENV_LOG_CLIMB: 0.35,         // E11: speed factor while climbing over a log (logs are hurdles, not walls)
+  ENV_LOG_SPLINTER_F: 0.5,     // E11: an explosion with f above this splinters a log (capsule gone, stump stays)
+  ENV_LOG_END_DETOUR: 1.5,     // E11: enemies go round a log's end when it is closer than this x log width (2 logR) to their crossing point
+  ENV_LOG_AVOID_NEAR: 18,      // E11: ...deciding within this of the log's surface (world units)
+  ENV_LOG_AVOID_LOOK: 320,     // E11: max length of the enemy's line-to-target test against a log
+  ENV_CROWN_R: 0.75,           // E10: fallen crown radius = canopy radius x this
+  ENV_CROWN_PUSH: 0.35,        // E10: crown centre = log end + fallDir x crownR x this
+  ENV_CROWN_DARK: 0.6,         // E10: fallen crown colour = leaf green x this (x (1 - 0.18 scorch))
   WATER_CAMO_ALPHA_SCALE: 3.0, // W1 (Ralph: 3.0): water camo block alpha (1 = as designed; higher -> opaque). Baked: call rebakeWaterCamo()
   // Attract-mode demo (M6)
   DEMO_IDLE_SECONDS: 5,

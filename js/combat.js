@@ -144,6 +144,9 @@ function updatePlayer(dt) {
     }
   }
 
+  // E11: climbing over a fallen log (a hurdle, not a wall) is slow
+  if (envLogs.length) { const ls = envLogSlow(p.x, p.y, 10); p.vx *= ls; p.vy *= ls; }
+
   p.x += p.vx * dt;
   p.y += p.vy * dt;
 
@@ -459,6 +462,10 @@ function updateEnemies(dt) {
       }
     }
 
+    // E11: round a log's near end, or climb straight over it
+    if (envLogs.length && (e.vx || e.vy)) _enemyLogAvoid(e, 8 * e.size, d, dt);
+    else e.logAvoid = null;
+
     // Separation
     for(let j=0;j<enemies.length;j++){
       if(i===j) continue;
@@ -485,8 +492,10 @@ function updateEnemies(dt) {
       }
     }
 
-    e.x += e.vx * dt;
-    e.y += e.vy * dt;
+    // E11: climbing over a log is slow
+    const ls = envLogs.length ? envLogSlow(e.x, e.y, 8 * e.size) : 1;
+    e.x += e.vx * ls * dt;
+    e.y += e.vy * ls * dt;
 
     // Collision with trees, rocks, boulders
     resolveEnvCollision(e, 8 * e.size);
@@ -495,9 +504,109 @@ function updateEnemies(dt) {
   }
 }
 
+// E11: logs are hurdles. An enemy whose straight path (toward the player, or
+// along its velocity) would run over a log close to one of its ends
+// (crossing point within CFG.ENV_LOG_END_DETOUR x the log width of the end)
+// walks round that end, hugging the log; anywhere else it climbs straight
+// over (slowed by envLogSlow). Decided afresh each frame: walking toward the
+// end keeps the crossing point near it, so the choice is stable, and it
+// stops as soon as the straight path clears the log.
+// e.logAvoid = log being walked round (null when going straight), e.logSide,
+// e.logDetT (detour time), e.logClimbT (climb-straight time left).
+let _xT = 0; // param along the log of the last _pathLogHit()
+// Does the segment (x0,y0)-(x1,y1) come within R of log r's axis? Sets _xT
+// to where along the log (0..1) it crosses or comes closest.
+function _pathLogHit(x0, y0, x1, y1, r, R) {
+  const px = x1 - x0, py = y1 - y0, ax = r.bx - r.ax, ay = r.by - r.ay;
+  const den = px * ay - py * ax;
+  const qx = r.ax - x0, qy = r.ay - y0;
+  if (den !== 0) {
+    const s = (qx * ay - qy * ax) / den, t = (qx * py - qy * px) / den;
+    if (s >= 0 && s <= 1 && t >= 0 && t <= 1) { _xT = t; return true; }
+  }
+  // no crossing: closest approach is at an endpoint of one of the segments
+  const R2 = R * R, l2 = ax * ax + ay * ay, p2 = px * px + py * py;
+  let best = Infinity, bt = 0;
+  for (let k = 0; k < 2; k++) { // path endpoints vs the log
+    const ex = k ? x1 : x0, ey = k ? y1 : y0;
+    let t = l2 > 0 ? ((ex - r.ax) * ax + (ey - r.ay) * ay) / l2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const dx = r.ax + ax * t - ex, dy = r.ay + ay * t - ey, d2 = dx * dx + dy * dy;
+    if (d2 < best) { best = d2; bt = t; }
+  }
+  for (let k = 0; k < 2; k++) { // log ends vs the path
+    const ex = k ? r.bx : r.ax, ey = k ? r.by : r.ay;
+    let s = p2 > 0 ? ((ex - x0) * px + (ey - y0) * py) / p2 : 0;
+    s = s < 0 ? 0 : s > 1 ? 1 : s;
+    const dx = x0 + px * s - ex, dy = y0 + py * s - ey, d2 = dx * dx + dy * dy;
+    if (d2 < best) { best = d2; bt = k; }
+  }
+  _xT = bt;
+  return best < R2;
+}
+
+function _enemyLogAvoid(e, er, dp, dt) {
+  const near = CFG.ENV_LOG_AVOID_NEAR;
+  // a detour that drags on (logs end to end, target right at an end): just
+  // climb over for a while
+  if (e.logClimbT > 0) { e.logClimbT -= dt; e.logAvoid = null; return; }
+  if (e.logAvoid) e.logDetT = (e.logDetT || 0) + dt;
+  else if (e.logDetT > 0) e.logDetT = Math.max(0, e.logDetT - dt * 0.5);
+  const n = envLogsNear(e.x, e.y, er + near + CFG.ENV_LOG_R);
+  const prevL = e.logAvoid;
+  e.logAvoid = null;
+  if (!n) return;
+  const sp = Math.sqrt(e.vx * e.vx + e.vy * e.vy);
+  const ux = e.vx / sp, uy = e.vy / sp;
+  // target of the straight path: the player when heading for them
+  let tx = player.x, ty = player.y;
+  if (dp <= 0 || (ux * (tx - e.x) + uy * (ty - e.y)) < 0.7 * dp) {
+    tx = e.x + ux * 60; ty = e.y + uy * 60;
+  } else if (dp > CFG.ENV_LOG_AVOID_LOOK) {
+    tx = e.x + (tx - e.x) * CFG.ENV_LOG_AVOID_LOOK / dp; ty = e.y + (ty - e.y) * CFG.ENV_LOG_AVOID_LOOK / dp;
+  }
+  let best = null, bestD = Infinity, bestT = 0;
+  for (let i = 0; i < n; i++) {
+    const r = envLogHits[i];
+    const R = er + r.logR;
+    const ds2 = envSegDist2(e.x, e.y, r);
+    if (ds2 < (R - 1) * (R - 1) || ds2 > (R + near) * (R + near)) continue; // already climbing / not close yet
+    if (!_pathLogHit(e.x, e.y, tx, ty, r, R - 0.5)) continue;
+    const len = Math.sqrt((r.bx - r.ax) * (r.bx - r.ax) + (r.by - r.ay) * (r.by - r.ay));
+    const toEnd = (_xT < 0.5 ? _xT : 1 - _xT) * len;
+    if (toEnd >= CFG.ENV_LOG_END_DETOUR * 2 * r.logR) continue; // mid-log: climb over
+    if (ds2 < bestD) { bestD = ds2; best = r; bestT = _xT; }
+  }
+  if (!best) return;
+  if (e.logDetT > (60 + 4 * (er + best.logR)) / Math.max(10, sp) + 0.5) { e.logDetT = 0; e.logClimbT = 1.5; return; }
+  // hug the capsule toward that end and round it
+  const L = best;
+  const ax = L.bx - L.ax, ay = L.by - L.ay, l2 = ax * ax + ay * ay;
+  let t = l2 > 0 ? ((e.x - L.ax) * ax + (e.y - L.ay) * ay) / l2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  let nx = e.x - (L.ax + ax * t), ny = e.y - (L.ay + ay * t);
+  const nd = Math.sqrt(nx * nx + ny * ny) || 1;
+  nx /= nd; ny /= nd;
+  // spin: toward the chosen end along our side of the log, then on round
+  // its cap (fixed by the side we are on, so it cannot dither at the end)
+  const sg = bestT < 0.5 ? -1 : 1;
+  // side of the log we started on (kept while rounding: the cap tip is on the axis)
+  const side = prevL === L && e.logSide ? e.logSide : ax * (e.y - L.ay) - ay * (e.x - L.ax) >= 0 ? 1 : -1;
+  e.logSide = side; // lateral normal = side x (-ay, ax)
+  const s = side * (-ay * ay * sg - ax * ax * sg) >= 0 ? 1 : -1;
+  let k = (er + L.logR + 3 - nd) * 0.08;
+  k = k < -0.5 ? -0.5 : k > 0.5 ? 0.5 : k;
+  const vx = -ny * s + nx * k, vy = nx * s + ny * k;
+  const vl = Math.sqrt(vx * vx + vy * vy);
+  e.vx = vx / vl * sp; e.vy = vy / vl * sp;
+  e.walking = true;
+  e.logAvoid = L;
+}
+
 // Resolve collisions between an entity and nearby solid env objects.
 // E5: collision follows env state (envphys.js keeps obj.collision current:
-// stump circle when felled, 0 when destroyed) plus fallen-log capsules.
+// stump circle when felled, 0 when destroyed). Fallen logs are hurdles, not
+// obstacles (E11: envLogSlow, applied to the movement by the callers).
 function resolveEnvCollision(entity, entityRadius) {
   for (let i = 0; i < envObjects.length; i++) {
     const obj = envObjects[i];
@@ -516,7 +625,6 @@ function resolveEnvCollision(entity, entityRadius) {
       entity.y += (dy / d) * push;
     }
   }
-  if (envLogs.length) resolveEnvLogs(entity, entityRadius);
 }
 
 const HIT_FLASH_TIME = 2 / 60; // G1: two 60 Hz frames of solid white
@@ -615,7 +723,8 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
       if (e2 === e || e2.dead) continue;
       const d2 = dist(e.x, e.y, e2.x, e2.y);
       if (d2 < r) {
-        _pendingDamage.push({ target: e2, dmg: 80*(1-d2/r), angle: Math.atan2(e2.y-e.y, e2.x-e.x), src: SRC_EXPLOSIVE });
+        // E6: a chain set off by a fall the player didn't cause earns nothing either
+        _pendingDamage.push({ target: e2, dmg: 80*(1-d2/r), angle: Math.atan2(e2.y-e.y, e2.x-e.x), src: SRC_EXPLOSIVE, noCredit: envNoCredit });
       }
     }
     const pd = dist(e.x, e.y, player.x, player.y);
@@ -697,7 +806,10 @@ function processPendingDamage() {
     const batch = _pendingDamage.splice(0, _pendingDamage.length);
     for (const pd of batch) {
       if (!pd.target.dead) {
+        const nc = envNoCredit;
+        if (pd.noCredit) envNoCredit = true; // E6: no score for an uncredited chain
         damageEnemy(pd.target, pd.dmg, pd.angle, pd.src || SRC_BULLET);
+        envNoCredit = nc;
       }
     }
   }
