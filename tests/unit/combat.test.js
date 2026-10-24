@@ -262,6 +262,8 @@ describe('T3 combat: area damage', () => {
 
   test.skipIf(!LANDED.G11)('G11: a 30-bomber chain cascades across frames until every bomber is dead', () => {
     const chain = [];
+    // 30 kills pass the Uzi unlock score; with everything unlocked no boss spawns.
+    g.unlockedWeapons = g.WEAPONS.length;
     for (let i = 0; i < 30; i++) chain.push(g.spawnEnemy(type(g, 'Bomber'), i * 30, 0));
     g.player.x = 50000;
     g.killEnemy(chain[0], 0);
@@ -274,6 +276,8 @@ describe('T3 combat: area damage', () => {
 
   test.skipIf(!LANDED.G11)('G11: the 3-rounds-per-frame cap is kept', () => {
     const chain = [];
+    // 30 kills pass the Uzi unlock score; with everything unlocked no boss spawns.
+    g.unlockedWeapons = g.WEAPONS.length;
     for (let i = 0; i < 30; i++) chain.push(g.spawnEnemy(type(g, 'Bomber'), i * 30, 0));
     g.player.x = 50000;
     g.killEnemy(chain[0], 0);
@@ -284,6 +288,8 @@ describe('T3 combat: area damage', () => {
 
   test.skipIf(!LANDED.G11)('G11: the chain also completes through the normal update loop', () => {
     const chain = [];
+    // 30 kills pass the Uzi unlock score; with everything unlocked no boss spawns.
+    g.unlockedWeapons = g.WEAPONS.length;
     for (let i = 0; i < 30; i++) chain.push(g.spawnEnemy(type(g, 'Bomber'), i * 30, 0));
     g.player.x = 50000;
     g.player.invincible = 1e9;
