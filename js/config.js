@@ -32,6 +32,7 @@ const CFG = {
   MAX_SHELLS: 150,
   MAX_GIBS: 160,
   MAX_DMG_NUMBERS: 60,
+  SHAKE_MAX: 20, // J5a: screen px; addShake clamps to this
   // Attract-mode demo (M6)
   DEMO_IDLE_SECONDS: 5,
   DEMO_MAX_SECONDS: 60,

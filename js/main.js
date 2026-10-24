@@ -109,9 +109,9 @@ function renderDebugOverlay() {
 // =====================================================================
 // CAMERA & SCREEN SHAKE
 // =====================================================================
-const SHAKE_MAX = 16; // J5: keep the screen readable whatever stacks up
 function addShake(mag) {
-  shakeMag = Math.min(SHAKE_MAX, Math.max(shakeMag, mag));
+  // J5a: global cap keeps the screen readable whatever stacks up
+  shakeMag = Math.min(CFG.SHAKE_MAX, Math.max(shakeMag, mag));
 }
 
 function updateCamera(dt) {
