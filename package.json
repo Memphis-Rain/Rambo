@@ -15,7 +15,8 @@
     "lint": "eslint .",
     "perf:sustained": "node tests/perf/sustained.mjs",
     "perf:demo": "node tests/perf/demo-killrate.mjs",
-    "perf:bfg": "node tests/perf/bfg-forest.mjs"
+    "perf:bfg": "node tests/perf/bfg-forest.mjs",
+    "perf:m9": "node tests/perf/m9.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -24,6 +25,7 @@
     "espree": "^11.2.0",
     "globals": "^17.13.0",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "yaml": "^2.6.1"
   }
 }

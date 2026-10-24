@@ -50,3 +50,17 @@ describe('W1 water camo', () => {
     expect(users.length, 'referenced outside config.js').toBeGreaterThan(0);
   });
 });
+
+describe('B1 cache busting', () => {
+  test.skipIf(!LANDED.CACHEBUST)('B1: every local script/stylesheet/font reference in game.html carries the same ?v=<BUILD>', () => {
+    const html = fs.readFileSync(path.join(ROOT, 'game.html'), 'utf8');
+    const refs = [...html.matchAll(/<(?:script|link)\b[^>]*?\b(?:src|href)="([^"]+)"/g)].map((m) => m[1])
+      .filter((u) => !/^(https?:|data:|#)/.test(u));
+    expect(refs.length, 'local asset references found').toBeGreaterThan(10);
+    const missing = refs.filter((u) => !/[?&]v=[^&]+/.test(u));
+    expect(missing, 'local assets without ?v=').toEqual([]);
+    const versions = new Set(refs.map((u) => u.match(/[?&]v=([^&]+)/)[1]));
+    expect([...versions], 'one build stamp for all assets').toHaveLength(1);
+  });
+});
+

@@ -17,11 +17,16 @@ export default defineConfig({
   outputDir: 'test-results',
   timeout: 60_000 * TIME_SCALE,
   expect: { timeout: 10_000 * TIME_SCALE },
-  fullyParallel: false,
+  // Shard by TEST, not by file: per-file sharding left a @perf shard empty (6 tests in 4
+  // files). With workers: 1 nothing runs concurrently.
+  fullyParallel: true,
   // The game loop is CPU-heavy (software WebGL in headless Chromium).
   workers: 1,
   retries: process.env.CI ? 1 : 0,
-  reporter: [['list'], ['html', { open: 'never' }]],
+  // CI also writes JSON so tests/ci/assert-ran.mjs can fail a shard that ran 0 tests.
+  reporter: process.env.CI
+    ? [['list'], ['html', { open: 'never' }], ['json', { outputFile: 'test-results/results.json' }]]
+    : [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: `http://localhost:${PORT}`,
     viewport: VIEWPORT,

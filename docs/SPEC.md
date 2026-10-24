@@ -396,6 +396,12 @@ User: "when enemy or player enters water, only half the body should be visible (
     - G13 aim picking uses the **visible** bounds only.
     - The G13 body column is shortened to match: hits below the waterline go into the water and make a splash, not a hit.
     - The foot circle shrinks to keep things fair: hits register if the path crosses the visible column or the foot circle's waterline ring at r × 0.6. Josh proposes the exact geometry; Anna verifies "aim at the visible torso/head → hit".
+    - **W2 geometry, accepted (Josh 53d5967):**
+      - Visible body: the G13 capsule from the waterline to the head, radius r × (1 − 0.4·submerge). A path crossing it hits.
+      - Wet zone: the submerged column only. A path that only crosses it gives a splash, no damage, and flies on.
+      - Contact explosives keep the whole body region (G13c).
+      - Enemy rounds against a wading player follow the same rules.
+      - Picking uses the visible bounds only. Picks, enemy fire and the demo bot aim at `aimPointOf()` on the visible column.
 - **W3. Blood in water.**
   - Blood particles, drips and gibs that land on a water tile make **no ground decal**. Each one makes a **blood cloud** instead: a dithered red blob that expands to ~2× over 4 s and fades in steps over ~8 s, drifting slightly.
   - G7 bloody footprints are **kept unchanged on land** (the user likes them).
@@ -437,6 +443,12 @@ User: "when enemy or player enters water, only half the body should be visible (
     - Throw cooldown 0.5 s.
   - HUD: grenade icons next to the ammo (H-series style).
   - Demo bot: throws when ≥ 4 enemies are within 140u of a point inside the throw range and the player is outside that radius; at most once per 4 s.
+  - **N1 rulings** (Ralph, on Josh's question):
+    - Damage uses literal RPG-path reuse: a pseudo-round with dmg 200 and R 140 goes through the same explode code, with no direct hit. So splash = 0.7 × 200 × (1 − d/R), which is 140 at the centre.
+    - Geyser: same dmg, R 98.
+    - No self-damage (as RPG). Kill source SRC_EXPLOSIVE.
+    - A pickup gives +1, capped at 6, and bosses drop at 6% too. The wave +1 is capped at 6 and applies **from wave 2 onward**, not wave 1. The demo, which starts at wave 10, gets 3 at its start and +1 per later wave.
+    - F throws on key-down, once per press. The target is the raw ground point, before the G13 pick.
   - Audio: a pin/throw click, bounce ticks, the boom (reuse the RPG boom pitched up), and a muffled boom for the geyser.
 
 ### Trees
@@ -450,6 +462,9 @@ User: "when enemy or player enters water, only half the body should be visible (
   - At 0 HP the tree **topples away from the dominant recent shot direction**, using the E2 topple, E6 falling damage and kill credit, E10 remains and E7 persistence.
   - Rough timings, for reference only: a minigun fells a tree in ~3–5 s of sustained fire, an M16 in ~4 s, and a pistol needs ~9 s.
   - Trunk HP persists with E7.
+  - **E13 rulings** (Ralph):
+    - E2 doesn't change. Each blast also subtracts **f × the explosion's own damage** from trunk HP: RPG 250, grenade 200, BFG 800. Sources without a round (barrels, bombers, enemy shells) default to ENV_BLAST_DMG 100.
+    - **Enemy rounds damage trunks too**, so cover erodes, which is intended. Only falls the player caused credit the player (E6).
 
 ### Flamethrower
 
@@ -498,7 +513,7 @@ User: "when enemy or player enters water, only half the body should be visible (
     - Damage and falloff match the RPG path.
     - In water: the geyser and radius × 0.7.
   - **E13:**
-    - A tree under sustained minigun fire falls within 3–5 s.
+    - A tree under sustained fire falls within 3–5 s: minigun at ≤ 60u, M16 at ≤ 150u. Longer ranges are recorded, not asserted (spread misses the 16u trunk, which is physically right).
     - It falls away from the shooter (±45°).
     - The notch shows at ≤ 50% HP.
     - Persistence survives a chunk reload.
@@ -508,6 +523,100 @@ User: "when enemy or player enters water, only half the body should be visible (
     - A tree ignites after ~0.8 s of stream, spreads, ends charred.
     - The caps hold.
   - **Perf:** a sustained fight with 20 burning enemies, 10 burning trees and a red pond stays within Q2a, with buildMs ≤ 3 and a sustained ratio ≤ 1.15.
+
+---
+
+## M10: Xbox controller support (Josh) *(user request 2026-10-25)*
+
+User: "you can also add xbox joystick controller support".
+
+- Uses the browser **Gamepad API**, `standard` mapping. Xbox One/Series pads are the target, and any pad that reports the standard mapping works the same way.
+- Keyboard and mouse stay fully supported. **The last-used device wins.** Moving the mouse past 8 px or pressing a key switches back to mouse aim; a stick or button switches to pad.
+- One controller only: the first one connected.
+- Gameplay values don't change (Q4), with one exception: the C3 aim assist, which applies only while using the pad.
+
+- **C1. Polling.**
+  - Poll `navigator.getGamepads()` once per display frame, before the game update, in the same place keyboard and mouse state is consumed.
+  - No per-frame allocations beyond what the browser returns.
+  - "Just pressed" is edge-detected per button, so it works the same as `mouseRightJustPressed` and key-down.
+- **C2. Mapping (Xbox labels).** All pad indices follow the standard mapping.
+
+  | Input | Action |
+  |---|---|
+  | Left stick | Move |
+  | Right stick | Aim (twin-stick) |
+  | RT (analog > 0.3) | Fire |
+  | LT (analog > 0.3) | Shockwave (= right click) |
+  | LB / RB | Previous / next weapon |
+  | D-pad left / right | Previous / next weapon |
+  | A | Dodge roll |
+  | B | Grenade |
+  | X | Reload |
+  | Y | Next weapon |
+  | L3 (left stick click) | Sprint (toggle while moving, cancelled on stop) |
+  | Menu / Start | Pause |
+
+  - Deadzones are radial, 0.20 on both sticks, rescaled to 0..1 beyond the deadzone, so the pad doesn't drift.
+  - Analog movement: speed scales with stick magnitude, at full speed from 0.9 upward.
+- **C3. Aim.**
+  - The right stick sets the aim direction relative to the player. The aim **point** = player + direction × (180u + magnitude × 240u), i.e. 180–420u. Grenades (N1) land there.
+  - Releasing the stick (under the deadzone) keeps the last aim direction.
+  - With no right-stick input yet, the aim follows the left-stick movement direction.
+  - A pixel-art **reticle** (the H-series look) is drawn at the aim point while pad-aiming. The OS cursor is hidden then, and both switch back on a mouse move.
+  - G13 picking uses the reticle's screen position the same way it uses the cursor's, so headshots work with a pad.
+  - **Aim assist (pad only):**
+    - If an enemy's body lies within **±5°** of the aim ray and within 420u, the shot goes at that enemy (G13 aim point).
+    - Nearest along the ray wins. Bosses are included.
+    - Switchable with `CFG.PAD_AIM_ASSIST` (default on). Off for the demo bot.
+- **C4. Rumble.**
+  - Uses `vibrationActuator.playEffect('dual-rumble')` where it's supported, and fails silently elsewhere.
+  - Effects:
+    - each shot: weak motor ∝ weapon kickback, ≤ 60 ms;
+    - explosions: strong motor ∝ f for a near blast (J5a-style cap);
+    - taking damage: a short strong pulse;
+    - a tree falling nearby: a soft rumble.
+  - At most one new effect per 50 ms, so it doesn't saturate.
+  - `CFG.PAD_RUMBLE` (default on).
+- **C5. Menus and attract mode.**
+  - Any pad button, or a stick past the deadzone, counts as input for D-series demo stop and idle reset (`demoNoteInput`).
+  - A or Start on the title starts the game. Start pauses and resumes.
+  - Every menu or overlay that takes a click (game over/restart, pause) is reachable with A, B and Start.
+- **C6. Hot-plug.**
+  - On connect, show a toast "CONTROLLER CONNECTED" in the H-series pixel font, 2 s.
+  - If the pad in use disconnects mid-game, **auto-pause**, showing "CONTROLLER DISCONNECTED – PRESS START OR ANY KEY".
+- **C7. Legend.** While a pad is connected, the title screen shows a pad legend using the C2 labels instead of, or next to, the keyboard legend. It must fit at 800×600, like the N1 legend.
+- **Acceptance (Anna).**
+  - Tests use a **mocked `navigator.getGamepads`** with standard-mapping fake pads: the unit tests drive the mapping, and the e2e tests inject one into the page.
+  - Unit:
+    - Deadzone and rescale: 0.19 → 0, 0.2 + ε → ~0, 1 → 1, radial not per-axis.
+    - Every C2 button produces its action exactly once per press (edge detection).
+    - Aim point distance is 180–420u.
+    - The aim assist picks the nearest enemy in the ±5° cone and none outside it, and is off for the demo.
+    - Device switching (last used wins).
+  - e2e:
+    - A mocked pad moves the player, aims, fires and kills.
+    - B throws a grenade at the reticle.
+    - A dodges. Start pauses.
+    - A pad button stops the demo.
+    - Disconnect auto-pauses.
+    - Rumble is called (spy) with capped values, and an absent `vibrationActuator` raises no error.
+  - Manual: the user tests with a real Xbox pad. Josh and Anna verify with a real pad if one is available, and say so if not.
+- **Order:** after W2. It's independent of W3–W5 and F1–F4, so Josh may interleave it.
+
+## B: Build hygiene
+
+- **B1. Cache busting** (found by Anna, 2026-10-25).
+  - game.html's script and style tags carry no version, so a browser can run a **stale mix** of JS files after an update.
+    - Python http.server and GitHub Pages (max-age=600) both send cacheable responses.
+    - Anna reproduced it: a stale `config.js` meant `CFG.DEMO_IDLE_SECONDS` was undefined, so the demo never started.
+  - Fix:
+    - Every local `<script src>` and `<link href>` in game.html gets `?v=<BUILD>`.
+    - `BUILD` is one constant, bumped by a tiny npm script (`npm run stamp`, which writes the short git SHA or a timestamp into game.html) that runs before a release.
+    - Anna's vm loader and the e2e tests must strip the query.
+  - Acceptance:
+    - After a stamp, every local asset URL in game.html carries the same `?v=`.
+    - The unit loader still loads all scripts.
+    - A CI check fails if any local script tag lacks `?v=`.
 
 ---
 

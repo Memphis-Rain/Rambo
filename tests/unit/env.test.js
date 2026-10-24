@@ -375,14 +375,26 @@ describe('M8 environment physics (headless)', () => {
     stepEnv(0.6, () => { refPeak = Math.max(refPeak, Math.abs(g.envState(ref.id).sway)); });
     expect(peak, 'bullet sway < a weak blast sway').toBeLessThan(refPeak);
 
-    for (const name of ['Pistol', 'Uzi', 'Shotgun', 'M16', 'Minigun', 'Tesla', 'Plasma', 'Railgun', 'Disintegrator']) {
+    // E13 (M9) supersedes "small arms never fell trees": trunk HP is tested in trees.test.js.
+    if (LANDED.E13) return;
+    // Tesla is replaced by the flamethrower in M9 (F1): only test weapons that exist.
+    const smallArms = ['Pistol', 'Uzi', 'Shotgun', 'M16', 'Minigun', 'Tesla', 'Plasma', 'Railgun', 'Disintegrator']
+      .filter((n) => g.WEAPONS.some((w) => w.name === n));
+    // Count trunk hits so the assertion can't pass vacuously (rounds must actually arrive).
+    const origHit = g.envBulletHit;
+    let trunkHits = 0;
+    g.envBulletHit = (o, ...rest) => { if (o === t) trunkHits++; return origHit(o, ...rest); };
+    for (const name of smallArms) {
+      const hits0 = trunkHits;
       for (let i = 0; i < 60; i++) {
         shoot(name, t.x, t.y);
-        g.updateBullets(DT); g.updateBullets(DT); g.updateEnv(DT);
-        g.bullets.length = 0;
+        for (let f = 0; f < 120 && g.bullets.length; f++) g.updateBullets(DT); // until the rounds resolve
+        g.updateEnv(DT);
       }
+      expect(trunkHits - hits0, `${name}: the rounds reached the trunk`).toBeGreaterThan(0);
       expect(felled(t.id), `${name}: 60 shots never fell the tree`).toBe(false);
     }
+    g.envBulletHit = origHit;
     stepEnv(3);
     expect(['standing', 'scorched']).toContain(g.envState(t.id).state);
   });

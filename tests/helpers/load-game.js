@@ -11,7 +11,7 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 export function gameHtmlScripts() {
   const html = fs.readFileSync(path.join(ROOT, 'game.html'), 'utf8');
   return [...html.matchAll(/<script\s+[^>]*src="([^"]+)"/g)]
-    .map((m) => m[1])
+    .map((m) => m[1].split('?')[0]) // spec B1: local assets carry ?v=<BUILD> (cache busting)
     .filter((src) => !src.startsWith('lib/'));
 }
 
