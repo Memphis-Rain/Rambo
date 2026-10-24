@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import js from '@eslint/js';
 import globals from 'globals';
 import * as espree from 'espree';
@@ -6,17 +7,19 @@ import * as espree from 'espree';
 // The game is classic <script> files sharing one global scope. Each file's
 // top-level declarations are globals for every *other* file. They're derived
 // from the source, so new globals need no config change.
+// Resolved from this file so lint works from any working directory.
+const ROOT = import.meta.dirname;
 const GAME_DIR = 'js';
 // Legacy Canvas2D renderer: game.html doesn't load it.
 const UNLOADED = ['js/renderer.js'];
 
-const gameFiles = fs.readdirSync(GAME_DIR)
+const gameFiles = fs.readdirSync(path.join(ROOT, GAME_DIR))
   .filter((f) => f.endsWith('.js'))
   .map((f) => `${GAME_DIR}/${f}`)
   .filter((f) => !UNLOADED.includes(f));
 
 function topLevelDeclarations(file) {
-  const ast = espree.parse(fs.readFileSync(file, 'utf8'), {
+  const ast = espree.parse(fs.readFileSync(path.join(ROOT, file), 'utf8'), {
     ecmaVersion: 'latest',
     sourceType: 'script',
   });
@@ -53,6 +56,8 @@ const bugRules = {
   'no-empty': ['error', { allowEmptyCatch: true }],
 };
 
+// basePath anchors every files/ignores pattern to this directory, even when
+// ESLint runs from elsewhere with -c.
 export default [
   {
     ignores: ['worktrees/**', 'node_modules/', 'lib/', 'test-results/', 'playwright-report/', 'dist/', ...UNLOADED],
@@ -105,4 +110,4 @@ export default [
       'no-empty-pattern': 'off',
     },
   },
-];
+].map((config) => ({ basePath: ROOT, ...config }));
