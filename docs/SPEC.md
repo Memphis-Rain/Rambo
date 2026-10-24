@@ -203,7 +203,7 @@ Because of M1, art must read at 1/3 resolution:
   - **P1 decision (Ralph):**
     - (a) **Fix the biggest real cost anyway.** `renderPixiWaterOverlay` rebuilds ~3300 rects every frame (~3.7 ms of the 5.0 ms late-state total). Bake the camo per chunk once, and animate the drift with a stepped tiling or texture offset (≤ 10 Hz).
       - Target: water overlay ≤ 0.3 ms per frame, and totalCpuMs (40 + gore) median ≤ 3 ms **unpinned** at minute 2.
-      - **Corrected (Ralph):** the 3 ms figure came from pre-P2 accounting, which excluded the render pass. It now applies to `buildMs + updateMs` only, and is met at ~2.0 ms. Render-inclusive cost is governed by Q2a.
+      - **Corrected (Ralph):** the 3 ms figure came from pre-P2 accounting, which excluded the render pass. It now applies to `buildMs` only (which includes update), and is met at ~2.0 ms. Render-inclusive cost is governed by Q2a.
       - **Result:** the overlay costs 0.01 ms per frame.
       - That makes the scheduler's slow-CCD penalty irrelevant on real machines.
     - (b) **Measurement protocol (Q2a):**
@@ -280,7 +280,7 @@ Principles:
 - **E11. Rulings on Anna's M8 exploratory findings (Ralph).**
   - **(a) Logs are hurdles, not walls. This fixes the closed pen (#4).**
     - Anyone (player, enemies, demo bot) may **climb over a log at ×0.35 speed** while their body overlaps the capsule.
-    - Explosions with **f > 0.5 splinter a log** into debris: the capsule is removed and the remains update.
+    - Explosions with **f > 0.5 splinter a log** into debris: the capsule is removed and the remains update. For a log, `d` is the distance from the blast centre to the **nearest point on the log's axis segment**.
     - Steering along the log toward its nearer end (review item 1) stays: enemies take the end when it's closer than ~1.5× the log's width, otherwise they climb.
     - The player can never be fully enclosed.
   - **(b) Depth-sorting logs against standing entities (#7): DEFERRED** as a known visual issue. Logs are low and ground-level.
@@ -295,7 +295,7 @@ Principles:
     - Log collision is queried through a per-chunk spatial bucket.
   - Acceptance: perf:sustained, 5 min, pinned: ratio ≤ 1.15 **with remains persisting**, and the 40+gore budget holds.
 - **E8 clarification.** "A BFG felling 10+ trees" means **any single frame's explosion(s) that fell 10+ trees in total**, whether from one BFG or several. Over the following 3 s, no frame may exceed 16.7 ms (pinned). Anna's perf:bfg showed 2 frames at 17.4 ms, which is a FAIL that the E12 coalescing must fix.
-- **P1(a) reminder.** The 3 ms target is `buildMs + updateMs` only (corrected in e38b514), not totalCpuMs.
+- **P1(a) reminder.** The 3 ms target is **`buildMs` ≤ 3 ms**, not totalCpuMs. `buildMs` already includes update plus sprite/HUD build; earlier wording that said "buildMs + updateMs" double-counted.
 - **E9. Test hooks.**
   - `envState(id)` returns `{ state: 'standing'|'scorched'|'falling'|'fallen'|'destroyed', hp, sway }`.
   - `envStats()` returns `{ active, debris, felled }`.
