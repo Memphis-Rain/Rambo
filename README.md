@@ -98,7 +98,7 @@ npx playwright install chromium  # once, for the e2e tests
 | `npm run dev` | Dev server at http://localhost:5173/game.html. Reloads the page when `js/` changes. |
 | `npm test` | Unit tests (Vitest). `tests/helpers/load-game.js` evaluates the game scripts in `node:vm` with PIXI/DOM stubs, so game logic runs without a browser. |
 | `npm run test:watch` | Unit tests in watch mode |
-| `npm run test:e2e` | Browser tests (Playwright, Chromium). Starts its own dev server on port 5173 and fails on any console error. Screenshots go to `playwright-report/`; view them with `npx playwright show-report`. |
+| `npm run test:e2e` | Browser tests (Playwright, Chromium). Starts its own dev server on port 5173 (override with `PW_PORT=5174`; it never reuses a server that's already running) and fails on any console error. Screenshots go to `playwright-report/`; view them with `npx playwright show-report`. |
 | `npm run lint` | ESLint. Catches undefined and unused variables, not style. Cross-file globals are read from each `js/*.js` file's top-level declarations, so new globals need no config change. |
 
 Test names start with their ID from `docs/SPEC.md` (e.g. `T3: ...`, `R6/R7: ...`). Tests for features that haven't landed yet are skipped until their hooks exist. In e2e, `PERF_MIN_FPS` (default 50) sets the fps bar for the T6 perf test; it is only enforced on a hardware GPU.
