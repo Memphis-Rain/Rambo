@@ -450,6 +450,11 @@ function _envLand(r) {
   if (r.kind === ENVK_TREE) _envLeafBurst(r, 12, ux, uy, 0.8, r.bx - ux * r.logLen * 0.2, r.by - uy * r.logLen * 0.2, 12);
   _envDebrisBurst(r.bx, r.by, 4, 2, DEBRIS_BARK, r.kind === ENVK_DEAD ? ENV_DEADWOOD_COLORS : ENV_BARK_COLORS, ux, uy, 0.5, 1.2, 2);
   addShake(Math.min(CFG.ENV_FALL_SHAKE, 2 + r.height * 0.04));
+  // M10 C4: a soft rumble for a tree falling nearby
+  if (player && typeof padRumble === 'function') {
+    const d = Math.sqrt((player.x - mx) ** 2 + (player.y - my) ** 2);
+    if (d < 320) padRumble(0.15 + 0.35 * (1 - d / 320), 0, 160);
+  }
   if (typeof playSound === 'function') playSound('hit', 0.5);
 
   // E6: everyone under the trunk takes damage once

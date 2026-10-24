@@ -116,6 +116,12 @@ function updatePlayer(dt) {
   if (keys['a'] || keys['arrowleft']) sx -= 1;
   if (keys['d'] || keys['arrowright']) sx += 1;
 
+  // M10: the left stick moves in any direction, speed scaled by magnitude
+  // (full from 0.9 up); keys win when both are used
+  let padK = 1;
+  if (sx === 0 && sy === 0 && inputDevice === 'pad' && pad.lmag > 0) {
+    sx = pad.lx; sy = pad.ly; padK = Math.min(1, pad.lmag / 0.9);
+  }
   const len = Math.sqrt(sx*sx+sy*sy);
   if (len > 0) {
     sx /= len; sy /= len;
@@ -123,7 +129,7 @@ function updatePlayer(dt) {
     const worldDx = sx * 0.5 / 1 + sy * 0.5 / isoScale;
     const worldDy = -sx * 0.5 / 1 + sy * 0.5 / isoScale;
     const wLen = Math.sqrt(worldDx*worldDx + worldDy*worldDy);
-    let speed = CFG.PLAYER_SPEED;
+    let speed = CFG.PLAYER_SPEED * padK;
     if (keys['shift']) speed *= CFG.SPRINT_MULT;
     p.vx = (worldDx/wLen) * speed;
     p.vy = (worldDy/wLen) * speed;
@@ -222,7 +228,10 @@ function updatePlayer(dt) {
   }
   // N1: grenade on F key-down, once per press (key repeat ignored; a press
   // during a dodge roll is latched at the top of updatePlayer)
-  if (_grenadeWant) { _grenadeWant = false; throwGrenade(mouseGroundX, mouseGroundY); }
+  if (_grenadeWant) { // M10: B throws at the pad reticle
+    _grenadeWant = false;
+    if (inputDevice === 'pad') throwGrenade(padAim.x, padAim.y); else throwGrenade(mouseGroundX, mouseGroundY);
+  }
 
   // Reload
   const wep = WEAPONS[p.weapon];
@@ -316,6 +325,7 @@ function updatePlayer(dt) {
         p.recoilMag = Math.min(4, 1 + Math.round(wep.kickback / 5));
         p.idleT = 0; p.fidgetT = 0;
         spawnMuzzleFlash(muzzleX, muzzleY, aim, 0.7 + wep.kickback * 0.06);
+        padRumble(Math.min(1, 0.15 + wep.kickback / 25), 0, Math.min(60, 25 + wep.kickback * 2)); // M10 C4
         if (wep.shellSize > 0) spawnShellCasing(p.x, p.y, aim, wep.shellSize);
 
         const soundMap = {0:'pistol',1:'smg',2:'shotgun',3:'rifle',4:'minigun',5:'rocket',6:'plasma',7:'tesla',8:'railgun',9:'bfg',10:'disintegrator'};
@@ -881,6 +891,7 @@ function damagePlayer(dmg) {
   player.hurtFlash = Math.min(1, player.hurtFlash + 0.25 + dmg / 60);
   if (player.shield <= 0) spawnBloodSpray(player.x, player.y, Math.random() * Math.PI * 2, 0.5, 14);
   addShake(3);
+  padRumble(0.3, 0.7, 90); // M10 C4: a short strong pulse
 
   if (player.hp <= 0) {
     if (typeof demoActive !== 'undefined' && demoActive) demoOnPlayerDeath(); // D6: demo ends on death

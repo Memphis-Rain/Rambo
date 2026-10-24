@@ -196,6 +196,8 @@ function _realInput(pointer) {
 function initInput() {
   window.addEventListener('keydown', e => {
     if (_realInput()) { e.preventDefault(); return; }
+    // M10: a key switches back to keyboard + mouse (and resumes a pad-disconnect pause)
+    if (typeof padNoteKey === 'function' && padNoteKey()) { e.preventDefault(); return; }
     keys[e.key.toLowerCase()] = true;
     if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase())) e.preventDefault();
     // F3: toggle debug overlay, F4: dump perf to console
@@ -235,6 +237,7 @@ function initInput() {
   });
   window.addEventListener('mousemove', e => {
     if (typeof demoNoteMouseMove === 'function') demoNoteMouseMove(e.clientX, e.clientY);
+    if (typeof padNoteMouseMove === 'function') padNoteMouseMove(e.clientX, e.clientY); // M10: back to mouse aim
     if (typeof demoActive !== 'undefined' && demoActive) return; // the bot owns the cursor
     mouseX = e.clientX;
     mouseY = e.clientY;
@@ -329,6 +332,7 @@ function update(dt) {
 // world pass (retro.js), LOW = Pixi renders the stage.
 // =====================================================================
 function gameLoop() {
+  if (typeof pollGamepad === 'function') pollGamepad(); // M10 C1: before input is consumed
   const timestamp = performance.now();
   const frameMs = timestamp - lastTime;
   lastTime = timestamp;
