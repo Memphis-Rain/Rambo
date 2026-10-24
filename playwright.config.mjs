@@ -1,14 +1,22 @@
 import { defineConfig, devices } from '@playwright/test';
+import { randomBytes } from 'node:crypto';
 
 // PW_PORT lets several worktrees run e2e side by side (default 5173, see docs/SPEC.md section 1).
 const PORT = Number(process.env.PW_PORT || 5173);
+// Run-wide tag so perf tests can find this browser and pin it to CCD0 (tests/perf/pin.mjs
+// reads the same variable; workers inherit it).
+process.env.RAMBO_PIN_TAG ||= randomBytes(6).toString('hex');
+// Same factor as tests/e2e/fixtures.js: CI runners are 5-15x slower (software WebGL, 2 vCPU).
+const TIME_SCALE = Number(process.env.E2E_TIME_SCALE || (process.env.CI ? 6 : 1));
+// Smaller frame on CI to cut SwiftShader cost; tests size themselves from W/H.
+const VIEWPORT = process.env.CI || process.env.E2E_SMALL ? { width: 960, height: 540 } : { width: 1280, height: 720 };
 
 export default defineConfig({
   testDir: 'tests/e2e',
   // testDir already keeps other agents' worktrees (under worktrees/) out of collection.
   outputDir: 'test-results',
-  timeout: 60_000,
-  expect: { timeout: 10_000 },
+  timeout: 60_000 * TIME_SCALE,
+  expect: { timeout: 10_000 * TIME_SCALE },
   fullyParallel: false,
   // The game loop is CPU-heavy (software WebGL in headless Chromium).
   workers: 1,
@@ -16,7 +24,7 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: `http://localhost:${PORT}`,
-    viewport: { width: 1280, height: 720 },
+    viewport: VIEWPORT,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },
@@ -25,10 +33,10 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        viewport: { width: 1280, height: 720 },
+        viewport: VIEWPORT,
         launchOptions: {
           // Headless Chromium has no GPU; allow the SwiftShader WebGL fallback.
-          args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
+          args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', `--rambo-pin-tag=${process.env.RAMBO_PIN_TAG}`],
         },
       },
     },

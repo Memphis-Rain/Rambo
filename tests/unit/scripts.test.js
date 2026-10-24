@@ -39,3 +39,14 @@ describe('H1 font assets', () => {
     expect(html).not.toMatch(/url\(\s*["']?https?:\/\//i);
   });
 });
+
+describe('W1 water camo', () => {
+  test.skipIf(!LANDED.P1)('W1: CFG.WATER_CAMO_ALPHA_SCALE is a positive number and the water overlay uses it', () => {
+    const { g } = loadGame({ files: ['js/config.js'] });
+    expect(Number.isFinite(g.CFG.WATER_CAMO_ALPHA_SCALE)).toBe(true);
+    expect(g.CFG.WATER_CAMO_ALPHA_SCALE).toBeGreaterThan(0);
+    const users = fs.readdirSync(path.join(ROOT, 'js')).filter((f) => f.endsWith('.js') && f !== 'config.js')
+      .filter((f) => fs.readFileSync(path.join(ROOT, 'js', f), 'utf8').includes('CFG.WATER_CAMO_ALPHA_SCALE'));
+    expect(users.length, 'referenced outside config.js').toBeGreaterThan(0);
+  });
+});

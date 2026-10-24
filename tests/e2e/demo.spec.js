@@ -1,4 +1,4 @@
-import { test, expect } from './fixtures.js';
+import { test, expect, T } from './fixtures.js';
 import { LANDED } from '../milestones.js';
 
 // T11 / M6 attract mode (D8 hooks). Skipped until M6 is marked landed in tests/milestones.js.
@@ -8,13 +8,25 @@ test.skip(!LANDED.M6, 'M6 not landed (tests/milestones.js)');
 
 async function bootTitle(game, idleSeconds) {
   await game.boot();
+  // On a slow machine the default 5 s idle can elapse during boot, so hold the demo
+  // off, stop one that already started, and reset the idle timer with a real move.
+  await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1e9; if (demoState().active) stopDemo(); });
+  await game.page.mouse.move(5, 5);
+  await game.page.mouse.move(200, 200);
+  await game.page.waitForFunction(() => !demoState().active && demoState().idleTimer < 0.5, null, { timeout: T(5_000) });
   await game.eval((s) => { CFG.DEMO_IDLE_SECONDS = s; }, idleSeconds);
+}
+
+/** Wait until the running demo has been active for `seconds` of game time. */
+async function waitDemoElapsed(game, seconds) {
+  await game.page.waitForFunction((s) => !demoState().active || demoState().elapsed >= s, seconds,
+    { timeout: T(10_000 + seconds * 4000) });
 }
 
 const demo = (game) => game.eval(() => demoState());
 
 async function waitForDemo(game, active, timeout = 15_000) {
-  await game.page.waitForFunction((a) => demoState().active === a, active, { timeout });
+  await game.page.waitForFunction((a) => demoState().active === a, active, { timeout: T(timeout) });
 }
 
 test.describe('T11 attract mode', () => {
@@ -26,18 +38,19 @@ test.describe('T11 attract mode', () => {
   });
 
   test('T11/D3/D4: the demo kills enemies, advances gameTime and cycles weapons within 20 s', async ({ game }, testInfo) => {
-    test.setTimeout(60_000);
+    test.setTimeout(T(60_000) * 2);
     await bootTitle(game, 1);
     await waitForDemo(game, true, 10_000);
     const s0 = await game.eval(() => ({ t: gameTime, kills, weapon: demoState().weaponIndex }));
     const seenWeapons = new Set([s0.weapon]);
     let last = s0;
-    for (let i = 0; i < 20; i++) {
-      await game.page.waitForTimeout(1000);
+    // Sample once per second of DEMO time (game time), up to 20 s.
+    for (let i = 1; i <= 20; i++) {
+      await waitDemoElapsed(game, i);
       last = await game.eval(() => ({ t: gameTime, kills, weapon: demoState().weaponIndex, active: demoState().active }));
       seenWeapons.add(last.weapon);
       if (!last.active) break;
-      if (i === 8) await game.snap(testInfo, 'T11-demo-action.png');
+      if (i === 9) await game.snap(testInfo, 'T11-demo-action.png');
     }
     testInfo.annotations.push({ type: 'demo', description: `kills=${last.kills} gameTime=${last.t.toFixed(1)} weapons=${[...seenWeapons].join(',')}` });
     expect(last.t).toBeGreaterThan(s0.t);
@@ -74,7 +87,7 @@ test.describe('T11 attract mode', () => {
   test('T11/D6: a real game after the demo starts from a clean state', async ({ game, page }) => {
     await bootTitle(game, 1);
     await waitForDemo(game, true, 10_000);
-    await page.waitForFunction(() => kills > 0, null, { timeout: 20_000 });
+    await page.waitForFunction(() => kills > 0, null, { timeout: T(20_000) });
     await page.keyboard.press('x');
     await waitForDemo(game, false, 2_000);
     // Keep the demo from re-triggering while we start the real game.
@@ -100,19 +113,19 @@ test.describe('T11 attract mode', () => {
   test('T11/D1: mouse jitter under 8 px does not reset the idle timer', async ({ game, page }) => {
     await bootTitle(game, 1e9);
     await page.mouse.move(400, 300);
-    await page.waitForTimeout(300);
+    await page.waitForFunction(() => demoState().idleTimer > 0.3, null, { timeout: T(5_000) });
     let prev = (await demo(game)).idleTimer;
     for (const [dx, dy] of [[3, 0], [0, 4], [-5, 2], [2, -6], [5, 5]]) {
       await page.mouse.move(400 + dx, 300 + dy);
-      await page.waitForTimeout(250);
+      // A reset would drop the timer below prev; otherwise it keeps counting up.
+      await page.waitForFunction((p) => demoState().idleTimer > p + 0.1 || demoState().idleTimer < p, prev, { timeout: T(5_000) });
       const t = (await demo(game)).idleTimer;
       expect(t, `jitter (${dx},${dy}) reset the idle timer`).toBeGreaterThan(prev);
       prev = t;
     }
     // A real move (> 8 px) does reset it.
     await page.mouse.move(460, 360);
-    await page.waitForTimeout(50);
-    expect((await demo(game)).idleTimer).toBeLessThan(prev);
+    await page.waitForFunction((p) => demoState().idleTimer < p, prev, { timeout: T(5_000) });
   });
 
   test('T11/D1: the demo never starts during real play or while paused', async ({ game, page }) => {
@@ -120,15 +133,16 @@ test.describe('T11 attract mode', () => {
     await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1e9; });
     await game.start();
     await game.eval(() => { CFG.DEMO_IDLE_SECONDS = 1; });
-    await page.waitForTimeout(2500);
+    await game.advance(2.5); // 2.5 s of game time with no input
     expect((await demo(game)).active).toBe(false);
     await page.keyboard.press('p');
-    await page.waitForTimeout(2500);
+    expect(await game.eval(() => paused)).toBe(true);
+    await page.waitForTimeout(T(2_500));
     expect((await demo(game)).active).toBe(false);
   });
 
   test('T11/D6: the demo ends on its own after CFG.DEMO_MAX_SECONDS and loops title -> demo', async ({ game }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(T(60_000) * 2);
     await bootTitle(game, 1);
     expect(await game.eval(() => CFG.DEMO_MAX_SECONDS), 'D8 default').toBe(60);
     await game.eval(() => { CFG.DEMO_MAX_SECONDS = 4; });
@@ -145,7 +159,7 @@ test.describe('T11 attract mode', () => {
     await bootTitle(game, 1e9);
     await game.eval(() => startDemo());
     await waitForDemo(game, true, 2_000);
-    await game.page.waitForFunction(() => demoState().elapsed > 0.5, null, { timeout: 10_000 });
+    await waitDemoElapsed(game, 0.5);
     await game.eval(() => stopDemo());
     await waitForDemo(game, false, 2_000);
     await expect(page.locator('#start-screen')).toBeVisible();
@@ -156,7 +170,7 @@ test.describe('T11 attract mode', () => {
     await bootTitle(game, 1);
     await waitForDemo(game, true, 10_000);
     // The counter sits at 9 for ~0.3 s; the first wave that actually runs must be 10.
-    await game.page.waitForFunction(() => waveActive, null, { timeout: 10_000 });
+    await game.page.waitForFunction(() => waveActive, null, { timeout: T(10_000) });
     expect(await game.eval(() => wave)).toBeGreaterThanOrEqual(10);
     // Wave-10 enemy types are in the spawn pool.
     const types = await game.eval(() => ENEMY_TYPES.filter((t) => t.wave <= wave).map((t) => t.name));
@@ -167,7 +181,7 @@ test.describe('T11 attract mode', () => {
     test.skip(!LANDED.FU1, 'follow-up FU1 not landed (tests/milestones.js)');
     await bootTitle(game, 1);
     await waitForDemo(game, true, 10_000);
-    await game.page.waitForFunction(() => demoState().elapsed > 2, null, { timeout: 15_000 });
+    await waitDemoElapsed(game, 2);
     // Score/HUD must be visible "as normal", so the full-screen title DOM must not cover the canvas.
     const cover = await game.eval(() => {
       const el = document.getElementById('start-screen');
@@ -203,9 +217,9 @@ test.describe('T11 attract mode', () => {
   // kill rate of the pre-D3a bot (87a27f1), measured with this same scenario.
   const KILLS_BASELINE = Number(process.env.D3A_KILLS_BASELINE || 1.06); // kills per game-second, 87a27f1 (measured 1.06-1.07)
 
-  test('D3a/B6: the demo bot reads as deliberate (few reversals, no jitter in place, kill rate kept)', async ({ game }, testInfo) => {
+  test('D3a/B6: the demo bot reads as deliberate (few reversals, no jitter in place, kill rate kept)', { tag: '@perf' }, async ({ game }, testInfo) => {
     test.skip(!LANDED.D3A && !process.env.D3A_MEASURE, 'D3A not landed (tests/milestones.js)');
-    test.setTimeout(180_000);
+    test.setTimeout(T(180_000));
     await bootTitle(game, 1e9);
     const runs = [];
     for (let run = 0; run < 3; run++) {

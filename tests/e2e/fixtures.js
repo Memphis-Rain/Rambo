@@ -1,5 +1,11 @@
 import { test as base, expect } from '@playwright/test';
 
+// Wall-clock budget multiplier. CI runners (2 vCPU, software WebGL) run the game
+// 5-15x slower than a dev machine, and dt is clamped at 0.05 s, so game time can
+// fall far behind wall time there. Tests wait on game state; timeouts use T().
+export const TIME_SCALE = Number(process.env.E2E_TIME_SCALE || (process.env.CI ? 6 : 1));
+export const T = (ms) => Math.round(ms * TIME_SCALE);
+
 // Q1 allowlist: console errors that are known noise.
 const ALLOWED_ERRORS = [
   (msg) => /favicon\.ico/.test(msg.url) || (/404/.test(msg.text) && /favicon/.test(msg.url + msg.text)),
@@ -20,6 +26,11 @@ export const test = base.extend({
   },
 
   page: async ({ page, consoleErrors, allowedErrors }, use, testInfo) => {
+    // E2E_CPU_THROTTLE=6 approximates the CI runner locally (Chromium CDP throttling).
+    if (process.env.E2E_CPU_THROTTLE) {
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.E2E_CPU_THROTTLE) });
+    }
     page.on('console', (msg) => {
       if (msg.type() !== 'error') return;
       const entry = { text: msg.text(), url: msg.location()?.url || '' };
@@ -54,15 +65,15 @@ class GameDriver {
   /** Open game.html and wait until PixiJS is initialised. */
   async boot() {
     await this.page.goto('/game.html');
-    await this.page.waitForFunction(() => typeof app !== 'undefined' && app && app.renderer, null, { timeout: 30_000 });
+    await this.page.waitForFunction(() => typeof app !== 'undefined' && app && app.renderer, null, { timeout: T(30_000) });
     // M5: the button stays disabled until font, Pixi and input are ready.
-    await expect(this.page.locator('#start-btn')).toBeEnabled({ timeout: 10_000 });
+    await expect(this.page.locator('#start-btn')).toBeEnabled({ timeout: T(10_000) });
   }
 
   /** Click START MISSION and wait for the loop to tick. */
   async start() {
     await this.page.click('#start-btn');
-    await this.page.waitForFunction(() => gameStarted && gameTime > 0.1);
+    await this.page.waitForFunction(() => gameStarted && gameTime > 0.1, null, { timeout: T(10_000) });
   }
 
   /** Read a value from the page's global scope (top-level let/const included). */
@@ -83,7 +94,7 @@ class GameDriver {
   /** Wait for game time to advance by `seconds` (game time, not wall time). */
   async advance(seconds) {
     const t0 = await this.page.evaluate(() => gameTime);
-    await this.page.waitForFunction((target) => gameTime >= target, t0 + seconds, { timeout: 30_000 });
+    await this.page.waitForFunction((target) => gameTime >= target, t0 + seconds, { timeout: T(30_000) + seconds * 1000 * TIME_SCALE * 4 });
   }
 
   /** Save a screenshot as a test artifact (T7). */

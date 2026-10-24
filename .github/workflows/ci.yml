@@ -5,40 +5,76 @@ on:
     branches: [main]
   pull_request:
 
+# GitHub runners (2 vCPU, software WebGL) run the game 5-15x slower than a dev
+# machine. The e2e suite scales its timeouts for CI (tests/e2e/fixtures.js) and is
+# sharded; long perf/statistical tests (tag @perf) get their own job.
+
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
-
       - run: npm ci
-
       - name: Syntax check (Q3)
         run: for f in js/*.js; do node --check "$f"; done
-
       - name: Lint (T8)
         run: npm run lint
-
       - name: Unit tests (T3)
         run: npm test
 
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
-
-      - name: E2E tests (T4-T7)
-        run: npm run test:e2e
-
+      - name: E2E tests (T4-T11), shard ${{ matrix.shard }}/4
+        run: npx playwright test --grep-invert @perf --shard=${{ matrix.shard }}/4
       - name: Upload Playwright report and screenshots
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-report
+          name: playwright-report-shard-${{ matrix.shard }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      # Relative criteria only on CI (Q2a); absolute ms budgets are skipped or recorded.
+      - name: Perf and statistical tests (@perf)
+        run: npx playwright test --grep @perf
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-perf
           path: |
             playwright-report/
             test-results/
