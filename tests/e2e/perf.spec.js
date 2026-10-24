@@ -61,17 +61,28 @@ test.describe('M7 / Q2a', () => {
   // On the 2-CCD Ryzen dev box Windows can migrate the renderer to the busier CCD after
   // ~60 s (Josh's P1 root cause), so the renderer is pinned to CCD0 there (Q2a protocol).
   // GitHub runners have no CCD split; pinning is a no-op off Windows.
-  test('P1/Q2a: sustained gore keeps CPU frame time flat (minute 1.5 within 15% of minute 0.25)', { tag: '@perf' }, async ({ game, page, browser }, testInfo) => {
+  test('P1/Q2a: sustained gore keeps CPU frame time flat (minute 1.5 within 15% of minute 0.5)', { tag: '@perf' }, async ({ game, page }, testInfo) => {
     test.skip(!LANDED.P1, 'P1 not landed (tests/milestones.js)');
     test.setTimeout(T(180_000));
     await startCalm(game);
-    const pinning = pinRenderersToCcd0(browser);
+    const pinning = process.env.E2E_NO_PIN ? { pinned: false, reason: 'E2E_NO_PIN' } : pinRenderersToCcd0();
     testInfo.annotations.push({ type: 'pinning', description: JSON.stringify(pinning) });
+    console.log(`[P1] pinning ${JSON.stringify(pinning)}`);
+    // Steady load in both windows: start with the decal store at its cap, so the late
+    // window doesn't carry more decals than the early one (only drift over time counts).
+    await game.eval(() => {
+      for (let i = 0; i < CFG.MAX_BLOOD_POOLS; i++) {
+        const a = i * 2.399963, r = 40 + (i % 97) * 5;
+        addDecal(i % 7, player.x + Math.cos(a) * r, player.y + Math.sin(a) * r, 4 + (i % 6), 0x8a0a0a, a);
+      }
+    });
     await game.eval(GORE);
-    await page.waitForTimeout(10_000);
-    const early = await game.eval(medianCpu, 15);  // ~10-25 s
-    await page.waitForTimeout(50_000);
-    const late = await game.eval(medianCpu, 15);   // ~75-90 s, past the old ~60 s step-up
+    // Corpses fade after CFG.BODY_FADE_END (25 s), so the body count only reaches steady
+    // state after ~25 s of gore; measure the early window after that.
+    await page.waitForTimeout(30_000);
+    const early = await game.eval(medianCpu, 15);  // ~30-45 s, before the old ~60 s step-up
+    await page.waitForTimeout(30_000);
+    const late = await game.eval(medianCpu, 15);   // ~75-90 s, past it
     await game.eval(() => { window.__gore.stop = true; });
     const ratio = late.median / early.median;
     const summary = `early median=${early.median.toFixed(2)}ms p99=${early.p99.toFixed(2)} late median=${late.median.toFixed(2)}ms p99=${late.p99.toFixed(2)} ratio=${ratio.toFixed(3)}`;

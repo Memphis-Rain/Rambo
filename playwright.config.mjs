@@ -1,7 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
+import { randomBytes } from 'node:crypto';
 
 // PW_PORT lets several worktrees run e2e side by side (default 5173, see docs/SPEC.md section 1).
 const PORT = Number(process.env.PW_PORT || 5173);
+// Run-wide tag so perf tests can find this browser and pin it to CCD0 (tests/perf/pin.mjs
+// reads the same variable; workers inherit it).
+process.env.RAMBO_PIN_TAG ||= randomBytes(6).toString('hex');
 // Same factor as tests/e2e/fixtures.js: CI runners are 5-15x slower (software WebGL, 2 vCPU).
 const TIME_SCALE = Number(process.env.E2E_TIME_SCALE || (process.env.CI ? 6 : 1));
 // Smaller frame on CI to cut SwiftShader cost; tests size themselves from W/H.
@@ -32,7 +36,7 @@ export default defineConfig({
         viewport: VIEWPORT,
         launchOptions: {
           // Headless Chromium has no GPU; allow the SwiftShader WebGL fallback.
-          args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
+          args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', `--rambo-pin-tag=${process.env.RAMBO_PIN_TAG}`],
         },
       },
     },

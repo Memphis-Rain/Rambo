@@ -9,7 +9,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
-import { pinRenderersToCcd0 } from './pin.mjs';
+import { pinArg, pinRenderersToCcd0 } from './pin.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const arg = (name, def) => {
@@ -30,15 +30,15 @@ for (let i = 0; i < 60; i++) {
 }
 
 const browser = await chromium.launch(gpu
-  ? { headless: false, args: ['--ignore-gpu-blocklist', '--enable-gpu'] }
-  : { args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+  ? { headless: false, args: ['--ignore-gpu-blocklist', '--enable-gpu', pinArg()] }
+  : { args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', pinArg()] });
 try {
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/favicon/.test(m.text())) errors.push(m.text()); });
   await page.goto(url);
-  const pinning = pin ? pinRenderersToCcd0(browser) : { pinned: false, reason: '--no-pin' };
+  const pinning = pin ? pinRenderersToCcd0() : { pinned: false, reason: '--no-pin' };
   console.log(`renderer pinning: ${JSON.stringify(pinning)}`);
   await page.waitForFunction(() => !document.getElementById('start-btn').disabled, null, { timeout: 30_000 });
   await page.evaluate(() => { CFG.DEMO_IDLE_SECONDS = 1e9; });

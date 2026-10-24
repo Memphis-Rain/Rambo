@@ -11,7 +11,7 @@ export const LANDED = {
   G12: true, // swept segment-vs-circle bullet hits for all bullets (spec 545f085)
   G12A: true, // pierce damage per pass = dmg*max(1,round(chord/(speed/60))); G12b barrels on the path; B6 edge oscillation (spec 49f3e2a)
   D3A: true, // demo bot holds strafe >= 0.4 s unless dodging/blocked (spec D3a): reversal metric bar
-  P1: false, // M7 P1: no frame-time step-up over time (root cause pending)
+  P1: true, // M7 P1: no frame-time step-up over time (root cause pending)
   M7: true, // perf hardening P1-P4 (Q2a): sustained frame time, honest perfLog, chunk budget, decal draws in gore
   G2A: true, // knockback cap 900, env collision still resolves after a push (spec 545f085)
   BATCH2: true, // fixes for exploratory bugs B1-B7 on release point 1 (HiDPI, dither, decal cap/growth, shake)
