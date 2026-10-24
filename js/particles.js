@@ -122,7 +122,8 @@ function addDecal(kind, x, y, size, color, angle=0, maxSize=0, color2=0) {
   d.growing = maxSize > size;
   d._step = Math.floor(size / 3);
   bloodPools.push(d);
-  if (d.growing) _growingDecals.push(d);
+  // A recycled decal may still sit in the growing list; never add it twice
+  if (d.growing && !d._inGrow) { d._inGrow = true; _growingDecals.push(d); }
   if (kind === DECAL_POOL || (kind === DECAL_SPLAT && size >= 2.5)) markBloodAt(x, y, d.maxRadius);
   decalVersion++;
   return d;
@@ -131,6 +132,7 @@ function addDecal(kind, x, y, size, color, angle=0, maxSize=0, color2=0) {
 // D6: forget all decal bookkeeping (the decal list itself is bloodPools)
 function resetDecalState() {
   _bloodMap.clear();
+  for (const d of _growingDecals) d._inGrow = false;
   _growingDecals.length = 0;
   decalVersion++;
 }
@@ -146,6 +148,7 @@ function updateDecals(dt) {
       if (step !== d._step) { d._step = step; decalVersion++; }
     }
     if (!d.growing) {
+      d._inGrow = false;
       const last = _growingDecals.pop();
       if (last !== d) _growingDecals[i] = last;
     }
