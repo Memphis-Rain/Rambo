@@ -550,7 +550,7 @@ function _demoGetOverlay() {
       "text-shadow:4px 4px 0 #000,-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000;animation:demo-blink 0.8s steps(1) infinite}" +
       "#demo-overlay .demo-bottom{position:absolute;bottom:40px;left:0;right:0;font-size:14px;letter-spacing:2px;color:#ffe000;" +
       "text-shadow:3px 3px 0 #000,-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000}" +
-      "@keyframes demo-blink{0%{opacity:1}65%{opacity:0}}";
+      "@keyframes demo-blink{0%{opacity:1}75%{opacity:0}}";
     (document.head || document.documentElement).appendChild(st);
   }
   const ov = document.createElement('div');
