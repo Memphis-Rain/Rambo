@@ -204,6 +204,102 @@ test('K2/C6: P2\'s pad disconnecting auto-pauses with "P2 CONTROLLER DISCONNECTE
 });
 
 // ---------------------------------------------------------------------
+// K2.1 device edge cases (Ralph's K2+K3 review)
+// ---------------------------------------------------------------------
+test('K2.1: after a View join on the title, body.pad-connected stays on and the pad legend stays visible', async ({ game, page }) => {
+  test.skip(!LANDED.K2 || !LANDED.K2_1, 'K2.1 not landed');
+  await boot(game, page, { pads: 1 });
+  await expect(page.locator('#start-screen .pad-controls')).toBeVisible({ timeout: T(5_000) });
+  await rawTap(page, 0, BTN.BACK);
+  await page.waitForFunction((h) => window.__h(h).titleCount === 2, H.state, { timeout: T(5_000) });
+  await frames(page, 30);
+  expect(await page.evaluate(() => document.body.classList.contains('pad-connected')), 'body.pad-connected').toBe(true);
+  await expect(page.locator('#start-screen .pad-controls'), 'pad legend').toBeVisible();
+  await expect(page.locator('#start-screen .kbm-controls')).toBeHidden();
+});
+
+test('K2.1: navigator.getGamepads() is called once per frame (title, 1P, 2P)', async ({ game, page }) => {
+  test.skip(!LANDED.K2 || !LANDED.K2_1, 'K2.1 not landed');
+  await boot(game, page);
+  // calls per display frame over 60 frames: rAF ticks and the game's ticker are the same frames
+  const perFrame = () => page.evaluate(() => new Promise((done) => {
+    const c0 = window.__gpCalls;
+    let n = 0;
+    const f = () => (++n >= 60 ? done((window.__gpCalls - c0) / n) : requestAnimationFrame(f));
+    requestAnimationFrame(f);
+  }));
+  const title = await perFrame();
+  await game.start();
+  await game.freezeWaves();
+  const one = await perFrame();
+  await rawTap(page, 1, BTN.START);
+  await page.waitForFunction(() => players.length === 2, null, { timeout: T(5_000) });
+  const two = await perFrame();
+  for (const [k, v] of [['title', title], ['1P', one], ['2P', two]]) {
+    expect(v, `${k}: getGamepads calls per frame`).toBeGreaterThan(0.9);
+    expect(v, `${k}: getGamepads calls per frame`).toBeLessThan(1.1);
+  }
+});
+
+test('K2.1: P2\'s muzzle flash belongs to P2 (drawn at P2\'s gun) even with P1 within 40u', async ({ game, page }) => {
+  test.skip(!LANDED.K2 || !LANDED.K2_1, 'K2.1 not landed');
+  await boot(game, page);
+  await twoPlayers(game, page);
+  await placeBoth(game, { x: 0, y: 0 }, { x: 25, y: 10 });
+  // Record each flash's owner: the renderer snaps an ownerless player flash to P1's gun tip when
+  // P1 is within 40u, so P2's flashes must carry P2.
+  await game.eval(() => {
+    window.__flashes = [];
+    const orig = window.spawnMuzzleFlash;
+    window.spawnMuzzleFlash = function (x, y, angle, scale, z, owner, ...rest) {
+      window.__flashes.push({ owner: players.indexOf(owner), x, y });
+      return orig.call(this, x, y, angle, scale, z, owner, ...rest);
+    };
+    unlockedWeapons = Math.max(unlockedWeapons, 4);
+    players[1].weapon = 3; players[1].magAmmo = WEAPONS[3].mag; players[1].reloading = false; players[1].fireTimer = 0;
+  });
+  await pad2(page).sticks(0, 0, 1, 0);
+  await pad2(page).press(BTN.RT);
+  await game.advance(0.4);
+  await pad2(page).release(BTN.RT);
+  const f = await game.eval(() => window.__flashes.slice());
+  expect(f.length, 'P2 fired').toBeGreaterThan(0);
+  expect(f.map((q) => q.owner), 'every flash owned by P2 (index 1)').toEqual(f.map(() => 1));
+});
+
+test('K2.1/K3a: a fast zoom-out 1 -> 0.6 has no frame over 16.7 ms on terrain bakes (soft on SwiftShader; logged)', { tag: '@perf' }, async ({ game, page }, testInfo) => {
+  test.skip(!LANDED.K2 || !LANDED.K2_1, 'K2.1 not landed');
+  test.setTimeout(T(120_000));
+  await boot(game, page);
+  await twoPlayers(game, page);
+  await game.advance(1); // chunks around the start baked at zoom 1
+  const sample = (secs) => page.evaluate((s) => new Promise((done) => {
+    const xs = [], t0 = gameTime;
+    const f = () => { xs.push(perfLog.totalCpuMs); if (gameTime - t0 < s) requestAnimationFrame(f); else done(xs); };
+    requestAnimationFrame(f);
+  }), secs);
+  const stat = (xs) => { const s = xs.slice().sort((a, b) => a - b); return { n: s.length, median: s[s.length >> 1], max: s[s.length - 1], over: s.filter((x) => x > 16.7).length }; };
+  // (a) forced: one step from 1 to 0.6
+  await game.eval(() => setCamZoom(0.6));
+  const forced = stat(await sample(1.5));
+  await game.eval(() => setCamZoom(null));
+  await placeBoth(game, { x: 0, y: 0 }, { x: 40, y: 0 });
+  await page.waitForFunction(() => camZoom().zoom === 1, null, { timeout: T(15_000) });
+  // (b) by the players: P2 thrown far away, the camera zooms out at 3/s into unbaked ground
+  const vw = await game.eval(() => W);
+  await placeBoth(game, { x: 0, y: 0 }, screenRight(vw * 2));
+  const apart = stat(await sample(1.5));
+  const summary = `forced 1->0.6: ${JSON.stringify(forced)}; players apart: ${JSON.stringify(apart)} (totalCpuMs)`;
+  testInfo.annotations.push({ type: 'zoom-out frames', description: summary });
+  console.log(`[K2.1 zoom-out] ${summary}`);
+  expect(forced.n).toBeGreaterThan(10);
+  if (!process.env.CI) {
+    expect.soft(forced.max, 'forced zoom-out: no frame over 16.7 ms (soft, SwiftShader)').toBeLessThanOrEqual(16.7);
+    expect.soft(apart.max, 'players apart: no frame over 16.7 ms (soft, SwiftShader)').toBeLessThanOrEqual(16.7);
+  }
+});
+
+// ---------------------------------------------------------------------
 // K3: shared camera, zoom, leash
 // ---------------------------------------------------------------------
 test('K3a: far apart -> zoom < 1 with both players drawn on screen; back together -> zoom exactly 1.0', async ({ game, page }) => {

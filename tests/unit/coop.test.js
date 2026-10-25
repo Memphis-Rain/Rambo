@@ -477,6 +477,70 @@ describe('M11 K2 join and devices', () => {
 });
 
 // =====================================================================
+// K2.1 device edge cases (Ralph's K2+K3 review, Josh's K2.1 fixes)
+// =====================================================================
+describe('M11 K2.1 device edge cases', () => {
+  beforeEach(setup);
+  const todo = !LANDED.K2 || !LANDED.K2_1;
+  const pads = () => H.state().devices.map((d) => d.pad);
+
+  test.skipIf(todo)('K2.1: both pads drop, pad 0 returns first and P1 presses Start: pad 0 is P1\'s again, P2 re-claims pad 1, no swap', () => {
+    twoPads();
+    rig.disconnect(0); frame(); rig.disconnect(1); frame();
+    expect(g.paused).toBe(true);
+    rig.connect(0); frame(3);
+    expect(g.paused, 'a pad coming back alone does not resume').toBe(true);
+    tap(0, BTN.START);
+    expect(pads()[0], 'pad 0 is P1\'s again').toBe(0);
+    expect(pads()[1], 'P2 did not take pad 0').not.toBe(0);
+    rig.connect(1); frame(3);
+    tap(1, BTN.START);
+    expect(pads(), 'no swap').toEqual([0, 1]);
+  });
+
+  test.skipIf(todo)('K2.1: the disconnect pause clears only when the dropped pad\'s owner re-claims it', () => {
+    twoPads();
+    rig.disconnect(1); frame();
+    expect(g.paused).toBe(true);
+    tap(0, BTN.START);
+    expect(g.paused, 'Start on P1\'s pad does not clear P2\'s disconnect pause').toBe(true);
+    expect(pads()[0]).toBe(0);
+    rig.connect(1); frame(3);
+    expect(g.paused, 'reconnecting alone does not resume').toBe(true);
+    tap(1, BTN.START);
+    expect(g.paused, 'P2 re-claims its pad: resumed').toBe(false);
+    expect(pads()).toEqual([0, 1]);
+  });
+
+  test.skipIf(todo)('K2.1: a View press refused while paused does not burn the lone-pad join; after unpausing, View joins P2', () => {
+    rig.connect(0); frame();
+    g.paused = true; // paused from the keyboard (P)
+    tap(0, BTN.BACK);
+    expect(H.players().length, 'no join while paused').toBe(1);
+    g.paused = false; frame();
+    tap(0, BTN.BACK);
+    expect(H.players().length, 'View joins P2 after unpausing').toBe(2);
+    expect(H.state().devices[1].pad).toBe(0);
+  });
+
+  test.skipIf(todo)('K2.1: navigator.getGamepads() is called once per frame (1P, 2P, paused)', () => {
+    rig.connect(0); frame();
+    let c0 = rig.getGamepadsCalls;
+    frame(10);
+    expect(rig.getGamepadsCalls - c0, '1P').toBe(10);
+    setup();
+    twoPads();
+    c0 = rig.getGamepadsCalls;
+    frame(10);
+    expect(rig.getGamepadsCalls - c0, '2P').toBe(10);
+    g.paused = true;
+    c0 = rig.getGamepadsCalls;
+    frame(10);
+    expect(rig.getGamepadsCalls - c0, 'paused').toBe(10);
+  });
+});
+
+// =====================================================================
 // K3 shared camera, K3a zoom, K3b leash
 // =====================================================================
 describe('M11 K3 camera, zoom and leash', () => {
