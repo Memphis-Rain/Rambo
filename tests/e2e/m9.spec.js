@@ -360,15 +360,18 @@ const FIND_POND_PAIR = () => {
   return null;
 };
 
-/** In-page: mean colour of a 9x9 grid of points within +-24u of a tile centre, from ONE extract
- *  of the displayed stage (CSS px = worldOffset + toScreen, as verified in aim.spec.js). */
+/** In-page: mean colour of a 9x9 grid of points within +-20u of a tile centre (the inner half of
+ *  an 80u tile: band edges are feathered into neighbours, so the hue bar reads the tile's own
+ *  band), from ONE extract of the displayed stage (CSS px = worldOffset + toScreen, as verified
+ *  in aim.spec.js). */
 const TILE_COLOURS = ({ K, C }) => {
   const { pixels, width, height } = app.renderer.extract.pixels({ target: app.stage, frame: new PIXI.Rectangle(0, 0, W, H) });
   const res = width / W;
   const sample = (p) => {
     let r = 0, g = 0, b = 0, n = 0;
-    for (let dx = -32; dx <= 32; dx += 4) {
-      for (let dy = -32; dy <= 32; dy += 4) {
+    const half = CFG.TILE_SIZE / 4, step = half / 4;
+    for (let dx = -half; dx <= half; dx += step) {
+      for (let dy = -half; dy <= half; dy += step) {
         const s = toScreen(p.x + dx, p.y + dy);
         const x = Math.round((s.x + worldOffsetX) * res), y = Math.round((s.y + worldOffsetY) * res);
         if (x < 0 || y < 0 || x >= width || y >= height) continue;
@@ -399,6 +402,19 @@ test.describe('W5 water reddens', () => {
     const s = await game.eval(FIND_POND_PAIR);
     expect(s, 'a 3x3 pond tile with other water 5-7 tiles away').toBeTruthy();
     await parkAt(game, s.M);
+    // Spec b0cdc51: measured as drawn, with dither and CRT ON (the look players see).
+    await game.eval(() => {
+      RETRO.DITHER = true; RETRO.CRT = true;
+      if (typeof _applyRetroToggles === 'function') _applyRetroToggles();
+    });
+    await game.advance(0.3);
+    // Clean reference: the kill tile itself before any blood (same tile, same camera). A tile 5-7
+    // away isn't a safe reference after the fight: W5 diffusion (0.3/s per neighbour) spreads
+    // ~3 tiles in 15 s and can tint it band 1 along a narrow channel.
+    const before = await game.eval(({ h, K, C }) => ({ K: window[h.waterBlood](K.x, K.y), C: window[h.waterBlood](C.x, C.y) }), { h: HOOKS, ...s });
+    expect(before.K.band, 'the kill tile is clean water before the kills').toBe(0);
+    expect(before.C.band, 'the far tile is clean water before the kills').toBe(0);
+    const clean = (await game.eval(TILE_COLOURS, s)).K;
     await game.eval(KILL_AT, { K: s.K, n: 20 });
     // Corpses sink and dissolve (W4, <= 5 s); blood clouds fade (W3, ~8 s).
     await game.advance(15);
@@ -407,26 +423,19 @@ test.describe('W5 water reddens', () => {
       for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) bands.push(window[h.waterBlood](K.x + a * ts, K.y + b * ts).band);
       return { bands, centre: window[h.waterBlood](K.x, K.y).band, clean: window[h.waterBlood](C.x, C.y) };
     }, { h: HOOKS, ...s });
-    testInfo.annotations.push({ type: 'W5 bands', description: `kill tile + neighbours: ${r.bands.join(' ')}; reference ${JSON.stringify(r.clean)}` });
+    testInfo.annotations.push({ type: 'W5 bands', description: `kill tile + neighbours: ${r.bands.join(' ')}; tile 5-7 away after 15 s ${JSON.stringify(r.clean)}` });
     expect(Math.min(...r.bands), `bands around the kills: ${r.bands.join(' ')}`).toBeGreaterThanOrEqual(2);
-    expect(r.clean.band, 'the reference tile is clean water (band 0)').toBe(0);
-    // Spec b0cdc51: measured as drawn, with dither and CRT ON (the look players see).
-    await game.eval(() => {
-      RETRO.DITHER = true; RETRO.CRT = true;
-      if (typeof _applyRetroToggles === 'function') _applyRetroToggles();
-    });
-    await game.advance(0.3);
-    const px = await game.eval(TILE_COLOURS, s);
+    const px = { K: (await game.eval(TILE_COLOURS, s)).K, C: clean };
     await game.snap(testInfo, 'w5-red-pond.png');
     const red = (q) => q.r - (q.g + q.b) / 2;
-    const summary = `red tile rgb(${px.K.r.toFixed(0)},${px.K.g.toFixed(0)},${px.K.b.toFixed(0)}) redness ${red(px.K).toFixed(1)}; clean tile rgb(${px.C.r.toFixed(0)},${px.C.g.toFixed(0)},${px.C.b.toFixed(0)}) redness ${red(px.C).toFixed(1)}`;
+    const summary = `red tile rgb(${px.K.r.toFixed(0)},${px.K.g.toFixed(0)},${px.K.b.toFixed(0)}) redness ${red(px.K).toFixed(1)}; same tile before rgb(${px.C.r.toFixed(0)},${px.C.g.toFixed(0)},${px.C.b.toFixed(0)}) redness ${red(px.C).toFixed(1)}`;
     testInfo.annotations.push({ type: 'W5 pixels', description: summary });
     console.log(`W5: ${summary}`);
     expect(px.K.n, 'samples on screen').toBeGreaterThan(40);
     expect(px.C.n, 'samples on screen').toBeGreaterThan(40);
     expect(px.C.b, `clean water reads blue (${summary})`).toBeGreaterThan(px.C.r);
     expect(red(px.K) - red(px.C), `band >= 2 water is visibly redder (${summary})`).toBeGreaterThanOrEqual(20);
-    // Spec b0cdc51 hue bar on the averaged tile colour: band 2 -> R >= 1.4 x G and >= 1.4 x B;
+    // Spec b0cdc51 hue bar on the averaged tile-centre colour: band 2 -> R >= 1.4 x G and >= 1.4 x B;
     // band 3+ -> >= 1.8x (rgb(77,77,46) "olive" fails both).
     const k = r.centre >= 3 ? 1.8 : 1.4;
     expect(px.K.r, `band ${r.centre}: R >= ${k} x G (${summary})`).toBeGreaterThanOrEqual(k * px.K.g);
