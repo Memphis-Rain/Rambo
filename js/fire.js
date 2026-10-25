@@ -24,7 +24,7 @@ const _burnStats = { ignitions: 0, extinguished: 0 };
 let _burnN = 0;            // enemies burning (recounted every updateFire)
 let _fireFrame = 0;
 
-function spawnFlame(x, y, angle, wep) {
+function spawnFlame(x, y, angle, wep, by = 0) {
   if (flames.length >= CFG.MAX_FLAMES) return null;
   const f = _flameFree.pop() || {};
   const c = Math.cos(angle), s = Math.sin(angle);
@@ -35,6 +35,7 @@ function spawnFlame(x, y, angle, wep) {
   f.v0 = 2 * CFG.FLAME_RANGE / CFG.FLAME_LIFE; // linear slow-down: reach = v0 x life / 2
   f.vx = c * f.v0; f.vy = s * f.v0;
   f.dmg = wep.dmg;
+  f.by = by; // M11 K6: the shooter (players[] index)
   f.seed = (Math.random() * 1e9) | 0;
   flames.push(f);
   return f;
@@ -59,8 +60,9 @@ function _panicPick(e) {
   e.panicT = randRange(CFG.PANIC_MIN, CFG.PANIC_MAX);
 }
 
-// F2: light (or refresh) an enemy's burn; false when the cap holds it off
-function igniteEnemy(e) {
+// F2: light (or refresh) an enemy's burn; false when the cap holds it off.
+// by = whose fire it is (M11 K6 kill credit for the burn)
+function igniteEnemy(e, by = 0) {
   if (!e || e.dead || waterTileAt(e.x, e.y)) return false; // water: can't catch fire
   if (!(e.burnT > 0)) {
     if (_burnN >= CFG.BURN_MAX) return false;
@@ -72,6 +74,7 @@ function igniteEnemy(e) {
     playSound('scream', 0.35);
   }
   e.burnT = CFG.BURN_TIME;
+  e.burnBy = by;
   return true;
 }
 
@@ -94,7 +97,9 @@ function burnDamage(e, d) {
   if (e.dead) return;
   e.hp -= d; // no hit flash: the flames are the feedback (no white strobe every tick)
   spawnDamageNumber(e, e.x, e.y, Math.round(d), DMG_NORMAL, 22 * e.size + 16);
+  dmgBy = e.burnBy || 0; // M11 K6
   if (e.hp <= 0) killEnemy(e, e.panicDir || 0, SRC_FIRE);
+  dmgBy = 0;
 }
 
 // A flame lick: contact damage without the bullet path's blood spray, stun
@@ -153,7 +158,7 @@ function _updateFlames(dt) {
       const tree = o.type === 'tree' || o.type === 'pine' || o.type === 'deadtree';
       if (tree && o.radius) {
         const cx = f.x - o.x, cy = f.y - o.y, cr = o.radius * 0.6;
-        if (cx * cx + cy * cy < cr * cr) envFlameHeat(o);
+        if (cx * cx + cy * cy < cr * cr) { dmgBy = f.by; envFlameHeat(o); dmgBy = 0; } // M11 K6: whose tree fire
       }
       const hr = envBulletRadius(o);
       if (!hr || len2 === 0) continue;
@@ -171,11 +176,13 @@ function _updateFlames(dt) {
     if (nearE || nearO) {
       f.x = px + dx * nearT; f.y = py + dy * nearT;
       if (nearE) {
+        dmgBy = f.by; // M11 K6
         flameHit(nearE, f.dmg, Math.atan2(f.dirY, f.dirX));
-        igniteEnemy(nearE);
+        dmgBy = 0;
+        igniteEnemy(nearE, f.by);
       } else {
         const tt = nearO.type;
-        if (tt === 'tree' || tt === 'pine' || tt === 'deadtree') envFlameHeat(nearO);
+        if (tt === 'tree' || tt === 'pine' || tt === 'deadtree') { dmgBy = f.by; envFlameHeat(nearO); dmgBy = 0; }
       }
       flames.splice(i, 1); _flameFree.push(f);
       continue;
@@ -219,6 +226,7 @@ function _updateBurning(dt) {
       const dx = o.x - e.x, dy = o.y - e.y;
       if (dx * dx + dy * dy >= rr * rr || o._contactF === frame) continue;
       o._contactF = frame;
+      o._contactBy = e.burnBy || 0; // M11 K6: a spread burn is the igniter's
       o.contactT = (o.contactT || 0) + dt;
     }
   }
@@ -229,7 +237,7 @@ function _updateBurning(dt) {
     if (o._contactF !== frame || o.burnT > 0) { o.contactT = 0; continue; }
     if (o.contactT >= CFG.CONTACT_IGNITE_T - 1e-9) { // one roll per 0.3 s of touching
       o.contactT = 0;
-      if (Math.random() < CFG.CONTACT_IGNITE_P) igniteEnemy(o);
+      if (Math.random() < CFG.CONTACT_IGNITE_P) igniteEnemy(o, o._contactBy || 0);
     }
   }
 }

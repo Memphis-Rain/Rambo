@@ -118,12 +118,21 @@ const SP_BOOT = 0x221a14, SP_OUTLINE = 0x120c08, SP_OUTLINE_BOSS = 0x6a0000, SP_
 const SP_EYE = 0x100c0c;
 
 // M11 K4: player palettes, indexed by _P.pal (0 = P1, 1 = P2, by p.num === 2).
-// P1 = black tank top + red headband (unchanged). P2 = a darker navy vest
-// (lower luma than P1's, and a cool hue so the two read apart at x1) and a
-// brighter scarlet bandana with a deep-red knot.
-const _spPalVest  = [0x2c2c28, 0x1a2030];  // torso
-const _spPalVestS = [0x1c1c18, 0x0e121c];  // torso back shade
-const _spPalVestL = [0x48483e, 0x2e3a52];  // torso top highlight
+// P1 = near-black tank top over olive trousers + red headband (unchanged):
+// a DARK top over MID legs. P2 inverts that value order: a light steel-blue
+// camo vest (luma ~150 vs P1's ~44, cool hue vs P1's neutral) over dark
+// slate trousers (luma ~57, blue-grey vs P1's olive ~85), so the two read
+// apart at x1 by the torso block alone. The vest's low saturation and value
+// keep it off the terrain too: bluer than grass/hill (luma ~132, green),
+// darker than sand (~176), twice the value of water (~67, saturated teal).
+// P2 keeps a red bandana (brighter scarlet, deep-red knot): it pops on the
+// pale vest, where P1's sits on black.
+const _spPalVest  = [0x2c2c28, 0x8898b0];  // torso
+const _spPalVestS = [0x1c1c18, 0x5e6c84];  // torso back shade
+const _spPalVestL = [0x48483e, 0xaab8cc];  // torso top highlight
+const _spPalCamo  = [0, 0x4c5a70];         // P2 vest camo blotches (P1: none)
+const _spPalPants  = [0x4e5e38, 0x343846]; // trousers (P1 = _spPants[SP_K_PLAYER])
+const _spPalPantsS = [0x3a4628, 0x242632]; // back leg
 const _spPalBand  = [0xd02020, 0xff3a28];  // headband + middle tail pixel
 const _spPalBandS = [0xb01818, 0xa00c10];  // tail ends
 
@@ -788,6 +797,7 @@ const _P = {
   blink: 0, visor: 0, tail: 0, glowTip: 0,
   flail: -1,                           // F2 panic: 0..3 arms-up flail frame, -1 off (no gun)
   pal: 0,                              // M11 K4: player palette (0 P1, 1 P2); read for SP_K_PLAYER only
+  down: false,                         // M11 K5: downed player (unarmed, eyes open); set only around one build
 };
 // Outputs (art px, local, post-flip)
 const _PO = { muzX: 0, muzY: 0, hasMuz: false, scopeX: 0, scopeY: 0, top: -15 };
@@ -815,9 +825,9 @@ function _spBuildPuppet() {
   _PO.hasMuz = false;
   const ca = Math.cos(P.aim), sa = Math.sin(P.aim);
   _pbFlip = P.flip !== 0 ? P.flip < 0 : ca < 0;
-  const dead = P.dead, curl = P.curl;
-  const away = !dead && !curl && sa < -0.45;
-  const front = dead || sa > 0.15;
+  const dead = P.dead, curl = P.curl, down = P.down;
+  const away = !dead && !down && !curl && sa < -0.45;
+  const front = dead || down || sa > 0.15;
   let gdx = Math.abs(ca), gdy = sa;
   if (P.gunOverride) { gdx = Math.cos(P.gunAng); gdy = Math.sin(P.gunAng); }
   const as = s > 1.6 ? Math.round(s) : 1;
@@ -836,13 +846,13 @@ function _spBuildPuppet() {
   const torsoS = isPlayer ? _spPalVestS[P.pal] : bare ? SP_SKIN_S : uniS;
   const torsoL = isPlayer ? _spPalVestL[P.pal] : bare ? SP_SKIN_L : uniL;
   const sleeve = (bare || isPlayer) ? SP_SKIN : uni, sleeveS = (bare || isPlayer) ? SP_SKIN_S : uniS;
-  const pantsC = k === SP_K_BERSERKER ? 0x3a3028 : pants;
-  const pantsSC = k === SP_K_BERSERKER ? 0x2a221c : pantsS;
+  const pantsC = k === SP_K_BERSERKER ? 0x3a3028 : isPlayer ? _spPalPants[P.pal] : pants;
+  const pantsSC = k === SP_K_BERSERKER ? 0x2a221c : isPlayer ? _spPalPantsS[P.pal] : pantsS;
   const bigFists = k === SP_K_HEAVY || k === SP_K_BERSERKER || k === SP_K_TANK;
 
   // ---- weapon selection ----
   let gl = 0, gt = 1, gc = 0x26262a, tip = 0;
-  if (!dead) {
+  if (!dead && !down) {
     if (isPlayer) {
       const v = _spWeaponVis[P.weapon] || _spWeaponVis[0];
       gl = v[0]; gt = v[1]; gc = v[2]; tip = v[3];
@@ -907,7 +917,7 @@ function _spBuildPuppet() {
   }
 
   // F1 flamethrower: twin fuel tanks on the back (behind the torso)
-  const tanks = isPlayer && !curl && !dead && P.weapon === 7;
+  const tanks = isPlayer && !curl && !dead && !down && P.weapon === 7;
   if (tanks && !away) _spFuelTanks(Math.round(-hw * s) - 2, Math.round(-11 * s) + bob);
 
   // 3. legs
@@ -1054,6 +1064,11 @@ function _spGun(Hx, Hy, Ex, Ey, T, gc, tip, gdx, gdy, k) {
 function _spTorsoDetails(k, s, bob, hw, tY0, tY1, front, away) {
   const px = Math.max(1, Math.round(s));
   if (k === SP_K_PLAYER) {
+    // M11 K4: P2 camo vest, two dark blotches clear of the bandolier
+    if (_P.pal === 1) {
+      _pr(Math.round(1 * s), tY0 + px, 2 * px, px, _spPalCamo[1], 0);
+      _pr(Math.round(-2 * s), tY0 + 3 * px, 2 * px, px, _spPalCamo[1], 0);
+    }
     // bandolier: diagonal ammo belt with brass rounds
     const x0 = Math.round(-hw * s), x1 = Math.round((hw - 1) * s);
     const n = Math.max(1, x1 - x0);
@@ -1332,7 +1347,7 @@ function _spWade(ent, X, waterY, cut, s, hw) {
  * bubble and ripples excluded), and waterY = the drawn waterline's screen y
  * while ent.submerge > 0, else null. null when ent is not drawn.
  */
-function spDrawnBounds(ent) {
+function spDrawnBounds(ent, out) { // out: optional result object (no allocation)
   if (!ent) return null;
   const isP2 = ent !== player && ent === _sp.p2Ent;   // M11 K2
   const g = ent === player ? _sp.playerG : isP2 ? _sp.p2G : ent._spG;
@@ -1349,7 +1364,9 @@ function spDrawnBounds(ent) {
     if (Y < y0) y0 = Y;
     if (Y > y1) y1 = Y;
   }
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0, waterY: (ent.submerge || 0) > 0 ? g._waterY : null };
+  const res = out || {};
+  res.x = x0; res.y = y0; res.w = x1 - x0; res.h = y1 - y0; res.waterY = (ent.submerge || 0) > 0 ? g._waterY : null;
+  return res;
 }
 
 // =====================================================================
@@ -1394,6 +1411,7 @@ function _spRenderPlayer(p, g, gh, pal) {
   P.glowTip = ((gameTime * 8) | 0) & 1;
   const wep = WEAPONS[P.weapon] || WEAPONS[0];
   if (wep.spinUp && p.spinUp > 0) P.spin = (gameTime * (8 + p.spinUp * 30)) | 0;
+  if (p.state === 'down') { _spRenderDowned(p, g, X, Y); return; } // M11 K5
 
   // W2: wading crop (art px rows hidden above the feet); no shadow in water
   const cut = _spWadeCut(p, SP_K_PLAYER, 1);
@@ -1469,6 +1487,45 @@ function _spRenderPlayer(p, g, gh, pal) {
     g._tipY = g.y + _PO.muzY * ART;
     g._tipValid = true;
   }
+}
+
+// M11 K5: a downed player lies on the ground like a corpse (a quarter turn
+// about the feet, head toward the side faced when going down, front to the
+// camera), unarmed with eyes open. Alive: the torso + head breathe 1 art px
+// along the body (slow 2-step), and a short leg / arm twitch fires every
+// ~2.7 s. Underneath, a blood pool on the ground layer spreads over the first
+// 6 s of the down timer (a ripple ring instead while in water). Sorted like a
+// corpse (depthKey - 1). No allocations: the pool is two opaque row fills.
+const SP_DOWN_POOL = 0x5a0a0a, SP_DOWN_POOL_L = 0x861414;
+function _spRenderDowned(p, g, X, Y) {
+  const P = _P, A = ART;
+  // a new down (the timer was reset upward, or first sight): freeze the side
+  if (!(p.downT <= g._dnT)) g._dnDir = Math.cos(p.angle || 0) < 0 ? -1 : 1;
+  g._dnT = p.downT;
+  const dir = g._dnDir;
+  g.zIndex = depthKey(p.x, p.y) - 1;
+  const cx = X + dir * 7 * A;                       // under the torso
+  if ((p.submerge || 0) > 0) _spWade(p, cx, Y, 1, 1, 6);
+  else {
+    const el = Math.max(0, (CFG.COOP_DOWN_TIME || 8) - (p.downT || 0));
+    const rx = 3 + Math.round(4 * Math.min(1, el / 6)), ry = Math.max(1, Math.round(rx * 0.45));
+    const sg = _sp.groundG, seed = (p.num | 0) * 13;
+    _spEllRows(sg, cx, Y + A, rx, ry, seed, true);
+    sg.fill(SP_DOWN_POOL);
+    _spEllRows(sg, cx - dir * A, Y + A, rx - 2, Math.max(1, ry - 1), seed + 5, true);
+    sg.fill(SP_DOWN_POOL_L);
+  }
+  P.down = true; P.flip = dir; P.aim = dir > 0 ? 0 : Math.PI; P.spin = -1;
+  P.bob = (((gameTime * 1.1) | 0) & 1) ? -1 : 0;
+  const tw = (gameTime + (p.num | 0) * 0.9) % 2.7;
+  P.walkF = tw < 0.07 ? 0 : tw < 0.14 ? 2 : -1;
+  _spBuildPuppet();
+  P.down = false;
+  g.position.set(X, Y);
+  g.rotation = dir * (Math.PI / 2);
+  const flash = p.hitFlash > 0 && (((p.hitFlash * 30) | 0) & 1);
+  _pflush(g, SP_OUTLINE, flash ? 1 : 0, false, 0);
+  _spKeepBounds(g, Y);
 }
 
 // =====================================================================

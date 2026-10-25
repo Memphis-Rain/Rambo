@@ -384,6 +384,7 @@ function _envTopple(r, ux, uy, delay, byPlayer) {
   r.fallDelay = delay; // shock front; E8 stagger is added when it gets a slot
   r.snapped = false;   // the trunk snaps (stump-only collision) when the fall starts
   r.byPlayer = !!byPlayer;
+  r.creditBy = byPlayer ? dmgBy : 0; // M11 K6: whose fall it is (kill credit)
   r.logLen = Math.max(20, (r.height || 50) * CFG.ENV_LOG_LEN);
   if (!_envActivateTopple(r) && !r.queued) { r.queued = true; _envQueue.push(r); }
 }
@@ -474,14 +475,20 @@ function _envLand(r) {
       const side = (e.x - r.x) * -uy + (e.y - r.y) * ux;
       const ang = Math.atan2(side >= 0 ? ux : -ux, side >= 0 ? -uy : uy);
       envNoCredit = !r.byPlayer;
+      dmgBy = r.creditBy || 0;
       damageEnemy(e, CFG.ENV_FALL_ENEMY_DMG, ang, SRC_BULLET);
       envNoCredit = false;
+      dmgBy = 0;
     }
   }
   const pr = rr + 10;
   for (let i = 0; i < players.length; i++) { // M11: every standing player under it
     const p = players[i];
-    if (playerStanding(p) && envSegDist2(p.x, p.y, r) < pr * pr) damagePlayer(CFG.ENV_FALL_PLAYER_DMG, p);
+    if (!playerStanding(p) || envSegDist2(p.x, p.y, r) >= pr * pr) continue;
+    // K2.2: a fall credited to a player spares the OTHER player while friendly
+    // fire is off (self-damage as in 1P; uncredited falls hit everyone)
+    if (r.byPlayer && i !== (r.creditBy || 0) && !CFG.COOP_FRIENDLY_FIRE) continue;
+    damagePlayer(CFG.ENV_FALL_PLAYER_DMG, p);
   }
 }
 
@@ -616,11 +623,13 @@ function envFlameHeat(o) {
   const r = _envRecord(o);
   if ((r.state !== 'standing' && r.state !== 'scorched') || r.charred || r.fire > 0) return;
   r.heatSeen = gameTime;
+  r.heatBy = dmgBy; // K2.3: the latest heater lights it (the flame's f.by)
   if (!r.heating) { r.heating = true; _envHeating.push(r); }
 }
 
-function _envIgniteTree(r) {
+function _envIgniteTree(r, by = dmgBy) {
   if (_envBurning.length >= CFG.TREE_BURN_MAX) return false;
+  r.fireBy = by; // M11 K6: whose fire (spread keeps it)
   r.fire = CFG.TREE_BURN_S * randRange(0.9, 1.1);
   r.heat = 1; r.spreadT = 0;
   _envBurning.push(r);
@@ -647,7 +656,7 @@ function _updateEnvFire(dt) {
     if (!done) {
       if (gameTime - r.heatSeen <= 0.1) r.heat = Math.min(1, r.heat + dt / CFG.TREE_IGNITE_S);
       else r.heat = Math.max(0, r.heat - dt * 0.5);
-      if (r.heat >= 1 - 1e-9) { if (_envIgniteTree(r)) done = true; else r.heat = 1; }
+      if (r.heat >= 1 - 1e-9) { if (_envIgniteTree(r, r.heatBy || 0)) done = true; else r.heat = 1; }
       else if (r.heat <= 0) done = true;
     }
     if (done) { r.heating = false; _envHeating[i] = _envHeating[_envHeating.length - 1]; _envHeating.pop(); }
@@ -673,7 +682,7 @@ function _updateEnvFire(dt) {
           if (k !== ENVK_TREE && k !== ENVK_DEAD) continue;
           const q = o._envAt === _envEpoch ? o._env : envObjState(o);
           if (q === r || (q && (q.fire > 0 || q.charred || (q.state !== 'standing' && q.state !== 'scorched')))) continue;
-          if (Math.random() < pStep) _envIgniteTree(_envRecord(o));
+          if (Math.random() < pStep) _envIgniteTree(_envRecord(o), r.fireBy || 0);
         }
       }
       // enemies under the canopy burn
@@ -683,9 +692,11 @@ function _updateEnvFire(dt) {
         if (e.dead) continue;
         const dx = e.x - r.x, dy = e.y - r.y;
         if (dx * dx + dy * dy > cr * cr) continue;
-        igniteEnemy(e);
+        igniteEnemy(e, e.burnT > 0 ? e.burnBy || 0 : r.fireBy || 0); // M11 K6
         e.hp -= CFG.CANOPY_FIRE_DPS * dt;
+        dmgBy = r.fireBy || 0; // the canopy fire is the tree's (whoever lit it), even where the enemy can't catch fire (water)
         if (e.hp <= 0) killEnemy(e, Math.atan2(dy, dx), SRC_FIRE);
+        dmgBy = 0;
       }
       if (r.fire > 0) continue;
       _envBurnOut(r);

@@ -271,10 +271,13 @@ function initInput() {
 function update(dt) {
   gameTime += dt;
   for (let i = 0; i < players.length; i++) updatePlayer(dt, players[i]); // M11 K2: each with its own controls
+  coopUpdateDown(dt); // M11 K5: downed timers, revives
   processPendingDamage();
   updateEnemies(dt);
   updateBullets(dt);
+  dmgBy = 0;             // M11 K6: no stale shooter for later damage (env, fire)
   updateGrenades(dt);    // M9 N1
+  dmgBy = 0;
   updateFire(dt);        // M9 F1-F2: flames, ground fires, burning enemies
   updateWading(dt);      // M9 W2
   updateWater(dt);       // M9 W3-W5: blood clouds, blood concentration (4 Hz)
@@ -463,6 +466,7 @@ function resetRound() {
     sprite.destroy(true);
   }
   chunkCache.clear();
+  clearChunkPlaceholders(); // K2.1
   clearWaterBakes();
   envObjects.length = 0;
   envChunks.clear();

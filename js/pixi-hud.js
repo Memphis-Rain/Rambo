@@ -64,6 +64,41 @@ const HUD_HP_COLORS = [0x38d838, 0xf0b020, 0xe82020];
 const HUD_HP_HI = [0xa8ffa0, 0xffe080, 0xff8080];
 const HUD_SPECIAL_CYCLE = [0xffe040, 0xff9020, 0xff3030, 0xffffff]; // stepped, 80 ms each
 
+// M11 K4/K5 co-op HUD. Everything below is built lazily the first time a P2
+// exists and stays hidden in 1P, so the 1P HUD is unchanged (Q4).
+const HUD_PAN_H2 = 156;                // 2P panel: + a tag / score / kills / grenade row
+const HUD_PCOL = [0xffd830, 0x40d8ff]; // per-player accent: P1 yellow, P2 cyan
+const HUD_STATS_MAX_H = 152;           // the stats panel's height with the combo row
+const HUD_STYLE_MM_DIR_P = [
+  { width: 2, color: HUD_PCOL[0], alpha: 0.9 },
+  { width: 2, color: HUD_PCOL[1], alpha: 0.9 },
+];
+const HUD_STYLE_PANEL_DIM = { color: 0x05070c, alpha: 0.78 };
+const HUD_DOWN_COLS = [0xffa020, 0xff3030];
+let _hud2 = null;                       // co-op elements (null until a P2 exists)
+const _hudCoop = { on: false };
+const _hudV = { x: 0, y: 0 };           // worldToView out (no per-frame allocation)
+// What was drawn this frame, for hudBoxes()
+const _hudLayout = {
+  boss: null, bossBox: { x: 0, y: 0, w: 0, h: 0 }, stats: { x: 0, y: 0, w: 0, h: 0 }, // K4 hudBoxes
+  set: false, coop: false, panY: 0, slotRowY: 0, nVis: 0,
+  gx: 0, gy: 0, gw: 0, hint: 0, p2x: 0, p2y: 0, mmX: 0, mmY: 0, mmSize: 0
+};
+
+// K5 ring blocks: n 4x4 blocks on radius r, clockwise from 12 o'clock
+// (top-left corner offsets, interleaved x, y)
+function _hudRingPts(n, r) {
+  const a = new Int16Array(2 * n);
+  for (let i = 0; i < n; i++) {
+    const t = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+    a[2 * i] = Math.round(Math.cos(t) * r) - 2;
+    a[2 * i + 1] = Math.round(Math.sin(t) * r) - 2;
+  }
+  return a;
+}
+const HUD_DOWN_RING = _hudRingPts(16, 20); // 8 s timer, empties
+const HUD_REV_RING = _hudRingPts(20, 28);  // 1.5 s revive progress, fills
+
 // HUD elements cache (persistent UI elements)
 const hudElements = {
   healthBar: null,       // bottom-left panel (panel + weapon row + HP bar + weapon slots)
@@ -328,9 +363,16 @@ function renderPixiHUD() {
   if (!p) return;
   const hpRatio = p.hp / p.maxHp;
   const Wi = Math.floor(W), Hi = Math.floor(H);
+  // M11 K4: the 2P HUD shows while a P2 exists (built on first use)
+  const p2 = players.length > 1 ? players[1] : null;
+  if (!!p2 !== _hudCoop.on) _hudCoopSet(!!p2);
 
   renderHudBoss(Wi);
   renderHudPlayerPanel(p, hpRatio, Wi, Hi);
+  if (p2) {
+    renderHudP2Panel(p2, Wi, Hi);
+    renderHudCoopMarks();
+  }
   renderHudStats(Wi);
 
   // =========================================================
@@ -349,7 +391,7 @@ function renderPixiHUD() {
   // =========================================================
   // VIGNETTES
   // =========================================================
-  renderPixiVignettes(hpRatio);
+  renderPixiVignettes(p2 ? _hudVignetteHp() : hpRatio); // K4: 2P -> the lowest standing player
 
   // =========================================================
   // FPS DEBUG (only visible when F3 is on)
@@ -418,12 +460,23 @@ function renderHudBoss(Wi) {
     if (c.bossKey[0] !== 0) { g.clear(); c.bossKey.fill(0); }
     hudElements.bossNameText.visible = false;
     hudElements.bossHPText.visible = false;
+    _hudLayout.boss = null;
     return;
   }
 
   const bw = HUD_BOSS_SEGS * HUD_BOSS_SEG_W + (HUD_BOSS_SEGS - 1) * 2;
-  const bx = Math.floor((Wi - bw) / 2), by = 38, bh = 16;
+  let bx = Math.floor((Wi - bw) / 2);
+  const by = 38, bh = 16;
+  // K4: on a narrow screen (800x600) its panel (bx - 14 .. bx + bw + 14) would
+  // run into the stats box: centre it in the space left of the box instead
+  const statsL = Wi - HUD_STATS_W - 12;
+  const shifted = bx + bw + 14 > statsL - 8;
+  if (shifted) bx = 12 + 14 + Math.max(0, Math.floor((statsL - 8 - 12 - (bw + 28)) / 2));
+  const tx = shifted ? bx + (bw >> 1) : Wi >> 1;
   const hasShield = boss.maxShieldHp > 0 && boss.shieldHp > 0;
+  const bp = _hudLayout.bossBox; // hudBoxes(): the panel (name text inside), outline included
+  bp.x = bx - 15; bp.y = 7; bp.w = bw + 30; bp.h = (hasShield ? 66 : 58) + 2;
+  _hudLayout.boss = bp;
   const lit = hudSegsLit(boss.hp / boss.maxHp, HUD_BOSS_SEGS);
   const shieldW = hasShield ? Math.round(bw * (boss.shieldHp / boss.maxShieldHp)) : -1;
 
@@ -445,7 +498,7 @@ function renderHudBoss(Wi) {
     c.bossName = name;
     hudElements.bossNameText.text = name.toUpperCase();
   }
-  hudElements.bossNameText.x = Wi >> 1;
+  hudElements.bossNameText.x = tx;
   hudElements.bossNameText.y = 14;
   hudElements.bossNameText.visible = true;
 
@@ -455,7 +508,7 @@ function renderHudBoss(Wi) {
     c.bossHp = hpNow; c.bossMaxHp = boss.maxHp;
     hudElements.bossHPText.text = `${hpNow} / ${boss.maxHp}`;
   }
-  hudElements.bossHPText.x = Wi >> 1;
+  hudElements.bossHPText.x = tx;
   hudElements.bossHPText.y = by + (bh >> 1);
   hudElements.bossHPText.visible = true;
 }
@@ -465,20 +518,22 @@ function renderHudBoss(Wi) {
 // =========================================================
 function renderHudPlayerPanel(p, hpRatio, Wi, Hi) {
   const c = _hudCache;
-  const wep = WEAPONS[p.weapon];
+  const co = _hudCoop.on; // M11 K4: 2P panel (taller, grenades inside)
   const panX = 12;
   const slotRowY = Hi - HUD_SLOT_H - 12;
-  const panY = slotRowY - 10 - HUD_PAN_H;
+  const panY = slotRowY - 10 - (co ? HUD_PAN_H2 : HUD_PAN_H);
   const barX = panX + HUD_PAD + 2;
 
   const hpLit = hudSegsLit(hpRatio, HUD_HP_SEGS);
   const hpIdx = hpRatio > 0.6 ? 0 : hpRatio > 0.3 ? 1 : 2;
-  // B8: show every unlocked slot that fits left of the minimap; on narrow
-  // screens the visible window scrolls so the selected weapon is always shown
+  // B8: show every unlocked slot that fits left of the minimap (2P: left of
+  // the P2 panel); on narrow screens the visible window scrolls so the
+  // selected weapon is always shown
   const slotStep = HUD_SLOT_W + HUD_SLOT_GAP;
-  let fit = Math.floor((Wi - panX - 280) / slotStep);
+  const slotRoom = co ? Wi - HUD_PAN_W - 32 - panX : Wi - panX - 280;
+  let fit = Math.floor(slotRoom / slotStep);
   // Not all fit: reserve room for the "+N (Q/E)" hint so it can't reach the minimap
-  if (unlockedWeapons > fit) fit = Math.floor((Wi - panX - 280 - 96) / slotStep);
+  if (unlockedWeapons > fit) fit = Math.floor((slotRoom - 96) / slotStep);
   fit = Math.max(4, fit);
   const maxVisible = Math.min(unlockedWeapons, fit);
   const slot0 = clamp(p.weapon - maxVisible + 1, 0, unlockedWeapons - maxVisible);
@@ -493,11 +548,14 @@ function renderHudPlayerPanel(p, hpRatio, Wi, Hi) {
   // --- Panel, HP bar, slots, unlock progress (rebuilt on change only) ---
   const k = c.panelKey;
   if (_hudKey(k, 0, Hi) | _hudKey(k, 1, hpLit) | _hudKey(k, 2, hpIdx) | _hudKey(k, 3, p.weapon) |
-      _hudKey(k, 4, maxVisible) | _hudKey(k, 5, nextSegs) | _hudKey(k, 6, 1) | _hudKey(k, 7, slot0)) {
+      _hudKey(k, 4, maxVisible) | _hudKey(k, 5, nextSegs) | _hudKey(k, 6, co ? 2 : 1) | _hudKey(k, 7, slot0)) {
     const g = hudElements.healthBar;
     g.clear();
-    hudPanel(g, panX, panY, HUD_PAN_W, HUD_PAN_H);
-    hudDivider(g, panX + 6, panY + 30, HUD_PAN_W - 12);
+    if (co) _hudCoopFrame(g, panX, panY, 0);
+    else {
+      hudPanel(g, panX, panY, HUD_PAN_W, HUD_PAN_H);
+      hudDivider(g, panX + 6, panY + 30, HUD_PAN_W - 12);
+    }
     hudSegBar(g, barX, panY + 46, HUD_HP_SEGS, HUD_SEG_W, 12, hpLit, HUD_HP_COLORS[hpIdx], HUD_HP_HI[hpIdx], 0x2a1010);
 
     // Weapon slots
@@ -518,85 +576,19 @@ function renderHudPlayerPanel(p, hpRatio, Wi, Hi) {
     }
   }
 
-  // --- Weapon name + ammo ---
-  if (c.weapon !== p.weapon) {
-    c.weapon = p.weapon;
-    hudElements.weaponText.text = wep.name.toUpperCase();
-  }
-  hudElements.weaponText.x = panX + HUD_PAD;
-  hudElements.weaponText.y = panY + 10;
-
-  const ammoKey = p.reloading ? -1 - Math.round(p.reloadTimer * 10) : wep.mag === Infinity ? 1e9 : p.magAmmo * 10000 + wep.mag;
-  if (c.ammoKey !== ammoKey) {
-    c.ammoKey = ammoKey;
-    hudElements.ammoText.text = p.reloading
-      ? `RELOADING ${p.reloadTimer.toFixed(1)}s`
-      : wep.mag === Infinity ? 'INF' : `${p.magAmmo} / ${wep.mag}`;
-  }
-  _hudTint(hudElements.ammoText, p.reloading ? 0xff8800
-    : p.magAmmo <= Math.ceil(wep.mag * 0.25) ? 0xff4444 : 0xbbbbbb);
-  hudElements.ammoText.x = panX + HUD_PAN_W - HUD_PAD;
-  hudElements.ammoText.y = panY + 14;
+  _hudPanelBody(p, hudElements, c, panX, panY, barX, hpIdx);
 
   // Right of the ammo panel; on narrow screens (would reach the 240 px
-  // minimap) it sits above the panel instead
-  const gx = panX + HUD_PAN_W + 6, gw = 32 + (CFG.GRENADE_AMMO_MAX || 6) * HUD_GREN_STEP;
-  const gFits = gx + gw <= Wi - 240 - 18;
-  renderHudGrenades(p, gFits ? gx : panX, gFits ? panY : panY - HUD_GREN_H - 6);
-
-  // --- HP label (blinks white/red when low) ---
-  const hpNow = Math.ceil(p.hp);
-  if (c.hp !== hpNow || c.maxHp !== p.maxHp) {
-    c.hp = hpNow; c.maxHp = p.maxHp;
-    hudElements.hpText.text = `HP ${hpNow}/${p.maxHp}`;
+  // minimap) it sits above the panel instead. 2P: inside the panel, bottom-right
+  const gw = 32 + (CFG.GRENADE_AMMO_MAX || 6) * HUD_GREN_STEP;
+  let gx, gy;
+  if (co) { gx = panX + HUD_PAN_W - 8 - gw; gy = panY + 122; } else {
+    const gx0 = panX + HUD_PAN_W + 6;
+    const gFits = gx0 + gw <= Wi - 240 - 18;
+    gx = gFits ? gx0 : panX; gy = gFits ? panY : panY - HUD_GREN_H - 6;
   }
-  const lowBlink = hpIdx === 2 && (Math.floor(gameTime / 0.25) & 1) === 1;
-  _hudTint(hudElements.hpText, lowBlink ? 0xffffff : HUD_HP_COLORS[hpIdx]);
-  hudElements.hpText.x = barX;
-  hudElements.hpText.y = panY + 35;
-  hudElements.hpText.visible = true;
-
-  // --- Shield bar ---
-  const shieldRatio = p.shield / p.maxShield;
-  const shLit = hudSegsLit(shieldRatio, HUD_SH_SEGS);
-  const sbY = panY + 76;
-  const sk = c.shieldKey;
-  if (_hudKey(sk, 0, sbY) | _hudKey(sk, 1, shLit) | _hudKey(sk, 2, 1)) {
-    hudElements.shieldBar.clear();
-    hudSegBar(hudElements.shieldBar, barX, sbY, HUD_SH_SEGS, HUD_SEG_W, 6, shLit, 0x3878f0, 0x98c0ff, 0x121a30);
-  }
-  const shNow = Math.ceil(p.shield);
-  if (c.shield !== shNow) {
-    c.shield = shNow;
-    hudElements.shieldText.text = `SHIELD ${shNow}`;
-  }
-  _hudTint(hudElements.shieldText, shieldRatio > 0 ? 0x66aaee : 0x445566);
-  hudElements.shieldText.x = barX;
-  hudElements.shieldText.y = sbY - 13;
-  hudElements.shieldText.visible = true;
-
-  // --- Shockwave bar (stepped colour cycle when ready) ---
-  const spMax = CFG.SPECIAL_MAX_CHARGE;
-  const spReady = p.specialCharge >= spMax;
-  const spSegs = Math.min(spMax, 20);
-  const spSegW = Math.floor((HUD_HP_SEGS * HUD_SEG_W + (HUD_HP_SEGS - 1) * 2 - (spSegs - 1) * 2) / spSegs);
-  const spLit = hudSegsLit(p.specialCharge / spMax, spSegs);
-  const spColor = spReady ? HUD_SPECIAL_CYCLE[Math.floor(gameTime / 0.08) & 3] : 0xd08820;
-  const spY = panY + 104;
-  const pk = c.specialKey;
-  if (_hudKey(pk, 0, spY) | _hudKey(pk, 1, spLit) | _hudKey(pk, 2, spColor) | _hudKey(pk, 3, spSegs)) {
-    hudElements.specialBar.clear();
-    hudSegBar(hudElements.specialBar, barX, spY, spSegs, spSegW, 6, spLit, spColor,
-      spReady ? 0xffffff : 0xffc860, 0x1e1808);
-  }
-  if (c.special !== p.specialCharge || c.spReady !== spReady) {
-    c.special = p.specialCharge; c.spReady = spReady;
-    hudElements.specialText.text = spReady ? 'SHOCKWAVE READY!' : `SHOCKWAVE ${p.specialCharge}/${spMax}`;
-  }
-  _hudTint(hudElements.specialText, spReady ? spColor : 0x998866);
-  hudElements.specialText.x = barX;
-  hudElements.specialText.y = spY - 13;
-  hudElements.specialText.visible = true;
+  renderHudGrenades(p, gx, gy);
+  if (co) _hudPanelCoop(p, panX, panY, 0);
 
   // --- Slot key labels ---
   for (let i = 0; i < hudElements.slotTexts.length; i++) {
@@ -642,6 +634,90 @@ function renderHudPlayerPanel(p, hpRatio, Wi, Hi) {
     hudElements.nextText.visible = false;
     hudElements.bossUnlockText.visible = false;
   }
+
+  // hudBoxes(): what was laid out this frame (numbers only, no allocation)
+  const L = _hudLayout;
+  L.set = true; L.coop = co; L.panY = panY; L.slotRowY = slotRowY; L.nVis = maxVisible;
+  L.gx = gx; L.gy = gy; L.gw = gw; L.hint = hasNext ? 1 : bossActive ? 2 : 0;
+}
+
+// Weapon name, ammo, HP label, shield and shockwave bars of a player panel
+// (P1: el = hudElements, c = _hudCache; P2: its own set, M11 K4)
+function _hudPanelBody(p, el, c, panX, panY, barX, hpIdx) {
+  const wep = WEAPONS[p.weapon];
+  // --- Weapon name + ammo ---
+  if (c.weapon !== p.weapon) {
+    c.weapon = p.weapon;
+    el.weaponText.text = wep.name.toUpperCase();
+  }
+  el.weaponText.x = panX + HUD_PAD;
+  el.weaponText.y = panY + 10;
+
+  const ammoKey = p.reloading ? -1 - Math.round(p.reloadTimer * 10) : wep.mag === Infinity ? 1e9 : p.magAmmo * 10000 + wep.mag;
+  if (c.ammoKey !== ammoKey) {
+    c.ammoKey = ammoKey;
+    el.ammoText.text = p.reloading
+      ? `RELOADING ${p.reloadTimer.toFixed(1)}s`
+      : wep.mag === Infinity ? 'INF' : `${p.magAmmo} / ${wep.mag}`;
+  }
+  _hudTint(el.ammoText, p.reloading ? 0xff8800
+    : p.magAmmo <= Math.ceil(wep.mag * 0.25) ? 0xff4444 : 0xbbbbbb);
+  el.ammoText.x = panX + HUD_PAN_W - HUD_PAD;
+  el.ammoText.y = panY + 14;
+
+  // --- HP label (blinks white/red when low) ---
+  const hpNow = Math.ceil(p.hp);
+  if (c.hp !== hpNow || c.maxHp !== p.maxHp) {
+    c.hp = hpNow; c.maxHp = p.maxHp;
+    el.hpText.text = `HP ${hpNow}/${p.maxHp}`;
+  }
+  const lowBlink = hpIdx === 2 && (Math.floor(gameTime / 0.25) & 1) === 1;
+  _hudTint(el.hpText, lowBlink ? 0xffffff : HUD_HP_COLORS[hpIdx]);
+  el.hpText.x = barX;
+  el.hpText.y = panY + 35;
+  el.hpText.visible = true;
+
+  // --- Shield bar ---
+  const shieldRatio = p.shield / p.maxShield;
+  const shLit = hudSegsLit(shieldRatio, HUD_SH_SEGS);
+  const sbY = panY + 76;
+  const sk = c.shieldKey;
+  if (_hudKey(sk, 0, sbY) | _hudKey(sk, 1, shLit) | _hudKey(sk, 2, 1)) {
+    el.shieldBar.clear();
+    hudSegBar(el.shieldBar, barX, sbY, HUD_SH_SEGS, HUD_SEG_W, 6, shLit, 0x3878f0, 0x98c0ff, 0x121a30);
+  }
+  const shNow = Math.ceil(p.shield);
+  if (c.shield !== shNow) {
+    c.shield = shNow;
+    el.shieldText.text = `SHIELD ${shNow}`;
+  }
+  _hudTint(el.shieldText, shieldRatio > 0 ? 0x66aaee : 0x445566);
+  el.shieldText.x = barX;
+  el.shieldText.y = sbY - 13;
+  el.shieldText.visible = true;
+
+  // --- Shockwave bar (stepped colour cycle when ready) ---
+  const spMax = CFG.SPECIAL_MAX_CHARGE;
+  const spReady = p.specialCharge >= spMax;
+  const spSegs = Math.min(spMax, 20);
+  const spSegW = Math.floor((HUD_HP_SEGS * HUD_SEG_W + (HUD_HP_SEGS - 1) * 2 - (spSegs - 1) * 2) / spSegs);
+  const spLit = hudSegsLit(p.specialCharge / spMax, spSegs);
+  const spColor = spReady ? HUD_SPECIAL_CYCLE[Math.floor(gameTime / 0.08) & 3] : 0xd08820;
+  const spY = panY + 104;
+  const pk = c.specialKey;
+  if (_hudKey(pk, 0, spY) | _hudKey(pk, 1, spLit) | _hudKey(pk, 2, spColor) | _hudKey(pk, 3, spSegs)) {
+    el.specialBar.clear();
+    hudSegBar(el.specialBar, barX, spY, spSegs, spSegW, 6, spLit, spColor,
+      spReady ? 0xffffff : 0xffc860, 0x1e1808);
+  }
+  if (c.special !== p.specialCharge || c.spReady !== spReady) {
+    c.special = p.specialCharge; c.spReady = spReady;
+    el.specialText.text = spReady ? 'SHOCKWAVE READY!' : `SHOCKWAVE ${p.specialCharge}/${spMax}`;
+  }
+  _hudTint(el.specialText, spReady ? spColor : 0x998866);
+  el.specialText.x = barX;
+  el.specialText.y = spY - 13;
+  el.specialText.visible = true;
 }
 
 // =========================================================
@@ -679,19 +755,19 @@ function hudGrenadeIcon(g, x, y, full) {
   }
 }
 
-function renderHudGrenades(p, bx, by) {
+// el / k: the panel's element set and grenade cache key (M11 K4: P2 has its own)
+function renderHudGrenades(p, bx, by, el = hudElements, k = _hudCache.grenadeKey) {
   const max = CFG.GRENADE_AMMO_MAX || 6;
   const n = Math.max(0, Math.min(max, p.grenades | 0));
   const bw = 32 + max * HUD_GREN_STEP;
-  const k = _hudCache.grenadeKey;
   if (_hudKey(k, 0, bx) | _hudKey(k, 1, by) | _hudKey(k, 2, n) | _hudKey(k, 3, max)) {
-    const g = hudElements.grenadeBar;
+    const g = el.grenadeBar;
     g.clear();
     hudPanel(g, bx, by, bw, HUD_GREN_H);
     const iy = by + ((HUD_GREN_H - HUD_GREN_ART.length * HUD_GREN_PX) >> 1);
     for (let i = 0; i < max; i++) hudGrenadeIcon(g, bx + 30 + i * HUD_GREN_STEP, iy, i < n);
   }
-  const t = hudElements.grenadeKeyText;
+  const t = el.grenadeKeyText;
   _hudTint(t, n > 0 ? 0x9aa4b4 : 0x5a6a80);
   t.x = bx + 5;
   t.y = by + HUD_GREN_H / 2;
@@ -714,6 +790,7 @@ function renderHudStats(Wi) {
     const g = hudElements.statsPanel;
     g.clear();
     hudPanel(g, rPX, rPY, rPW, rPH);
+    const sb = _hudLayout.stats; sb.x = rPX - 1; sb.y = rPY - 1; sb.w = rPW + 2; sb.h = rPH + 2; // hudBoxes()
     hudDivider(g, rPX + 6, rPY + 56, rPW - 12);
     if (hasCombo) {
       hudDivider(g, rPX + 6, rPY + 114, rPW - 12);
@@ -775,6 +852,284 @@ function renderHudStats(Wi) {
   } else {
     hudElements.comboText.visible = false;
   }
+}
+
+// =========================================================
+// M11 K4/K5: CO-OP HUD (2P only)
+// =========================================================
+// P1 panel (bottom-left, 2P height HUD_PAN_H2) and P2 panel (bottom-right,
+// no weapon slots) share _hudPanelBody. Each gets a bottom row: the "1P"/"2P"
+// tag in the player's colour, their own score and kills, and the grenades.
+// Down/dead dims the bars and says so. Above each non-dead player: the
+// "1P"/"2P" tag; a downed player gets a blinking HELP!, the 8 s ring timer
+// and, while a partner revives them, the revive ring. All screen-space.
+
+// Panel elements go under the vignettes, the reticles and the pause overlay
+// (uiContainer draws in insertion order)
+function _hudAddPanel(o) {
+  const i = Math.min(uiContainer.getChildIndex(hudElements.invincGraphics), uiContainer.getChildIndex(hudElements.crosshair));
+  uiContainer.addChildAt(o, i);
+  return o;
+}
+
+function _hudInitCoop() {
+  const add = _hudAddPanel;
+  const el = {
+    healthBar: add(new PIXI.Graphics()),
+    shieldBar: add(new PIXI.Graphics()),
+    specialBar: add(new PIXI.Graphics()),
+    grenadeBar: add(new PIXI.Graphics()),
+    grenadeKeyText: add(hudText(8, 0x5a6a80)),
+    weaponText: add(hudText(16, 0xffdd44)),
+    ammoText: add(hudText(8, 0xbbbbbb)),
+    hpText: add(hudText(8, 0xffffff)),
+    shieldText: add(hudText(8, 0x5599cc)),
+    specialText: add(hudText(8, 0x887755)),
+  };
+  el.grenadeKeyText.text = '[B]'; // P2 throws with the pad's B
+  el.grenadeKeyText.anchor.set(0, 0.5);
+  el.ammoText.anchor.set(1, 0);
+
+  const extras = (i) => {
+    const tag = add(hudText(16, HUD_PCOL[i]));
+    tag.text = `${i + 1}P`;
+    const ov = add(new PIXI.Graphics());
+    const ovText = add(hudText(16, 0xff4040));
+    ovText.anchor.set(0.5, 0);
+    const ovSub = add(hudText(8, HUD_PAL.label));
+    ovSub.anchor.set(0.5, 0);
+    return {
+      tag, ov, ovText, ovSub,
+      score: add(hudText(8, 0xffd700)),
+      kills: add(hudText(8, 0xff6a6a)),
+      c: { score: NaN, kills: NaN, ovKey: -1, ovX: NaN, ovY: NaN },
+    };
+  };
+  // World-anchored markers sit under every panel
+  const mark = (i) => {
+    const ring = new PIXI.Graphics();
+    const help = hudText(16, 0xff3030);
+    help.text = 'HELP!';
+    help.anchor.set(0.5, 1);
+    const tag = hudText(8, HUD_PCOL[i]);
+    tag.text = `${i + 1}P`;
+    tag.anchor.set(0.5, 1);
+    // K4: a screen-size ring in the player's colour at the feet, so each
+    // player is found at a glance even at zoom 0.6 among the enemies
+    const foot = new PIXI.Graphics();
+    foot.ellipse(0, 0, 13, 6).stroke({ width: 3, color: 0x000000, alpha: 0.6 })
+      .ellipse(0, 0, 13, 6).stroke({ width: 1.5, color: HUD_PCOL[i], alpha: 0.95 });
+    uiContainer.addChildAt(tag, 0);
+    uiContainer.addChildAt(help, 0);
+    uiContainer.addChildAt(ring, 0);
+    uiContainer.addChildAt(foot, 0);
+    return { ring, help, tag, foot, ringKey: -1 };
+  };
+  _hud2 = {
+    el,
+    c: {
+      weapon: -1, ammoKey: NaN, hp: NaN, maxHp: NaN, shield: NaN, special: NaN, spReady: null,
+      panelKey: new Float64Array(4), shieldKey: new Float64Array(4),
+      specialKey: new Float64Array(5), grenadeKey: new Float64Array(4),
+    },
+    ex: [extras(0), extras(1)],
+    marks: [mark(0), mark(1)],
+  };
+}
+
+// Show / hide the whole 2P HUD (only on a change of player count)
+function _hudCoopSet(on) {
+  _hudCoop.on = on;
+  if (on && !_hud2) _hudInitCoop();
+  if (!_hud2) return;
+  const el = _hud2.el;
+  for (const key in el) el[key].visible = on;
+  for (let i = 0; i < 2; i++) {
+    const x = _hud2.ex[i], m = _hud2.marks[i];
+    x.tag.visible = x.score.visible = x.kills.visible = on;
+    x.ov.visible = x.ovText.visible = x.ovSub.visible = false;
+    x.c.ovKey = 0;
+    m.ring.visible = m.help.visible = m.tag.visible = m.foot.visible = false;
+  }
+}
+
+// 2P panel frame: raised panel, accent strip in the player's colour along
+// the top edge, dividers under the weapon row and above the score row
+function _hudCoopFrame(g, panX, panY, i) {
+  hudPanel(g, panX, panY, HUD_PAN_W, HUD_PAN_H2);
+  g.rect(panX, panY, HUD_PAN_W, 3).fill(HUD_PCOL[i]);
+  hudDivider(g, panX + 6, panY + 30, HUD_PAN_W - 12);
+  hudDivider(g, panX + 6, panY + 116, HUD_PAN_W - 12);
+}
+
+// The 2P row of panel i (tag, score, kills) and its down / dead overlay
+function _hudPanelCoop(p, panX, panY, i) {
+  const x = _hud2.ex[i], c = x.c;
+  x.tag.x = panX + HUD_PAD;
+  x.tag.y = panY + 128;
+  const sc = Math.floor(p.score || 0), kl = p.kills | 0;
+  if (c.score !== sc) { c.score = sc; x.score.text = `SCORE ${sc.toLocaleString()}`; }
+  if (c.kills !== kl) { c.kills = kl; x.kills.text = `KILLS ${kl}`; }
+  x.score.x = x.kills.x = panX + HUD_PAD + 42;
+  x.score.y = panY + 124;
+  x.kills.y = panY + 138;
+
+  // DOWN n (seconds left) / REVIVING / DEAD over the dimmed bars
+  const st = p.state === 'down' ? 1 : p.state === 'dead' ? 2 : 0;
+  if (st === 0) {
+    if (c.ovKey !== 0) { c.ovKey = 0; x.ov.visible = x.ovText.visible = x.ovSub.visible = false; }
+    return;
+  }
+  const rev = st === 1 && p.reviveT > 0;
+  const secs = st === 1 ? Math.max(0, Math.ceil(p.downT)) : 0;
+  const key = st * 1000 + (rev ? 100 : 0) + secs;
+  if (c.ovKey !== key) {
+    c.ovKey = key;
+    x.ovText.text = st === 2 ? 'DEAD' : rev ? 'REVIVING' : `DOWN ${secs}`;
+    x.ovSub.text = st === 2 ? 'BACK NEXT WAVE' : 'PARTNER: STAND CLOSE';
+    x.ov.visible = x.ovText.visible = x.ovSub.visible = true;
+  }
+  if (c.ovX !== panX || c.ovY !== panY) {
+    c.ovX = panX; c.ovY = panY;
+    x.ov.clear();
+    x.ov.rect(panX + 4, panY + 33, HUD_PAN_W - 8, 82).fill(HUD_STYLE_PANEL_DIM);
+  }
+  const blink = (Math.floor(gameTime / 0.25) & 1) === 1;
+  _hudTint(x.ovText, st === 2 ? 0x9a2020 : rev ? 0x44ff44 : blink ? 0xffffff : 0xff3030);
+  x.ovText.x = x.ovSub.x = panX + (HUD_PAN_W >> 1);
+  x.ovText.y = panY + 52;
+  x.ovSub.y = panY + 80;
+}
+
+// P2 panel, bottom-right (mirrors P1's: weapon, ammo, HP, shield,
+// shockwave, grenades, own score and kills; no weapon slots)
+function renderHudP2Panel(p, Wi, Hi) {
+  const el = _hud2.el, c = _hud2.c;
+  const panX = Wi - 12 - HUD_PAN_W, panY = Hi - 12 - HUD_PAN_H2;
+  const barX = panX + HUD_PAD + 2;
+  const hpRatio = p.hp / p.maxHp;
+  const hpLit = hudSegsLit(hpRatio, HUD_HP_SEGS);
+  const hpIdx = hpRatio > 0.6 ? 0 : hpRatio > 0.3 ? 1 : 2;
+  const k = c.panelKey;
+  if (_hudKey(k, 0, panX) | _hudKey(k, 1, panY) | _hudKey(k, 2, hpLit) | _hudKey(k, 3, hpIdx)) {
+    const g = el.healthBar;
+    g.clear();
+    _hudCoopFrame(g, panX, panY, 1);
+    hudSegBar(g, barX, panY + 46, HUD_HP_SEGS, HUD_SEG_W, 12, hpLit, HUD_HP_COLORS[hpIdx], HUD_HP_HI[hpIdx], 0x2a1010);
+  }
+  _hudPanelBody(p, el, c, panX, panY, barX, hpIdx);
+  const gw = 32 + (CFG.GRENADE_AMMO_MAX || 6) * HUD_GREN_STEP;
+  renderHudGrenades(p, panX + HUD_PAN_W - 8 - gw, panY + 122, el, c.grenadeKey);
+  _hudPanelCoop(p, panX, panY, 1);
+  _hudLayout.p2x = panX; _hudLayout.p2y = panY;
+}
+
+// Ring of `pts` 4x4 blocks with a black outline: the first `lit` (clockwise
+// from 12 o'clock) in `on`, the rest in `off`
+function _hudRing(g, pts, lit, on, off) {
+  const n = pts.length >> 1;
+  for (let i = 0; i < n; i++) g.rect(pts[2 * i] - 1, pts[2 * i + 1] - 1, 6, 6);
+  g.fill(HUD_RETICLE_OUTLINE);
+  if (lit < n) {
+    for (let i = lit; i < n; i++) g.rect(pts[2 * i], pts[2 * i + 1], 4, 4);
+    g.fill(off);
+  }
+  if (lit > 0) {
+    for (let i = 0; i < lit; i++) g.rect(pts[2 * i], pts[2 * i + 1], 4, 4);
+    g.fill(on);
+  }
+}
+
+const _hudB = { x: 0, y: 0, w: 0, h: 0, waterY: null };
+
+// K2.2 test hook: each player's foot ring as drawn this frame ([] in 1P /
+// before the first 2P frame): { x, y } = its centre in CSS px, visible
+function footRings() {
+  if (!_hud2 || !_hud2.marks) return [];
+  const out = [];
+  for (let i = 0; i < players.length && i < 2; i++) {
+    const f = _hud2.marks[i].foot;
+    out.push({ x: f.x, y: f.y, visible: !!f.visible && _hudCoop.on });
+  }
+  return out;
+}
+// Tags, HELP! and the K5 rings at each player (screen-space, never zoomed)
+function renderHudCoopMarks() {
+  const z = cam.z;
+  const blink = (Math.floor(gameTime / 0.25) & 1) === 0;
+  for (let i = 0; i < 2; i++) {
+    const m = _hud2.marks[i];
+    const p = i < players.length ? players[i] : null;
+    if (!p || p.state === 'dead') {
+      m.tag.visible = m.help.visible = m.ring.visible = m.foot.visible = false;
+      continue;
+    }
+    const v = worldToView(p.x, p.y, _hudV);
+    const x = Math.round(v.x);
+    if (p.state === 'down') {
+      m.foot.visible = false; // K2.2: the HELP! ring replaces the foot ring
+      const cy = Math.round(v.y - 6 * z); // lying: ring around the body
+      const dLit = Math.ceil(clamp(p.downT / CFG.COOP_DOWN_TIME, 0, 1) * 16);
+      const col = p.downT > 3 ? 0 : 1;
+      const rev = p.reviveT > 0;
+      const rLit = rev ? Math.floor(clamp(p.reviveT / CFG.COOP_REVIVE_TIME, 0, 1) * 20) : 0;
+      const key = dLit * 1000 + rLit * 10 + col * 2 + (rev ? 1 : 0);
+      if (m.ringKey !== key) {
+        m.ringKey = key;
+        const g = m.ring;
+        g.clear();
+        _hudRing(g, HUD_DOWN_RING, dLit, HUD_DOWN_COLS[col], 0x2a0a0a);
+        if (rev) _hudRing(g, HUD_REV_RING, rLit, 0x44ff44, 0x0e2a0e);
+      }
+      m.ring.x = x; m.ring.y = cy; m.ring.visible = true;
+      const top = cy - (rev ? 32 : 24);
+      m.help.x = x; m.help.y = top;
+      m.help.visible = blink;
+      m.tag.x = x; m.tag.y = top - 18;
+    } else {
+      m.ring.visible = m.help.visible = false;
+      m.tag.x = x;
+      m.foot.x = x; m.foot.y = Math.round(v.y); m.foot.visible = true;
+      // above the drawn head (bandana included), not the hit-model body height
+      const b = typeof spDrawnBounds === 'function' ? spDrawnBounds(p, _hudB) : null;
+      const oy = worldOffsetY !== null ? worldOffsetY : H / 2 - cam.y * z;
+      m.tag.y = b ? Math.round(b.y * z + oy) - 3 : Math.round(v.y - PLAYER_BODY_H * z) - 4;
+    }
+    m.tag.visible = true;
+  }
+}
+
+/**
+ * M11 K4: CSS-px rects { x, y, w, h } of what the HUD drew this frame,
+ * outlines included: p1 = P1's panel with its weapon slots, grenade box and
+ * unlock hint; p2 = the P2 panel (null in 1P); minimap = its frame; boss =
+ * the boss bar panel with its name (null without a boss); stats = the
+ * score / wave box.
+ */
+function hudBoxes() {
+  const L = _hudLayout, e = hudElements;
+  if (!L.set) return { p1: null, p2: null, minimap: null, boss: null, stats: null };
+  const panX = 12, panH = L.coop ? HUD_PAN_H2 : HUD_PAN_H;
+  let x0 = panX - 1, y0 = L.panY - 1;
+  let x1 = panX + HUD_PAN_W + 1, y1 = L.slotRowY + HUD_SLOT_H + 1;
+  x1 = Math.max(x1, panX + L.nVis * (HUD_SLOT_W + HUD_SLOT_GAP) - HUD_SLOT_GAP + 1);
+  if (L.gx >= panX + HUD_PAN_W || L.gy < L.panY || L.gy >= L.panY + panH) { // grenades outside
+    x0 = Math.min(x0, L.gx - 1); y0 = Math.min(y0, L.gy - 1);
+    x1 = Math.max(x1, L.gx + L.gw + 1); y1 = Math.max(y1, L.gy + HUD_GREN_H + 1);
+  }
+  if (L.hint) {
+    const t = L.hint === 1 ? e.nextText : e.bossUnlockText;
+    y0 = Math.min(y0, L.panY - 15, Math.floor(t.y - t.height));
+    x1 = Math.max(x1, Math.ceil(t.x + t.width) + 1);
+  }
+  if (e.moreText.visible) x1 = Math.max(x1, Math.ceil(e.moreText.x + e.moreText.width) + 1);
+  return {
+    p1: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 },
+    p2: L.coop ? { x: L.p2x - 1, y: L.p2y - 1, w: HUD_PAN_W + 2, h: HUD_PAN_H2 + 2 } : null,
+    minimap: { x: L.mmX - 4, y: L.mmY - 4, w: L.mmSize + 8, h: L.mmSize + 8 },
+    boss: L.boss ? { x: L.boss.x, y: L.boss.y, w: L.boss.w, h: L.boss.h } : null,
+    stats: { x: L.stats.x, y: L.stats.y, w: L.stats.w, h: L.stats.h },
+  };
 }
 
 /**
@@ -883,24 +1238,45 @@ const _MM_TYPE_STYLE = [null, { color: 0x1a4070, alpha: 0.72 }, { color: 0x5a4a2
 function renderPixiMinimap() {
   if (!player) return;
 
-  const mmSize = 240;
+  // M11 K4: in 2P the P2 panel takes the bottom-right corner, so the minimap
+  // moves up under the stats panel (sized to fit above the P2 panel) and
+  // centres on the players' midpoint
+  const co = _hudCoop.on;
+  let mmSize = 240, mmY, ox = player.x, oy = player.y;
+  if (co) {
+    mmY = 12 + HUD_STATS_MAX_H + 16;
+    const room = Math.floor(H) - 12 - HUD_PAN_H2 - 13 - mmY;
+    mmSize = Math.max(96, Math.min(240, (room >> 2) << 2));
+    let n = 0, sx = 0, sy = 0;
+    for (let i = 0; i < players.length; i++) {
+      const q = players[i];
+      if (q && (q.state === 'up' || q.state === 'down')) { sx += q.x; sy += q.y; n++; }
+    }
+    if (n > 0) { ox = sx / n; oy = sy / n; }
+  } else {
+    mmY = Math.floor(H) - mmSize - 12;
+  }
   const mmX = Math.floor(W) - mmSize - 12;
-  const mmY = Math.floor(H) - mmSize - 12;
   const mmScale = 0.04;
   const mmCx = mmX + mmSize / 2;
   const mmCy = mmY + mmSize / 2;
+  const L = _hudLayout;
+  L.mmX = mmX; L.mmY = mmY; L.mmSize = mmSize;
 
   if (!renderPixiMinimap._terrainGraphics) {
     renderPixiMinimap._terrainGraphics = new PIXI.Graphics();
     renderPixiMinimap._terrainGraphics.zIndex = 1998;
+    renderPixiMinimap._terrainGraphics._co = false;
     uiContainer.addChild(renderPixiMinimap._terrainGraphics);
     renderPixiMinimap._frameCount = 0;
   }
 
   renderPixiMinimap._frameCount++;
 
-  // Redraw terrain every 15 frames
-  if (renderPixiMinimap._frameCount % 15 === 1) {
+  // Redraw terrain every 15 frames (and at once when the 2P layout toggles)
+  const tgCo = renderPixiMinimap._terrainGraphics._co !== co;
+  if (renderPixiMinimap._frameCount % 15 === 1 || tgCo) {
+    renderPixiMinimap._terrainGraphics._co = co;
     const tg = renderPixiMinimap._terrainGraphics;
     tg.clear();
 
@@ -920,7 +1296,7 @@ function renderPixiMinimap() {
             const px = col * mmStep;
             const sx = (px - mmSize / 2) / mmScale;
             const sy = (py - mmSize / 2) / (mmScale * CFG.ISO_SCALE);
-            const t = getTerrainTypeAt(player.x + (sx + sy) * 0.5, player.y + (sy - sx) * 0.5);
+            const t = getTerrainTypeAt(ox + (sx + sy) * 0.5, oy + (sy - sx) * 0.5);
             _mmTypes[row * n + col] = t === 'water' ? 1 : t === 'sand' ? 2 : t === 'dark' ? 3 : 0;
           }
         }
@@ -947,7 +1323,7 @@ function renderPixiMinimap() {
   let anyBoss = false, bossX = 0, bossY = 0, anyEnemy = false;
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i];
-    const dx = e.x - player.x, dy = e.y - player.y;
+    const dx = e.x - ox, dy = e.y - oy;
     const ex = Math.round(mmCx + (dx - dy) * mmScale);
     const ey = Math.round(mmCy + (dx + dy) * mmScale * CFG.ISO_SCALE);
     if (ex > mmX + 2 && ex < mmX + mmSize - 2 && ey > mmY + 2 && ey < mmY + mmSize - 2) {
@@ -961,6 +1337,22 @@ function renderPixiMinimap() {
     g.rect(bossX - 4, bossY - 4, 8, 8).fill(0xff44ff);
     g.rect(bossX - 8, bossY - 8, 16, 1).rect(bossX - 8, bossY + 7, 16, 1)
       .rect(bossX - 8, bossY - 7, 1, 14).rect(bossX + 7, bossY - 7, 1, 14).fill(HUD_STYLE_MM_BOSS);
+  }
+
+  if (co) { // 2P: each counted player in their own colour
+    for (let i = 0; i < players.length && i < 2; i++) {
+      const q = players[i];
+      if (!q || q.state === 'dead') continue;
+      const dx = q.x - ox, dy = q.y - oy;
+      const px = Math.round(mmCx + (dx - dy) * mmScale);
+      const py = Math.round(mmCy + (dx + dy) * mmScale * CFG.ISO_SCALE);
+      g.rect(px - 3, py - 3, 6, 6).fill(HUD_PCOL[i]);
+      const a = q.angle;
+      g.moveTo(px, py)
+        .lineTo(px + Math.cos(a) * 9, py + Math.sin(a) * 9 * CFG.ISO_SCALE)
+        .stroke(HUD_STYLE_MM_DIR_P[i]);
+    }
+    return;
   }
 
   // Player dot - green with direction indicator
@@ -1076,10 +1468,21 @@ function _hudP2Reticle() {
 /**
  * Render vignette effects (low HP, invincibility, shield break)
  */
+// K4 (2P): the low-HP vignette follows the lowest HP among STANDING players
+// (a downed player has the HELP! ring instead); nobody standing -> none
+function _hudVignetteHp() {
+  let r = 1;
+  for (let i = 0; i < players.length; i++) {
+    const q = players[i];
+    if (q && q.state === 'up') r = Math.min(r, q.hp / q.maxHp);
+  }
+  return r;
+}
+
 function renderPixiVignettes(hpRatio) {
   // Invincibility flash
   hudElements.invincGraphics.clear();
-  if (player && player.invincible > 0) {
+  if (player && player.invincible > 0 && player.state === 'up') {
     hudElements.invincGraphics.rect(0, 0, W, H).fill(HUD_STYLE_INVINC);
     hudElements.invincGraphics.visible = true;
   } else {
@@ -1094,9 +1497,17 @@ function renderPixiVignettes(hpRatio) {
     hudElements.vignetteGraphics.visible = false;
   }
 
-  // Shield break blue vignette
-  if (player && player.shield <= 0 && shieldRegenTimer < 0.5) {
-    drawEdgeVignette(hudElements.shieldVignetteGraphics, 0x3250c8, (1 - shieldRegenTimer / 0.5) * 0.6);
+  // Shield break blue vignette (K4: any standing player's fresh break; P1's
+  // timer is the global one)
+  let sb = -1;
+  for (let i = 0; i < players.length; i++) {
+    const q = players[i];
+    if (!q || q.state !== 'up' || q.shield > 0) continue;
+    const t = q === player ? shieldRegenTimer : (q.shieldRegenT || 0);
+    if (t < 0.5 && (sb < 0 || t < sb)) sb = t;
+  }
+  if (sb >= 0) {
+    drawEdgeVignette(hudElements.shieldVignetteGraphics, 0x3250c8, (1 - sb / 0.5) * 0.6);
     hudElements.shieldVignetteGraphics.visible = true;
   } else {
     hudElements.shieldVignetteGraphics.visible = false;
@@ -1162,7 +1573,7 @@ function renderPauseOverlay() {
   // M11 K2: in 2P the message names the player whose pad dropped
   const dcText = dc && players.length > 1 && ps.disconnectWho ? `P${ps.disconnectWho} CONTROLLER DISCONNECTED` : 'CONTROLLER DISCONNECTED';
   if (o._dcTitle.text !== dcText) { o._dcTitle.text = dcText; o._mode = -1; }
-  const hintText = dc ? 'PRESS START OR ANY KEY'
+  const hintText = dc ? (players.length > 1 && ps.disconnectWho ? `P${ps.disconnectWho} PRESS START OR ANY KEY` : 'PRESS START OR ANY KEY')
     : ps && ps.connected ? 'PRESS P / START TO RESUME' : 'PRESS P TO RESUME';
   if (o._hint.text !== hintText) o._hint.text = hintText;
   o._bg.visible = visible;
