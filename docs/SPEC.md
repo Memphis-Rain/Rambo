@@ -646,11 +646,13 @@ This is the one new game mode the user asked for, so it is an explicit exception
     - **Smoothing:**
       - Zooming out follows the target at rate 3/s, so a player running away never reaches the edge.
       - Zooming in starts only once the target is ≥ 5% above the current zoom (a deadband), then runs at rate 1/s. This stops the camera "breathing".
+      - The rates are linear, in zoom units per second (ruling 2026-10-25). Once a zoom-in starts, it follows a rising target and finishes at exactly 1.0.
     - **How the zoom is applied, to keep the pixel look:**
       - It is a scale on the world container *inside* the low-res RT.
       - The screen size of a low-res pixel, the dither and the CRT stay exactly as they are. The world just gets smaller in pixels, the way a 90s arcade scaler worked.
       - Camera pixel snapping (R2) still applies in the zoomed space, and a still camera at a still zoom must not shimmer.
     - **Not zoomed:** the HUD, notifications, reticle, the 1P/2P tags and the toasts all stay screen-space, at their normal size.
+    - **World-anchored text** (damage numbers, "+81" score pops and other floating texts) keeps its world position but is drawn at its zoom-1 pixel size, counter-scaled by 1/zoom, so it stays readable at 0.6 (ruling 2026-10-25).
     - **Everything that depends on the view must use the zoomed view:**
       - mouse aim (Q5/T5);
       - G13 head-to-toe picking and the C3 reticle;
