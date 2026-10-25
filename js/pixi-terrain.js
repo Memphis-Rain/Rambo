@@ -453,9 +453,12 @@ function renderPixiTerrain() {
     const dropped = _droppedChunkKeys;
     dropped.clear();
     for (const [key, sprite] of chunkCache) {
-      const cx2 = sprite._chunkX, cy2 = sprite._chunkY; // K2.1: stored at bake (no per-frame key parsing)
-      const far = zoomed ? !_chunkNearView(cx2, cy2, cs, cs * 1.5)
-        : Math.abs(cx2 - pcx) > chunkRange + 2 || Math.abs(cy2 - pcy) > chunkRange + 2;
+      let far;
+      if (zoomed) far = !_chunkNearView(sprite._chunkX, sprite._chunkY, cs, cs * 1.5); // K2.1: coords stored at bake
+      else { // zoom 1 (1P): exactly the pre-M11 path
+        const [cx2, cy2] = key.split(',').map(Number);
+        far = Math.abs(cx2 - pcx) > chunkRange + 2 || Math.abs(cy2 - pcy) > chunkRange + 2;
+      }
       if (far) {
         terrainContainer.removeChild(sprite);
         sprite.destroy(true); // Destroy sprite and texture

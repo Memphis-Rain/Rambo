@@ -55,14 +55,17 @@ let _padUsedIdx = -1;                            // M11 K2: the pad index P1 has
 const _padOwner = new Int8Array(16);             // K2.1: who lost each pad index (1 | 2; 0 = unknown)
 const _padLostIds = [];                          // K2.3: { id, who } per player whose pad dropped and isn't re-claimed
 let _padViewRefused = false;                     // K2.2: a refused View press, until it's released
+let _padClaimIdx = -1;                           // K2.4: P1 claimed this pad with Start (consume it at discovery)
 
 function _padNoteLoss(id, who) {
-  _padResolved(who);
+  // replace this player's earlier id entry (not their lost slot, just marked)
+  for (let k = _padLostIds.length - 1; k >= 0; k--) if (_padLostIds[k].who === who) _padLostIds.splice(k, 1);
   if (id) _padLostIds.push({ id, who });
 }
 // A player got a pad again: forget their loss (id entry, and the slot they claimed)
 function _padResolved(who, idx) {
   for (let k = _padLostIds.length - 1; k >= 0; k--) if (_padLostIds[k].who === who) _padLostIds.splice(k, 1);
+  for (let k = 0; k < _padOwner.length; k++) if (_padOwner[k] === who) _padOwner[k] = 0; // K2.4: every stale slot of theirs
   if (idx !== undefined && idx >= 0 && idx < _padOwner.length) _padOwner[idx] = 0;
 }
 // Who a (re)connected pad at index i belongs to (0 = nobody / unknown).
@@ -209,8 +212,12 @@ function _padFound(g) {
   pad.connected = true; pad.id = g.id || '';
   _padP1Missing = false; // K2.2
   _padResolved(1, pad.index); // K2.3
-  // K2.3: buttons already held when the pad is found count only once released
-  _padRead(g, pad); pad.justPressed.fill(0);
+  // K2.4: only the Start that claimed this pad to resolve a disconnect pause
+  // is consumed (held until released); any other press at discovery counts
+  // (Chrome reveals a pad on its first button press: that A starts the game)
+  if (pad.index === _padClaimIdx) { _padRead(g, pad); pad.justPressed.fill(0); }
+  else { pad.pressed.fill(0); pad.justPressed.fill(0); }
+  _padClaimIdx = -1;
   // C6 toast; on the title the legend swap shows it, the toast waits for the game
   _padToastPending = true;
   _padToast();
@@ -406,8 +413,35 @@ function _padAnyInput() {
   return false;
 }
 
+// Mark every pad's currently held buttons as held, so a press already in
+// progress never reads as a fresh one (K2.4: the press that ended a demo)
+function _padConsumeHeld() {
+  const gps = _padSnap;
+  if (!gps) return;
+  const g1 = pad.index >= 0 ? gps[pad.index] : null;
+  if (g1 && g1.connected) { _padRead(g1, pad); pad.justPressed.fill(0); }
+  const g2 = _pad2.index >= 0 ? gps[_pad2.index] : null;
+  if (g2 && g2.connected) { _padRead(g2, _pad2); _pad2.justPressed.fill(0); }
+  for (let i = 0; i < gps.length && i < _padFreeBtn.length; i++) {
+    const g = gps[i];
+    let b = 0;
+    if (g && g.connected) {
+      const st = g.buttons[PAD_BTN.START], a = g.buttons[PAD_BTN.A];
+      b = (st && (st.pressed || st.value > 0.5) ? 1 : 0) | (a && (a.pressed || a.value > 0.5) ? 2 : 0);
+    }
+    _padFreeBtn[i] = b;
+  }
+}
+
 function _pollGamepadBody() {
-  if (demoActive && _padAnyInput() && typeof demoNoteInput === 'function') demoNoteInput(); // K2.3
+  // K2.3 / K2.4 (D6): any pad input ends any demo, and that press is fully
+  // consumed: every pad's held buttons are marked held (no edge next poll),
+  // and nothing else in this poll acts on it (no start, join or reserve)
+  if (demoActive && _padAnyInput() && typeof demoNoteInput === 'function') {
+    demoNoteInput();
+    _padConsumeHeld();
+    return;
+  }
   // Taps are pulses: drop the unconsumed ones only after a simulated frame
   // that could have used them (not during hit-stop or a dodge roll)
   if (_padPulse.length && gameTime > _padTapT && !(player && player.dodging)) {
@@ -617,7 +651,7 @@ function _padPollFree() {
     const jp = b & ~_padFreeBtn[i];
     _padFreeBtn[i] = b;
     if (jp && _padDisconnectPaused && _padDisconnectWho === 1 && (jp & 1) && _padOwnerOf(i, g) === 0) { // K2.2
-      _padOwner[i] = 0; pad.index = i; _padP1Missing = false; padResumeFromDisconnect(); // P1's pause: P1 takes it (picked up next poll)
+      _padOwner[i] = 0; pad.index = i; _padClaimIdx = i; _padP1Missing = false; padResumeFromDisconnect(); // P1's pause: P1 takes it (picked up next poll; that Start is consumed)
       continue;
     }
     if (jp && coopTryJoin(i) && _padDisconnectPaused && _padDisconnectWho === 2) padResumeFromDisconnect();

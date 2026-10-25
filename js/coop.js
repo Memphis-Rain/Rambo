@@ -291,11 +291,17 @@ function _coopAnyStanding() {
   return false;
 }
 
+// The down timer (K2.4: a bad CFG value can't make it instant or endless)
+function _coopDownTime() {
+  const t = CFG.COOP_DOWN_TIME;
+  return Number.isFinite(t) ? Math.max(t, 0.1) : 8;
+}
+
 // damagePlayer at 0 HP in 2P
 function coopDown(p) {
   p.state = 'down';
   p.hp = 0;
-  p.downT = Math.max(CFG.COOP_DOWN_TIME, 0.1);
+  p.downT = _coopDownTime();
   p.reviveT = 0;
   p.dodging = false; p.reloading = false; p.vx = 0; p.vy = 0; p.walking = false;
   p.bleedT = 0;
@@ -351,7 +357,7 @@ function coopUpdateDown(dt) {
     const entering = !!p && p.state === 'down' && !p._wasDown;
     if (p) p._wasDown = p.state === 'down';
     if (!p || p.state !== 'down') continue;
-    if (entering && !(p.downT > 0)) p.downT = Math.max(CFG.COOP_DOWN_TIME, 0.1); // K2.3: a zero timer can't kill on entry
+    if (entering && !(p.downT > 0)) p.downT = _coopDownTime(); // K2.3: a zero timer can't kill on entry
     p.downT -= dt;
     p.bleedT = (p.bleedT || 0) - dt;
     if (p.bleedT <= 0) { // lying, bleeding
