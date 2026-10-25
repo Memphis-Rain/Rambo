@@ -714,6 +714,74 @@ describe('M11 K2.3 review fixes', () => {
     expect(seen.slice(2), 'resumed, and no manual pause while Start is still held').toEqual(seen.slice(2).map(() => false));
     rig.btn(0, BTN.START, false); frame(3);
     expect(g.paused, 'still running after the release').toBe(false);
+    tap(0, BTN.START);
+    expect(g.paused, 'a fresh Start press afterwards does pause').toBe(true);
+  });
+});
+
+// =====================================================================
+// K2.4 (Ralph's verification of d120401): 1P regressions N1-N3
+// =====================================================================
+describe('M11 K2.4 1P regressions', () => {
+  beforeEach(setup);
+  const todo = !LANDED.K2_4;
+  const pads = () => H.state().devices.map((d) => d.pad);
+  const quietDemo = () => game.run('if (typeof _demoShowOverlay === "function") _demoShowOverlay = function () {}; if (typeof _demoSetStartScreen === "function") _demoSetStartScreen = function () {};');
+  const demoStep = (n = 1) => { for (let i = 0; i < n; i++) { rig.clock.ms += DT * 1000; g.pollGamepad(); if (g.demoState().active) g.updateDemo(DT); } };
+
+  for (const b of ['A', 'START']) {
+    test.skipIf(todo)(`K2.4 N1 (D6): ${b} on P1's pad during a 1P demo returns to the title without starting a game`, () => {
+      quietDemo();
+      g.gameStarted = false;
+      rig.connect(0); titleFrame(3);
+      expect(g.startDemo()).toBe(true);
+      demoStep(5);
+      rig.btn(0, BTN[b], true); demoStep(2);
+      expect(g.demoState().active, 'the demo ended').toBe(false);
+      expect({ started, gameStarted: g.gameStarted }, 'no game started (D6)').toEqual({ started: 0, gameStarted: false });
+      rig.btn(0, BTN[b], false); titleFrame(3);
+      expect(started, 'the release does not start one either').toBe(0);
+    });
+  }
+
+  test.skipIf(todo)('K2.4 N1 (D6): Start on a free second pad during a demo ends it; no P2 is reserved, nothing starts', () => {
+    quietDemo();
+    g.gameStarted = false;
+    rig.connect(0); rig.connect(1); titleFrame(3);
+    expect(g.startDemo()).toBe(true);
+    demoStep(5);
+    rig.btn(1, BTN.START, true); demoStep(2);
+    expect(g.demoState().active).toBe(false);
+    expect(H.state().pendingPad, 'no P2 reserved by the demo-exit press').toBe(null);
+    expect(started).toBe(0);
+    rig.btn(1, BTN.START, false); titleFrame(3);
+    expect(started).toBe(0);
+  });
+
+  test.skipIf(todo)('K2.4 N2 (M10): on the title, a brand-new pad whose very first press is A starts the game on that press', () => {
+    g.gameStarted = false;
+    titleFrame(2);
+    // Chrome only reveals a pad on its first press: it appears with A already down
+    rig.connect(0); rig.btn(0, BTN.A, true);
+    titleFrame(1);
+    expect(started, 'the revealing A press starts the game').toBe(1);
+    rig.btn(0, BTN.A, false); titleFrame(2);
+    expect(started, 'once').toBe(1);
+  });
+
+  test.skipIf(todo)('K2.4 N3: P1\'s pad drops from slot 0 and is re-claimed at slot 2; a new pad on slot 0 then joins P2 with Start', () => {
+    rig.connect(0); frame();
+    rig.axes(0, 0.6, 0); frame(3); rig.axes(0, 0, 0); frame();
+    rig.disconnect(0); frame();
+    expect(g.padState().disconnectPaused).toBe(true);
+    rig.connect(2); frame(2);
+    tap(2, BTN.START);
+    expect(g.paused, 'P1 re-claimed on slot 2').toBe(false);
+    expect(pads()[0]).toBe(2);
+    rig.connect(0); frame();
+    tap(0, BTN.START);
+    expect(H.players().length, 'P2 joins on slot 0').toBe(2);
+    expect(pads()).toEqual([2, 0]);
   });
 });
 
