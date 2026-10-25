@@ -626,11 +626,16 @@ This is the one new game mode the user asked for, so it is an explicit exception
   - Every system that reads the player in the singular is reviewed and goes over `players[]` where the K items below need it: enemy AI and targeting, pickups, hit tests on enemy rounds and explosions, camera, HUD, water wading (W2), footprints, rumble, demo.
   - K1 is a release point of its own. It merges only when the whole existing suite is green with zero test edits, apart from the loader adding `players` to its globals.
 - **K2. Join and devices.**
-  - **Device rule.** P1 = keyboard+mouse, or pad 1 (the M10 last-used rule). P2 = the next **other** pad that presses Start or A.
-    - One pad: P1 on keyboard+mouse, P2 on the pad.
-    - Two pads: one per player. Keyboard+mouse then also drives P1.
-  - **Title.** With a second pad connected, or with one pad and P1 on keyboard, the title shows a blinking "2P PRESS START", and the player count on the title is 1P or 2P.
-  - **Drop-in mid-game.** Start on an unassigned pad spawns P2 next to P1, with 100 HP, the weapon P1 has selected and default ammo and grenades. The banner reads "PLAYER 2 JOINS!". There is no drop-out key.
+  - **Device rule** *(ruling 2026-10-25, on Josh's question: Start/A on a lone pad must keep their M10 meaning, Q4)*.
+    - P1 = keyboard+mouse, or pad 1 under the M10 last-used rule. Once P1 has used a pad, that pad's index is locked to P1.
+    - **Two or more pads:** Start or A on any pad other than P1's joins P2.
+    - **Exactly one pad, not yet used by P1:** the pad's **View/Back** button joins P2. View/Back is unmapped in M10, so this is Q4-safe. From then on the pad belongs to P2, and P1 is on keyboard+mouse only. Start and A on that lone pad keep their M10 meaning, so P1 takes the pad over.
+    - Keyboard+mouse always drives P1.
+  - **Title.** It shows a blinking join hint whenever a join is possible:
+    - "2P PRESS START" with two or more pads;
+    - "2P PRESS VIEW ON PAD" with one unassigned pad.
+    - The player count on the title reads 1P or 2P.
+  - **Drop-in mid-game.** The same join trigger as above spawns P2 next to P1, with 100 HP, the weapon P1 has selected and default ammo and grenades. The banner reads "PLAYER 2 JOINS!". There is no drop-out key.
   - A pad's input (M10 C1–C3) goes only to its own player. Aim assist (C3) is per pad.
   - **Rumble (C4)** goes only to the pad of the player the event concerns: their shots, damage taken, and blasts measured from that player.
 - **K3. Shared camera, zoom and leash.** *(The zoom was added by a user request on 2026-10-25: "use zoom camera when players are too far away from each other".)*
@@ -690,7 +695,7 @@ This is the one new game mode the user asked for, so it is an explicit exception
 - **Acceptance (Anna).**
   - Two mocked standard-mapping pads (the M10 mock extended to indices 0 and 1), plus keyboard+mouse.
   - **Unit:**
-    - Device assignment for every combination (kbd+pad, pad+pad, a late second pad).
+    - Device assignment for every combination (kbd+pad via View, pad+pad via Start/A, a late second pad), with Start/A on a lone pad never joining P2.
     - Leash clamp math at COOP_ZOOM_MIN.
     - Zoom target math: fit, the 0.6 clamp, the 5% zoom-in deadband, and exactly 1.0 in 1P and when players are close.
     - Targeting hysteresis: no switch at 20% closer, switch at 30%.
