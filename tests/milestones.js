@@ -44,5 +44,7 @@ export const LANDED = {
   K5: true, // down, revive, TEAM SECOND WIND (p.state, p.downT, p.reviveT)
   K5LOOK: true, // K5 visuals: HELP! blink, ring timer, revive progress ring (pixi-hud/pixi-sprites)
   K6: true, // targeting hysteresis, x1.5 scaling, no friendly fire, per-player score, team unlocks
-  K7: false, // 2P attract mode
+  K2_2: false, // K2.2 review fixes: env credit (tree falls/fires), paused View hold, downed B, foot rings, legend, pad ids, chained pauses
+  K7: false, // 2P attract mode: every 2nd idle cycle, startDemo({ coop }), D6
+  K7REVIVE: false, // K7 bot revive (spec 0b04d96)
 };
