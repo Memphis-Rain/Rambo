@@ -1833,13 +1833,16 @@ function _spGibSink(gb, x0, y0, w, h, r, Y, zz) {
 // BLOOD ON THE WATER (M9 W3 clouds, W5 tint)
 // =====================================================================
 // W5: one Graphics of tile diamonds, a dither pattern per band (coverage
-// 3 / 6 / 9 / 12 of 16, i.e. up to 75%, darker red as it thickens). Tile
+// 4 / 9 / 11 / 12 of 16, i.e. up to 75%, saturated reds: the frame grade
+// lifts pure red to ~(161,38,0), so only coverage pushes R past G/B: band 2
+// reads R >= 1.4 x G and B, band 3+ >= 1.8 x with dither + CRT on; spec
+// b0cdc51). Tile
 // (i, j) = world [i ts, (i+1) ts) x [j ts, (j+1) ts): the same diamond the
 // terrain chunk draws for it. Rebuilt only when waterBloodVersion changes
 // (<= 4 Hz, and resetWater bumps it), never per frame, and the baked water
 // camo is untouched (the tint sits on top of it).
-const SP_WB_DENS = [0, 3, 6, 9, 12];
-const SP_WB_COL = [0, 0x781818, 0x701212, 0x660c0c, 0x5a0808];
+const SP_WB_DENS = [0, 4, 9, 11, 12];
+const SP_WB_COL = [0, 0x960000, 0xb80000, 0xa80000, 0x900000];
 function _spRenderWaterBlood() {
   const g = _sp.wbG;
   if (!g || typeof waterBloodTiles === 'undefined' || waterBloodVersion === _sp.wbVer) return;
