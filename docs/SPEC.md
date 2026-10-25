@@ -635,7 +635,7 @@ This is the one new game mode the user asked for, so it is an explicit exception
     - "2P PRESS START" with two or more pads;
     - "2P PRESS VIEW ON PAD" with one unassigned pad.
     - The player count on the title reads 1P or 2P.
-  - **Drop-in mid-game.** The same join trigger as above spawns P2 next to P1, with 100 HP, the weapon P1 has selected and default ammo and grenades. The banner reads "PLAYER 2 JOINS!". There is no drop-out key.
+  - **Drop-in mid-game.** The same join trigger as above spawns P2 next to P1 at full health (`hp = maxHp`, i.e. PLAYER_MAX_HP 800), the weapon P1 has selected and default ammo and grenades. The banner reads "PLAYER 2 JOINS!". There is no drop-out key.
   - A pad's input (M10 C1–C3) goes only to its own player. Aim assist (C3) is per pad.
   - **Rumble (C4)** goes only to the pad of the player the event concerns: their shots, damage taken, and blasts measured from that player.
 - **K3. Shared camera, zoom and leash.** *(The zoom was added by a user request on 2026-10-25: "use zoom camera when players are too far away from each other".)*
@@ -664,6 +664,7 @@ This is the one new game mode the user asked for, so it is an explicit exception
   - **K3b. Leash at maximum zoom-out.**
     - Once the zoom is at `COOP_ZOOM_MIN`, a player cannot move to where the separation would push either player within 48 low-res px of the view edge. That player's movement is clamped.
     - Knockback and explosions may push a player past the leash. The camera then follows the midpoint, and the next move is clamped back.
+    - **The 48 px is measured against the camera target** (ruling 2026-10-25, on Anna's question). That is the midpoint at the target zoom, not the eased, drawn camera, so the clamp is deterministic. While the drawn camera catches up, a player may get closer to the drawn edge. The visible guarantee is that the player's feet stay **≥ 32 low-res px** inside the drawn view edge at all times, sprint and dodge included.
     - A downed player can't move, so the leash keeps them on screen for the revive.
   - Shake (J5a) stays global at its current cap, in screen px, unaffected by the zoom.
 - **K4. Look and HUD.**
@@ -672,8 +673,8 @@ This is the one new game mode the user asked for, so it is an explicit exception
   - Everything must fit at 800×600 and 1920×1080 with no overlap. This is checked with HUD-free-box style asserts, as in the W5 test.
 - **K5. Down, revive and team second wind.**
   - At 0 HP in 2P, a player is **DOWN**: they lie bleeding, can't act, and get a "HELP!" blink plus an 8 s ring timer. Enemies ignore downed players.
-  - **Revive:** the partner stands within 50u for 1.5 s, and gets a progress ring. The downed player comes back at 50% HP with 1 s invulnerability.
-  - If the 8 s run out, the player is **dead**. Dead means gibbed per G-series, so it's bloody, and they respawn next to the partner at the start of the next wave with 100 HP.
+  - **Revive:** the partner stands within 50u for 1.5 s, and gets a progress ring. The downed player comes back at 50% of maxHp with 1 s invulnerability.
+  - If the 8 s run out, the player is **dead**. Dead means gibbed per G-series, so it's bloody, and they respawn next to the partner at the start of the next wave at full health (`hp = maxHp`).
   - **No game over (ruling 2026-10-25, a gap Anna found).** The game is endless, and today 1P has no game over: at 0 HP, `damagePlayer` gives **SECOND WIND** (30% HP, 20% shield, 2 s invulnerable, the blast and the banner). The 2P mode keeps that design.
     - **1P:** SECOND WIND is unchanged (Q4).
     - **2P:** a single player at 0 HP goes DOWN (above) instead of getting SECOND WIND.
