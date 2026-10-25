@@ -189,12 +189,15 @@ function _applyRetroToggles() {
 }
 
 // Snapped on-screen offset of the world (also used for mouse aim, Q5)
+// M11 K3a: the zoom scales the world container inside the low-res RT (the
+// low-res pixel, dither and CRT stay as they are); shake stays in screen px
 function updateRetroCamera() {
-  const s = RETRO.PIXEL_SCALE;
-  worldOffsetX = snapToPixel(W / 2 - cam.x + shakeX, s);
-  worldOffsetY = snapToPixel(H / 2 - cam.y + shakeY, s);
+  const s = RETRO.PIXEL_SCALE, z = cam.z;
+  worldOffsetX = snapToPixel(W / 2 - cam.x * z + shakeX, s);
+  worldOffsetY = snapToPixel(H / 2 - cam.y * z + shakeY, s);
   worldContainer.x = worldOffsetX;
   worldContainer.y = worldOffsetY;
+  if (worldContainer.scale.x !== z) worldContainer.scale.set(z);
 }
 
 function renderRetro() {

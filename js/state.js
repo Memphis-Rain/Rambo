@@ -50,7 +50,7 @@ let pendingBossSpawn = -1;
 let shieldRegenTimer = 0;
 
 // Camera
-const cam = { x: 0, y: 0, tx: 0, ty: 0 };
+const cam = { x: 0, y: 0, tx: 0, ty: 0, z: 1 }; // z = M11 K3a world zoom
 // On-screen offset of the world after pixel snapping (retro.js); null before the first frame
 let worldOffsetX = null, worldOffsetY = null;
 

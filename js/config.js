@@ -44,6 +44,13 @@ const CFG = {
   PAD_ASSIST_RANGE: 420,
   PAD_RUMBLE: true,
   PAD_RUMBLE_GAP_MS: 50,       // at most one new effect per 50 ms
+  // M11 K3: co-op camera zoom (world scale inside the low-res RT) and leash
+  COOP_ZOOM_MIN: 0.6,          // widest view (1.67x)
+  COOP_ZOOM_MARGIN: 64,        // low-res px every counted player stays inside the view edges
+  COOP_ZOOM_OUT_RATE: 3,       // zoom units / s (linear)
+  COOP_ZOOM_IN_RATE: 1,        // zoom units / s (linear), after the deadband
+  COOP_ZOOM_DEADBAND: 0.05,    // zoom in only once the target is >= 5% above the zoom
+  COOP_LEASH_PX: 48,           // K3b: at COOP_ZOOM_MIN, low-res px from the view edge
   // M9 F1-F3: flamethrower, burning enemies, burning trees
   FLAME_RANGE: 260,            // F1: a flame slows to a stop at about this distance
   FLAME_LIFE: 0.45,            // s (+-10%)

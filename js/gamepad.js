@@ -210,13 +210,14 @@ function padAssistTarget(px, py, dirX, dirY, maxDist, coneDeg) {
   return best;
 }
 
+// World -> CSS px through this frame's offset and the K3a zoom
 function _padScreenX(wx, wy) {
-  const ox = worldOffsetX !== null ? worldOffsetX : W / 2 - cam.x;
-  return (wx - wy) + ox;
+  const ox = worldOffsetX !== null ? worldOffsetX : W / 2 - cam.x * cam.z;
+  return (wx - wy) * cam.z + ox;
 }
 function _padScreenY(wx, wy) {
-  const oy = worldOffsetY !== null ? worldOffsetY : H / 2 - cam.y;
-  return (wx + wy) * CFG.ISO_SCALE + oy;
+  const oy = worldOffsetY !== null ? worldOffsetY : H / 2 - cam.y * cam.z;
+  return (wx + wy) * CFG.ISO_SCALE * cam.z + oy;
 }
 
 function pollGamepad() {
@@ -306,7 +307,7 @@ function pollGamepad() {
     tz = entityWaterlineH(as) + (entityDrawnH(as) - entityWaterlineH(as)) * 0.45; // visible torso
   }
   mouseX = _padScreenX(tx, ty);
-  mouseY = _padScreenY(tx, ty) - tz;
+  mouseY = _padScreenY(tx, ty) - tz * cam.z;
 
   // C2 mapping
   const rt = pad.pressed[PAD_BTN.RT];

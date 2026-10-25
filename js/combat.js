@@ -130,6 +130,7 @@ function updatePlayer(dt) {
       p.vy = Math.sin(p.dodgeAngle) * CFG.DODGE_SPEED;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
+      coopApplyLeash(p); // M11 K3b
       if (Math.random()<0.3) spawnSmoke(p.x, p.y, 1);
       return;
     }
@@ -185,6 +186,7 @@ function updatePlayer(dt) {
 
   p.x += p.vx * dt;
   p.y += p.vy * dt;
+  coopApplyLeash(p); // M11 K3b: only at COOP_ZOOM_MIN with a partner
 
   // Collision with trees, rocks, boulders
   resolveEnvCollision(p, 10);
@@ -203,9 +205,12 @@ function updatePlayer(dt) {
 
   // Mouse aiming
   // Map through the offset the world was actually drawn at (Q5: exact with pixel snapping)
-  const ox = worldOffsetX !== null ? worldOffsetX : W/2 - cam.x;
-  const oy = worldOffsetY !== null ? worldOffsetY : H/2 - cam.y;
-  const worldMouse = toWorld(mouseX - ox, mouseY - oy);
+  // and the K3a zoom: (mx, my) = the cursor in zoom-1 iso screen units
+  const z = cam.z;
+  const ox = worldOffsetX !== null ? worldOffsetX : W/2 - cam.x * z;
+  const oy = worldOffsetY !== null ? worldOffsetY : H/2 - cam.y * z;
+  const mx = (mouseX - ox) / z, my = (mouseY - oy) / z;
+  const worldMouse = toWorld(mx, my);
   mouseWorldX = mouseGroundX = worldMouse.x;
   mouseWorldY = mouseGroundY = worldMouse.y;
   // G13: the cursor maps to the GROUND, so aiming at a head meant aiming at
@@ -213,14 +218,14 @@ function updatePlayer(dt) {
   // (front-most) enemy's ground centre instead. Not for the demo bot, which
   // already aims at led ground points.
   if (!(typeof demoActive !== 'undefined' && demoActive)) {
-    const picked = pickEnemyAtScreen(mouseX - ox, mouseY - oy);
+    const picked = pickEnemyAtScreen(mx, my);
     if (picked) { aimPointOf(picked, _aimPt); mouseWorldX = _aimPt.x; mouseWorldY = _aimPt.y; } // W2: visible column when wading
     _aimPicked = picked;
   } else _aimPicked = null;
   p.aimAngle = Math.atan2(mouseWorldY - p.y, mouseWorldX - p.x);
   const sp = toScreen(p.x, p.y);
-  let smx = mouseX - ox - sp.x;
-  let smy = mouseY - oy - sp.y;
+  let smx = mx - sp.x;
+  let smy = my - sp.y;
   if (_aimPicked) { // G13: point the gun where the shot goes (the picked torso),
     // measured from the gun hand's height (8 art px up), not the feet
     const e = _aimPicked;
@@ -1315,6 +1320,7 @@ function bulletHitEnemy(b, e, mult = 1) {
 // =====================================================================
 // WAVE MANAGER & BOSSES
 // =====================================================================
+const _spawnO = { x: 0, y: 0 };
 function spawnBoss(weaponIndex) {
   const name = BOSS_NAMES[weaponIndex-1] || 'Boss';
   // Pick a base enemy type that fits the power level
@@ -1322,8 +1328,9 @@ function spawnBoss(weaponIndex) {
   const bossHp = 300 + weaponIndex * 250; // Easy/relaxing HP scaling
 
   const a = Math.random() * Math.PI * 2;
-  const sx = player.x + Math.cos(a) * (CFG.VIEW_RANGE + 80);
-  const sy = player.y + Math.sin(a) * (CFG.VIEW_RANGE + 80);
+  const o = coopSpawnOrigin(_spawnO), sd = (CFG.VIEW_RANGE + 80) / cam.z; // M11 K3a: off the zoomed view
+  const sx = o.x + Math.cos(a) * sd;
+  const sy = o.y + Math.sin(a) * sd;
 
   spawnEnemy(baseIdx, sx, sy, { name, hp: bossHp });
   showNotification(`BOSS: ${name}!`, 3);
@@ -1377,10 +1384,11 @@ function updateWaves(dt) {
         if(r<=0){ typeIdx = ENEMY_TYPES.indexOf(available[i]); break; }
       }
 
-      const spawnDist = CFG.VIEW_RANGE + 100;
+      const spawnDist = (CFG.VIEW_RANGE + 100) / cam.z; // M11 K3a: off the zoomed view
       const a = Math.random() * Math.PI * 2;
-      const sx = player.x + Math.cos(a) * spawnDist;
-      const sy = player.y + Math.sin(a) * spawnDist;
+      const o = coopSpawnOrigin(_spawnO);
+      const sx = o.x + Math.cos(a) * spawnDist;
+      const sy = o.y + Math.sin(a) * spawnDist;
       spawnEnemy(typeIdx, sx, sy);
       enemiesSpawned++;
     }

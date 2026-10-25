@@ -573,8 +573,9 @@ function _spBeginFrame() {
   _sp.gfxN = 0;
   for (const k in _sp.named) { const pl = _sp.named[k]; if (pl.n > pl.prev) pl.prev = pl.n; pl.n = 0; }
   const mx = 72, my = 120;
-  _sp.vx0 = cam.x - W / 2 - mx; _sp.vx1 = cam.x + W / 2 + mx;
-  _sp.vy0 = cam.y - H / 2 - my; _sp.vy1 = cam.y + H / 2 + my;
+  const hw = W / 2 / cam.z, hh = H / 2 / cam.z; // M11 K3a: the zoomed view, in world-iso units
+  _sp.vx0 = cam.x - hw - mx; _sp.vx1 = cam.x + hw + mx;
+  _sp.vy0 = cam.y - hh - my; _sp.vy1 = cam.y + hh + my;
   _sp.groundG.clear();
   _sp.fxG.clear();
   _sp.textG.clear();

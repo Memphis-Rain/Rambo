@@ -133,10 +133,14 @@ function addShake(mag) {
   shakeMag = Math.min(CFG.SHAKE_MAX, Math.max(shakeMag, mag));
 }
 
+const _camMid = { x: 0, y: 0 };
 function updateCamera(dt) {
-  const sp = toScreen(player.x, player.y);
+  // M11 K3: the midpoint of the standing and downed players (P1 alone in 1P)
+  if (!coopMidpoint(_camMid)) { _camMid.x = player.x; _camMid.y = player.y; }
+  const sp = toScreen(_camMid.x, _camMid.y);
   cam.tx = sp.x;
   cam.ty = sp.y;
+  coopUpdateZoom(dt); // K3a
   cam.x += (cam.tx - cam.x) * CFG.CAMERA_SMOOTH * 60 * dt;
   cam.y += (cam.ty - cam.y) * CFG.CAMERA_SMOOTH * 60 * dt;
 
@@ -305,8 +309,9 @@ function update(dt) {
 
   // Ambient effects - fireflies in dark areas, water sparkles
   if(Math.random() < 0.05 && player){
-    const ox = player.x + randRange(-400, 400);
-    const oy = player.y + randRange(-400, 400);
+    const o = coopSpawnOrigin(_coopAmbO), r = 400 / cam.z; // M11 K3a: the whole zoomed view
+    const ox = o.x + randRange(-r, r);
+    const oy = o.y + randRange(-r, r);
     const terrain = getTerrainTypeAt(ox, oy);
     if(terrain === 'dark'){
       // Firefly
@@ -463,6 +468,7 @@ function resetRound() {
   mouseRightDown = false; mouseRightJustPressed = false;
 
   player = createPlayer();
+  resetCoop(); // M11: back to 1P, zoom 1
   cam.x = 0; cam.y = 0;
   worldOffsetX = null; worldOffsetY = null;
   lastTime = performance.now();

@@ -367,11 +367,23 @@ function baseOnWater(x, y, r) {
   return false;
 }
 
+// M11 K3a: does chunk (cx, cy)'s screen box come within `m` (zoom-1 iso
+// units) of the zoomed view? (a chunk is a diamond 2cs wide, 2cs x iso tall)
+function _chunkNearView(cx, cy, cs, m) {
+  const iso = CFG.ISO_SCALE, hw = W / 2 / cam.z + m, hh = H / 2 / cam.z + m;
+  const sx = (cx - cy) * cs, sy = (cx + cy + 1) * cs * iso;
+  return Math.abs(sx - cam.x) < cs + hw && Math.abs(sy - cam.y) < cs * iso + hh;
+}
+
 function renderPixiTerrain() {
   const ts = CFG.TILE_SIZE;
   const cs = CFG.CHUNK_SIZE * ts;
   const centerWorld = toWorld(cam.x, cam.y);
-  const chunkRange = 2;
+  const zoomed = cam.z < 1;
+  // Zoomed out (K3a): rings out to the view's world extent; only chunks near
+  // the view bake (those on screen at once, the rest within the budget)
+  const ext = zoomed ? (W / 2 / cam.z + H / 2 / cam.z / CFG.ISO_SCALE) * 0.5 : 0;
+  const chunkRange = zoomed ? Math.ceil(ext / cs) + 1 : 2;
   const pcx = Math.floor(centerWorld.x / cs);
   const pcy = Math.floor(centerWorld.y / cs);
 
@@ -384,7 +396,10 @@ function renderPixiTerrain() {
     for (let cy = pcy - ring; cy <= pcy + ring; cy++) {
       for (let cx = pcx - ring; cx <= pcx + ring; cx++) {
         if (Math.max(Math.abs(cx - pcx), Math.abs(cy - pcy)) !== ring) continue;
-        if (ring > 1 && performance.now() - t0 > TERRAIN_BAKE_BUDGET_MS) break bake;
+        if (zoomed) {
+          if (!_chunkNearView(cx, cy, cs, cs * 0.5)) continue;
+          if (ring > 1 && !_chunkNearView(cx, cy, cs, 0) && performance.now() - t0 > TERRAIN_BAKE_BUDGET_MS) continue;
+        } else if (ring > 1 && performance.now() - t0 > TERRAIN_BAKE_BUDGET_MS) break bake;
         generatePixiChunk(cx, cy);
       }
     }
@@ -399,7 +414,9 @@ function renderPixiTerrain() {
     dropped.clear();
     for (const [key, sprite] of chunkCache) {
       const [cx2, cy2] = key.split(',').map(Number);
-      if (Math.abs(cx2 - pcx) > chunkRange + 2 || Math.abs(cy2 - pcy) > chunkRange + 2) {
+      const far = zoomed ? !_chunkNearView(cx2, cy2, cs, cs * 1.5)
+        : Math.abs(cx2 - pcx) > chunkRange + 2 || Math.abs(cy2 - pcy) > chunkRange + 2;
+      if (far) {
         terrainContainer.removeChild(sprite);
         sprite.destroy(true); // Destroy sprite and texture
         chunkCache.delete(key);

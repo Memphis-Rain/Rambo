@@ -251,10 +251,11 @@ function _demoAimAt(wx, wy) {
   const sx = wx - wy, sy = (wx + wy) * CFG.ISO_SCALE; // toScreen, inlined
   const hasOff = typeof worldOffsetX !== 'undefined' && worldOffsetX !== null &&
                  typeof worldOffsetY !== 'undefined' && worldOffsetY !== null;
-  const ox = hasOff ? worldOffsetX : W / 2 - cam.x;
-  const oy = hasOff ? worldOffsetY : H / 2 - cam.y;
-  mouseX = sx + ox;
-  mouseY = sy + oy;
+  const z = cam.z; // M11 K3a
+  const ox = hasOff ? worldOffsetX : W / 2 - cam.x * z;
+  const oy = hasOff ? worldOffsetY : H / 2 - cam.y * z;
+  mouseX = sx * z + ox;
+  mouseY = sy * z + oy;
 }
 
 // Per-frame scratch storage (the bot allocates nothing per frame)

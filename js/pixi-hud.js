@@ -1048,10 +1048,11 @@ function renderPadReticle(spReady) {
     }
   }
   // At the aim point (world -> screen with this frame's camera offset)
-  const ox = worldOffsetX !== null ? worldOffsetX : W / 2 - cam.x;
-  const oy = worldOffsetY !== null ? worldOffsetY : H / 2 - cam.y;
-  g.x = Math.round((padAim.x - padAim.y) + ox);
-  g.y = Math.round((padAim.x + padAim.y) * CFG.ISO_SCALE + oy);
+  const z = cam.z; // M11 K3a: the reticle stays screen-size; only its position zooms
+  const ox = worldOffsetX !== null ? worldOffsetX : W / 2 - cam.x * z;
+  const oy = worldOffsetY !== null ? worldOffsetY : H / 2 - cam.y * z;
+  g.x = Math.round((padAim.x - padAim.y) * z + ox);
+  g.y = Math.round((padAim.x + padAim.y) * CFG.ISO_SCALE * z + oy);
 }
 
 /**
