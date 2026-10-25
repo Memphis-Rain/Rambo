@@ -420,6 +420,15 @@ User: "when enemy or player enters water, only half the body should be visible (
   - Rendering:
     - A tint overlay from water colour towards dark blood red, drawn in **4 discrete bands**, dithered, up to ~75% coverage at c = 1.
     - A pond after a big fight should read as clearly red.
+    - **Measurable (Ralph, after the first W5 build):** the first build's "red" tile averaged rgb(77,77,46), which reads olive or mud, not blood.
+      - At band 2, the averaged on-screen tile colour must have **R ≥ 1.4 × G and R ≥ 1.4 × B**.
+      - At band 3 (c ≈ 1) it's ≥ 1.8×, a deep blood red.
+      - Band 1 may stay subtle, a reddish-brown tinge.
+      - Measured with retro dither and CRT on, at tile centres.
+    - **Look follow-up (Ralph):**
+      - Feathered band edges: over the outer ~25% of a tile, the dither coverage steps toward the neighbour's band. Still Bayer-stepped, with no smooth alpha.
+      - Water highlights stay visible at bands 1–3. Measurable: the tinted tile has ≥ 30% as many "highlight" pixels as the same tile clean, where a highlight pixel is one with luminance ≥ the clean tile's 95th percentile. Band 4 is exempt.
+    - **Prune ruling (Josh/Anna, accepted):** a tile under 0.02 reads and draws as c 0 / band 0, but keeps an internal trace down to `CFG.W5_STORE_MIN` 0.004 so diffusion conserves blood. A literal prune drained ponds in about 50 s.
   - Performance:
     - Updates run at ≤ 4 Hz and only for dirty tiles.
     - The baked water camo (P-series) must **not** be rebaked per frame; use an overlay layer.
