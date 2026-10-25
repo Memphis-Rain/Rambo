@@ -187,6 +187,14 @@ describe('N1 fuse and explosion', () => {
   });
 
   test.skipIf(todo)('N1: in water it blows a geyser: R 98 splash, no scorch, no fireball explosion', () => {
+    // "W5 is unaffected" = the geyser's water column adds no blood. Check it with nobody
+    // around: wounded wading enemies do bleed into the water (W5 hit +0.02), as they should.
+    if (typeof g.waterBloodAt === 'function') {
+      const c0 = g.waterBloodAt(0, 0).c;
+      g.grenadeExplode({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, t: 1.8, fuse: 1.8, bounces: 0, inWater: true, sinkT: 0 });
+      g.processPendingDamage();
+      expect(g.waterBloodAt(0, 0).c, 'the geyser itself adds no W5 blood').toBe(c0);
+    }
     const ds = [0, 60, 97, 110];
     const es = ds.map((d) => { const e = g.spawnEnemy(2, d + 0.001, 0); e.hp = e.maxHp = 1e7; return e; });
     const rec = recordDamage();
@@ -194,7 +202,6 @@ describe('N1 fuse and explosion', () => {
     let explosions = 0;
     g.spawnExplosion = (...a) => { explosions++; return origExp(...a); };
     const scorch0 = g.bloodPools.filter((d) => d.kind === g.DECAL_SCORCH).length;
-    const c0 = typeof g.waterBloodAt === 'function' ? g.waterBloodAt(0, 0).c : null;
     g.grenadeExplode({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, t: 1.8, fuse: 1.8, bounces: 0, inWater: true, sinkT: 0 });
     g.processPendingDamage();
     rec.restore();
@@ -206,6 +213,5 @@ describe('N1 fuse and explosion', () => {
     }
     expect(explosions, 'no fireball explosion in water').toBe(0);
     expect(g.bloodPools.filter((d) => d.kind === g.DECAL_SCORCH).length, 'no scorch').toBe(scorch0);
-    if (c0 !== null) expect(g.waterBloodAt(0, 0).c, 'W5 concentration unaffected').toBe(c0);
   });
 });

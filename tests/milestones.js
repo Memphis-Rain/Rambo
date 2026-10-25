@@ -23,15 +23,16 @@ export const LANDED = {
   N1: true, // grenades on F
   E13: true, // sustained fire cuts trees down (trunk HP)
   W2: true, // wading: submerged sprites, visible-only aim
-  W3: false, // blood in water: clouds, no decals; footprints washed by wading
-  W4: false, // corpses sink and dissolve in water
-  W5: false, // water reddens with blood (waterBloodAt)
+  W3: true, // blood in water: clouds, no decals; footprints washed by wading
+  W4: true, // corpses sink and dissolve in water
+  W5: true, // water reddens with blood (waterBloodAt)
+  W5LOOK: true, // W5 look follow-up (spec 3db5629): feathered band edges, highlights kept at bands 1-3
   F1: false, // flamethrower replaces Tesla
   F2: false, // burning enemies panic
   F3: false, // burning trees
   F4: false, // demo bot uses the flamethrower
-  M9PERF: false,
+  M9PERF: false, // M9 perf scenario (burning enemies/trees + red pond)
   M10: true, // Xbox controller (spec a53b301): gamepad polling, aim, assist, rumble, hot-plug
-  CACHEBUST: true, // spec B1: ?v=<BUILD> on every local asset in game.html (npm run stamp) // M9 perf scenario (burning enemies/trees + red pond)
+  CACHEBUST: true, // spec B1: ?v=<BUILD> on every local asset in game.html (npm run stamp)
   FU1: true, // follow-ups after the first build (spec 1c81384): R4a DITHER_STRENGTH, D4 wave 10, D5 overlay visible
 };

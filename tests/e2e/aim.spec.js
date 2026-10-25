@@ -272,11 +272,12 @@ for (const scale of [1, 3]) {
           const b = await game.eval((i) => __g13.prepBounds(i), i);
           expect(b, `${label(target)} ${dirName}: sprite rendered`).not.toBeNull();
           // Measurement sanity: local and global bounds agree, the feet sit at the bottom of the rect
-          expect(Math.abs(b.global.x - b.x) + Math.abs(b.global.y - b.y)).toBeLessThanOrEqual(2);
-          expect(b.footX).toBeGreaterThan(b.x);
-          expect(b.footX).toBeLessThan(b.x + b.w);
-          expect(b.footY).toBeGreaterThan(b.y + b.h * 0.5); // a gun can hang below the feet
-          expect(b.footY).toBeLessThanOrEqual(b.y + b.h + 1);
+          const at = `${label(target)} ${dirName} ${part}: ${JSON.stringify(b)}`;
+          expect(Math.abs(b.global.x - b.x) + Math.abs(b.global.y - b.y), `local vs global bounds (${at})`).toBeLessThanOrEqual(2);
+          expect(b.footX, `feet inside the rect (${at})`).toBeGreaterThan(b.x);
+          expect(b.footX, `feet inside the rect (${at})`).toBeLessThan(b.x + b.w);
+          expect(b.footY, `feet in the lower half (${at})`).toBeGreaterThan(b.y + b.h * 0.5); // a gun can hang below the feet
+          expect(b.footY, `feet at the bottom of the rect (${at})`).toBeLessThanOrEqual(b.y + b.h + 1);
           const pt = aimPoint(b, frac);
           const { hits, rc } = await fireAt(game, pt, i);
           tally[part][1]++;

@@ -5,6 +5,22 @@ import { LANDED } from '../milestones.js';
 const type = (g, name) => g.ENEMY_TYPES.findIndex((t) => t.name === name);
 
 let game, g;
+
+/** A point whose surrounding 3x3 rendered tiles are all land (W3: blood landing on water
+ *  makes a cloud, not a decal, so decal assertions must not depend on the world seed). */
+function landPoint(game) {
+  const ts = game.CFG.TILE_SIZE;
+  const dry = (x, y) => game.getTerrainTypeAt(Math.floor(x / ts) * ts, Math.floor(y / ts) * ts) !== 'water';
+  for (let r = 0; r < 20000; r += ts) {
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2, x = Math.round(Math.cos(a) * r), y = Math.round(Math.sin(a) * r);
+      let ok = true;
+      for (let dx = -1; dx <= 1 && ok; dx++) for (let dy = -1; dy <= 1 && ok; dy++) ok = dry(x + dx * ts, y + dy * ts);
+      if (ok) return { x, y };
+    }
+  }
+  throw new Error('no dry 3x3 area found');
+}
 beforeEach(() => {
   game = newRound();
   g = game.g;
@@ -31,7 +47,8 @@ describe('T3 combat: damage application', () => {
   });
 
   test('T3: lethal damage kills, removes the enemy and leaves a body and blood', () => {
-    const e = g.spawnEnemy(type(g, 'Militia'), 50, 50);
+    const at = landPoint(g); // blood on water becomes a cloud (W3), so kill on land
+    const e = g.spawnEnemy(type(g, 'Militia'), at.x, at.y);
     g.damageEnemy(e, e.hp + 1, 0);
     expect(e.dead).toBe(true);
     expect(g.enemies).not.toContain(e);

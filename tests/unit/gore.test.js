@@ -13,6 +13,22 @@ beforeEach(() => {
 
 const militia = () => g.spawnEnemy(0, 0, 0);
 
+/** A point whose surrounding 3x3 rendered tiles are all land (W3: blood landing on water
+ *  makes a cloud, not a decal, so decal assertions must not depend on the world seed). */
+function landPoint(game) {
+  const ts = game.CFG.TILE_SIZE;
+  const dry = (x, y) => game.getTerrainTypeAt(Math.floor(x / ts) * ts, Math.floor(y / ts) * ts) !== 'water';
+  for (let r = 0; r < 20000; r += ts) {
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2, x = Math.round(Math.cos(a) * r), y = Math.round(Math.sin(a) * r);
+      let ok = true;
+      for (let dx = -1; dx <= 1 && ok; dx++) for (let dy = -1; dy <= 1 && ok; dy++) ok = dry(x + dx * ts, y + dy * ts);
+      if (ok) return { x, y };
+    }
+  }
+  throw new Error('no dry 3x3 area found');
+}
+
 describe('G5 gibs', () => {
   test.skipIf(todo)('G5: explosive kill bursts into 5-8 gibs in the same call', () => {
     const e = militia();
@@ -82,7 +98,8 @@ describe('G4 decals', () => {
 
   test.skipIf(todo)('G4: decalVersion increments when decals change', () => {
     const v0 = g.decalVersion;
-    const e = militia();
+    const at = landPoint(g); // blood on water becomes a cloud (W3), so bleed on land
+    const e = g.spawnEnemy(0, at.x, at.y);
     g.damageEnemy(e, e.hp + 1, 0);
     expect(g.decalVersion).toBeGreaterThan(v0);
   });
