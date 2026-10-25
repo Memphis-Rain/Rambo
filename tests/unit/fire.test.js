@@ -513,13 +513,21 @@ describe('F2 burning enemies', () => {
     p.invincible = 0;
     p.hp = p.maxHp; p.shield = p.maxShield;
     const hp0 = p.hp, sh0 = p.shield;
-    const es = [];
-    for (const d of [{ x: -1, y: 0 }, { x: 0, y: -1 }, { x: 0, y: 1 }, { x: -Math.SQRT1_2, y: -Math.SQRT1_2 }]) {
+    const dirs = [{ x: -1, y: 0 }, { x: 0, y: -1 }, { x: 0, y: 1 }, { x: -Math.SQRT1_2, y: -Math.SQRT1_2 }];
+    // Ignite all four first, parking each one down-right, beyond flame reach (260u) and clear of every stream,
+    // and only then press them against the player: a burning body already pinned at 12u can cover
+    // the next 70u target on screen, and G13 picking would rightly snap the aim onto it.
+    let later = 0;
+    const es = dirs.map((d, i) => {
       const e = dummy('Militia', p.x + d.x * 70, p.y + d.y * 70);
-      ignite(e, { dir: d });
-      pin(e, { x: p.x + d.x * 12, y: p.y + d.y * 12 });
-      es.push(e);
-    }
+      const n = ignite(e, { dir: d, to: { x: p.x + 300 + i * 40, y: p.y + 300 } }); // 424-500u: dry (findHome R 600)
+      if (i) later += n * DT;
+      return e;
+    });
+    // Nothing refreshes the burns once pressed (the stream goes the other way), so the first 4 s burn
+    // must outlast the later ignitions plus the 2 s check.
+    expect(later, `later ignitions took ${later.toFixed(2)} s`).toBeLessThan(1.5);
+    es.forEach((e, i) => pin(e, { x: p.x + dirs[i].x * 12, y: p.y + dirs[i].y * 12 }));
     fireAt(home.x + 200, home.y);
     step(2, () => {
       expect(hook.burnT(p), 'player burnT').toBe(0);
