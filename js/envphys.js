@@ -453,9 +453,13 @@ function _envLand(r) {
   _envDebrisBurst(r.bx, r.by, 4, 2, DEBRIS_BARK, r.kind === ENVK_DEAD ? ENV_DEADWOOD_COLORS : ENV_BARK_COLORS, ux, uy, 0.5, 1.2, 2);
   addShake(Math.min(CFG.ENV_FALL_SHAKE, 2 + r.height * 0.04));
   // M10 C4: a soft rumble for a tree falling nearby
-  if (player && typeof padRumble === 'function') {
-    const d = Math.sqrt((player.x - mx) ** 2 + (player.y - my) ** 2);
-    if (d < 320) padRumble(0.15 + 0.35 * (1 - d / 320), 0, 160);
+  if (typeof padRumble === 'function') {
+    for (let i = 0; i < players.length; i++) { // M11 K2: each player's own pad
+      const p = players[i];
+      if (!p) continue;
+      const d = Math.sqrt((p.x - mx) ** 2 + (p.y - my) ** 2);
+      if (d < 320) padRumble(0.15 + 0.35 * (1 - d / 320), 0, 160, p);
+    }
   }
   if (typeof playSound === 'function') playSound('hit', 0.5);
 

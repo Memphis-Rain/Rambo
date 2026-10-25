@@ -18,8 +18,12 @@
 //   worldToView(wx, wy, out) / viewToWorld(x, y, out) -> CSS px <-> ground
 //                      point through this frame's offset and zoom (Q5)
 //   coopJoin(padIndex) -> players[1] (spawned next to P1) or null
+//   coopTryJoin(padIndex) -> bool: a join press from a free pad (gamepad.js);
+//                      on the title it reserves P2 for the next game
+//   coopState()        { n, title2P, titleCount, titleHint, devices:
+//                      [{ kbm, pad }] per player, pendingPad }
 
-const _coop = { target: 1, zoomingIn: false, forced: null };
+const _coop = { target: 1, zoomingIn: false, forced: null, pendingPad: null, titleHint: null, titleCount: 0 };
 const _coopMid = { x: 0, y: 0 };
 const _coopPts = [];
 const _coopV = { x: 0, y: 0 };
@@ -146,21 +150,99 @@ function viewToWorld(x, y, out) {
   return out;
 }
 
-// K2 fills in devices; for now P2 spawns beside P1 (tests, K3 tuning)
+// K2 drop-in: P2 beside P1 (screen-right), full health, P1's weapon with a
+// full magazine, default grenades; padIndex = P2's pad (null: none yet)
 function coopJoin(padIndex) {
   if (!player || players.length >= 2) return null;
   const p = createPlayer();
   p.num = 2;
-  p.pad = padIndex === undefined ? null : padIndex;
-  p.x = player.x + 40; p.y = player.y + 40;
+  p.pad = padIndex === undefined || padIndex === null ? null : padIndex;
+  p.ctl = newCtl(p.pad);
+  p.x = player.x + 30; p.y = player.y - 30;
+  if (typeof resolveEnvCollision === 'function') resolveEnvCollision(p, 10);
   p.weapon = player.weapon;
   p.magAmmo = WEAPONS[p.weapon].mag;
+  p.angle = p.aimAngle = player.aimAngle;
   players.push(p);
+  if (p.pad !== null && typeof padAttachP2 === 'function') padAttachP2(p.pad);
   return p;
+}
+
+// A Start / A (or lone-pad View) press from a pad no player owns
+function coopTryJoin(padIndex) {
+  if (typeof demoActive !== 'undefined' && demoActive) return false;
+  if (players.length >= 2) { // re-attach a P2 whose pad dropped
+    const p2 = players[1];
+    if (!p2 || p2.pad !== null) return false;
+    p2.pad = padIndex; p2.ctl.padIndex = padIndex;
+    padAttachP2(padIndex);
+    return true;
+  }
+  if (!gameStarted) { // title: reserve P2 for the next game
+    if (_coop.pendingPad !== null) return false;
+    _coop.pendingPad = padIndex;
+    padAttachP2(padIndex);
+    return true;
+  }
+  if (paused || !coopJoin(padIndex)) return false;
+  showNotification('PLAYER 2 JOINS!', 2);
+  return true;
+}
+
+// gamepad.js: P2's pad dropped (a title reservation is dropped with it)
+function coopPadLost() { _coop.pendingPad = null; }
+
+// startGame(): the pad reserved on the title (resetRound clears it)
+function coopPendingPad() { return _coop.pendingPad; }
+
+// End of update(): P2's one-frame edges, as main.js does for P1's mouse
+function coopEndFrame() {
+  for (let i = 1; i < players.length; i++) {
+    const p = players[i];
+    if (p && p.ctl) p.ctl.mouseJustPressed = false;
+  }
+}
+
+// Title: "2P PRESS START" with 2+ pads, "2P PRESS VIEW ON PAD" with a lone
+// pad P1 hasn't used; the player count reads 1P / 2P (gameLoop, title only)
+function _coopTitleHint() {
+  if (_coop.pendingPad !== null) return '';
+  const n = typeof _padCount === 'function' ? _padCount() : 0;
+  if (n >= 2) return '2P PRESS START';
+  if (n === 1 && !(pad.connected && pad.used)) return '2P PRESS VIEW ON PAD';
+  return '';
+}
+
+function coopTitleTick() {
+  const hint = _coopTitleHint(), count = _coop.pendingPad !== null ? 2 : 1;
+  if (hint === _coop.titleHint && count === _coop.titleCount) return;
+  _coop.titleHint = hint; _coop.titleCount = count;
+  const h = document.getElementById('coop-hint'), c = document.getElementById('coop-count');
+  if (h) { h.textContent = hint; h.style.display = hint ? '' : 'none'; }
+  if (c) c.textContent = count + 'P';
+}
+
+function coopState() {
+  const devices = [];
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i];
+    if (!p) { devices.push(null); continue; }
+    devices.push(i === 0
+      ? { kbm: true, pad: pad.connected ? pad.index : null }
+      : { kbm: false, pad: p.pad });
+  }
+  const hint = _coopTitleHint();
+  return {
+    n: players.length, title2P: !gameStarted && hint !== '', titleHint: hint,
+    titleCount: _coop.pendingPad !== null || players.length > 1 ? 2 : 1,
+    devices, pendingPad: _coop.pendingPad,
+  };
 }
 
 function resetCoop() {
   players.length = 1;
   cam.z = 1;
   _coop.target = 1; _coop.zoomingIn = false; _coop.forced = null;
+  _coop.pendingPad = null; _coop.titleHint = null;
+  if (typeof padAttachP2 === 'function') padAttachP2(-1);
 }

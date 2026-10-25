@@ -83,8 +83,11 @@ const _sp = {
   // env objects
   env: new Map(), envVis: [], envFrame: 0,
   treeCtx: new Map(),
-  // player gun tip (screen) for muzzle-flash alignment
+  // player gun tip (screen) for muzzle-flash alignment (P1; mirrors playerG._tip*)
   pTipX: 0, pTipY: 0, pTipValid: false,
+  // M11 K2: P2 puppet + dodge after-image, created lazily the first frame
+  // players[1] exists (none in 1P); p2Ent = the P2 drawn this frame, or null
+  p2G: null, p2GhostG: null, p2Ent: null,
   wadeSeq: 0, // W2 ripple phase per wading entity
   // hurt overlay
   hurtPrev: 0,
@@ -113,6 +116,16 @@ const _spTW = new Uint8Array([6, 4, 8, 6, 6, 6, 6, 6, 6, 6, 8, 8, 6]); // torso 
 const SP_SKIN = 0xc08858, SP_SKIN_S = 0x8e6038, SP_SKIN_L = 0xd8a070;
 const SP_BOOT = 0x221a14, SP_OUTLINE = 0x120c08, SP_OUTLINE_BOSS = 0x6a0000, SP_OUTLINE_HEAL = 0x30ff50;
 const SP_EYE = 0x100c0c;
+
+// M11 K4: player palettes, indexed by _P.pal (0 = P1, 1 = P2, by p.num === 2).
+// P1 = black tank top + red headband (unchanged). P2 = a darker navy vest
+// (lower luma than P1's, and a cool hue so the two read apart at x1) and a
+// brighter scarlet bandana with a deep-red knot.
+const _spPalVest  = [0x2c2c28, 0x1a2030];  // torso
+const _spPalVestS = [0x1c1c18, 0x0e121c];  // torso back shade
+const _spPalVestL = [0x48483e, 0x2e3a52];  // torso top highlight
+const _spPalBand  = [0xd02020, 0xff3a28];  // headband + middle tail pixel
+const _spPalBandS = [0xb01818, 0xa00c10];  // tail ends
 
 // Player weapon visuals: [len, thick, bodyColor, tipColor]
 const _spWeaponVis = [
@@ -395,6 +408,7 @@ function initPixiSprites() {
     for (const g of _sp.bodyCache.free) _spDestroy(g);
     _sp.env.forEach((g) => { if (g && g._notchG) _spDestroy(g._notchG); _spDestroy(g); });
     _spDestroy(_sp.playerG); _spDestroy(_sp.ghostG); _spDestroy(_sp.shadowG);
+    if (_sp.p2G) { _spDestroy(_sp.p2G); _spDestroy(_sp.p2GhostG); }
     _spDestroy(_sp.fxG); _spDestroy(_sp.textG); _spDestroy(_sp.groundG); _spDestroy(_sp.hurtG);
     _spDestroy(_sp.wbG); _spDestroy(_sp.cloudG);
     _spDestroy(_sp.wbSheenA); _spDestroy(_sp.wbSheenB);
@@ -414,6 +428,7 @@ function initPixiSprites() {
   _sp.env = new Map(); _sp.envVis = []; _sp.envFrame = 0;
   _sp.hurtPrev = 0; _sp.hurtDrops.fill(0);
   _sp.pTipValid = false;
+  _sp.p2G = null; _sp.p2GhostG = null; _sp.p2Ent = null;
 
   // Per-type palettes
   _spTypeKind = new Int8Array(ENEMY_TYPES.length);
@@ -431,7 +446,7 @@ function initPixiSprites() {
   const mk = (z) => { const g = new PIXI.Graphics(); g.zIndex = z; worldContainer.addChild(g); return g; };
   _sp.groundG = mk(SP_Z_GROUND);       // per-frame ground shadows
   _sp.shadowG = _sp.groundG;
-  _sp.playerG = mk(0);
+  _sp.playerG = mk(0); _sp.playerG._tipX = 0; _sp.playerG._tipY = 0; _sp.playerG._tipValid = false;
   _sp.ghostG = mk(0);
   _sp.fxG = mk(SP_Z_FX);
   _sp.textG = mk(SP_Z_TEXT);
@@ -772,6 +787,7 @@ const _P = {
   gunOverride: false, gunAng: 0,
   blink: 0, visor: 0, tail: 0, glowTip: 0,
   flail: -1,                           // F2 panic: 0..3 arms-up flail frame, -1 off (no gun)
+  pal: 0,                              // M11 K4: player palette (0 P1, 1 P2); read for SP_K_PLAYER only
 };
 // Outputs (art px, local, post-flip)
 const _PO = { muzX: 0, muzY: 0, hasMuz: false, scopeX: 0, scopeY: 0, top: -15 };
@@ -816,9 +832,9 @@ function _spBuildPuppet() {
   const pants = _spPants[k], pantsS = _spPantsS[k];
   const bare = k === SP_K_BERSERKER;                       // shirtless torso
   // Rambo: black tank top, bare arms
-  const torsoC = isPlayer ? 0x2c2c28 : bare ? SP_SKIN : uni;
-  const torsoS = isPlayer ? 0x1c1c18 : bare ? SP_SKIN_S : uniS;
-  const torsoL = isPlayer ? 0x48483e : bare ? SP_SKIN_L : uniL;
+  const torsoC = isPlayer ? _spPalVest[P.pal] : bare ? SP_SKIN : uni;
+  const torsoS = isPlayer ? _spPalVestS[P.pal] : bare ? SP_SKIN_S : uniS;
+  const torsoL = isPlayer ? _spPalVestL[P.pal] : bare ? SP_SKIN_L : uniL;
   const sleeve = (bare || isPlayer) ? SP_SKIN : uni, sleeveS = (bare || isPlayer) ? SP_SKIN_S : uniS;
   const pantsC = k === SP_K_BERSERKER ? 0x3a3028 : pants;
   const pantsSC = k === SP_K_BERSERKER ? 0x2a221c : pantsS;
@@ -884,10 +900,10 @@ function _spBuildPuppet() {
   // Rambo headband tails behind the head
   if (isPlayer && !curl) {
     const hy = Math.round(-14 * s) + hb, hx = Math.round(-2 * s) - 2 + hox;
-    const f = P.tail;
-    _pr(hx, hy, 1, 1, 0xb01818, 1);
-    _pr(hx - 1, hy + (f ? 0 : 1), 1, 1, 0xd02020, 1);
-    _pr(hx - 2, hy + (f ? 1 : 0), 1, 1, 0xb01818, 1);
+    const f = P.tail, bc = _spPalBand[P.pal], bs = _spPalBandS[P.pal];
+    _pr(hx, hy, 1, 1, bs, 1);
+    _pr(hx - 1, hy + (f ? 0 : 1), 1, 1, bc, 1);
+    _pr(hx - 2, hy + (f ? 1 : 0), 1, 1, bs, 1);
   }
 
   // F1 flamethrower: twin fuel tanks on the back (behind the torso)
@@ -1110,7 +1126,7 @@ function _spHead(k, s, hox, hb, front, away, dead) {
       if (away) hp(-2, -14, 4, 3, 0x16100c, 0);
       else hp(-2, -13, 1, 2, 0x16100c, 0);
       hp(-3, -14, 1, 4, 0x16100c, 1);           // mullet
-      hp(-2, -14, 4, 1, 0xd02020, 0);           // headband
+      hp(-2, -14, 4, 1, _spPalBand[P.pal], 0);  // headband (K4: per-player palette)
       break;
     case SP_K_MILITIA:
       hp(-3, -16, 6, 2, _spUniS[k], 1);
@@ -1206,7 +1222,7 @@ function renderPixiSprites() {
   _spRenderEnv();
   _spRenderBodies();
   const t2 = performance.now();
-  _spRenderPlayer();
+  _spRenderPlayers();
   _spRenderEnemies();
   const t3 = performance.now();
   _spRenderPickups();
@@ -1318,9 +1334,10 @@ function _spWade(ent, X, waterY, cut, s, hw) {
  */
 function spDrawnBounds(ent) {
   if (!ent) return null;
-  const g = ent === player ? _sp.playerG : ent._spG;
+  const isP2 = ent !== player && ent === _sp.p2Ent;   // M11 K2
+  const g = ent === player ? _sp.playerG : isP2 ? _sp.p2G : ent._spG;
   if (!g || !g.visible || g.destroyed || !(g._bx1 > g._bx0)) return null;
-  if (ent !== player && g._owner !== ent) return null;
+  if (ent !== player && !isP2 && g._owner !== ent) return null;
   const A = ART, r = g.rotation, c = Math.round(Math.cos(r)), sn = Math.round(Math.sin(r));
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (let i = 0; i < 4; i++) {
@@ -1338,19 +1355,38 @@ function spDrawnBounds(ent) {
 // =====================================================================
 // PLAYER
 // =====================================================================
-function _spRenderPlayer() {
-  const g = _sp.playerG, gh = _sp.ghostG;
+// M11 K2: every non-null, non-dead entry of players[]. P1 keeps playerG /
+// ghostG; P2's pair is made the first frame players[1] exists (none in 1P)
+// and is cleared + hidden while P2 is absent. Gun tips are per Graphics
+// (g._tip*); _sp.pTip* mirrors P1's for the muzzle flash and tests.
+function _spRenderPlayers() {
+  const g1 = _sp.playerG;
+  _spRenderPlayer(player, g1, _sp.ghostG, 0);
+  _sp.pTipValid = g1._tipValid; _sp.pTipX = g1._tipX; _sp.pTipY = g1._tipY;
+  const p2 = (typeof players !== 'undefined' && players.length > 1) ? players[1] : null;
+  if (p2 && p2 !== player && !_sp.p2G) {
+    const mk = () => { const g = new PIXI.Graphics(); g.zIndex = 0; worldContainer.addChild(g); return g; };
+    _sp.p2G = mk(); _sp.p2G._tipX = 0; _sp.p2G._tipY = 0; _sp.p2G._tipValid = false;
+    _sp.p2GhostG = mk();
+  }
+  if (_sp.p2G) {
+    const q = p2 && p2 !== player ? p2 : null;
+    _spRenderPlayer(q, _sp.p2G, _sp.p2GhostG, q && q.num === 2 ? 1 : 0);
+    _sp.p2Ent = _sp.p2G.visible ? q : null;
+  }
+}
+
+function _spRenderPlayer(p, g, gh, pal) {
   g.clear(); gh.clear();
   gh.visible = false;
-  _sp.pTipValid = false;
-  const p = player;
-  if (!p) { g.visible = false; return; }
+  g._tipValid = false;
+  if (!p || p.state === 'dead') { g.visible = false; return; }
   _spResetGfx(g, depthKey(p.x, p.y));
   const sx = p.x - p.y, sy = (p.x + p.y) * CFG.ISO_SCALE;
   const X = _spSnap(sx), Y = _spSnap(sy);
 
   const P = _P;
-  P.kind = SP_K_PLAYER; P.s = 1; P.aim = p.angle; P.flip = 0;
+  P.kind = SP_K_PLAYER; P.s = 1; P.aim = p.angle; P.flip = 0; P.pal = pal;
   P.dead = false; P.curl = false; P.attack = 0; P.blink = 0; P.visor = 0;
   P.weapon = p.weapon | 0;
   P.headBob = 0; P.recoil = 0; P.gunOverride = false; P.spin = -1; P.flail = -1;
@@ -1429,9 +1465,9 @@ function _spRenderPlayer() {
   _pflush(g, SP_OUTLINE, flash ? 1 : 0, false, 0);
   _spKeepBounds(g, waterY);
   if (_PO.hasMuz) {
-    _sp.pTipX = g.x + _PO.muzX * ART;
-    _sp.pTipY = g.y + _PO.muzY * ART;
-    _sp.pTipValid = true;
+    g._tipX = g.x + _PO.muzX * ART;
+    g._tipY = g.y + _PO.muzY * ART;
+    g._tipValid = true;
   }
 }
 
@@ -1882,6 +1918,8 @@ function _spRenderParticles() {
   const iso = CFG.ISO_SCALE, A = ART;
   const tw = _sp.texWhite, tc = _sp.texCircle;
   const px = player ? player.x : 0, py = player ? player.y : 0;
+  // M11 K2: P2 when drawn with a gun tip this frame, else null (always null in 1P)
+  const q2 = _sp.p2Ent !== null && _sp.p2G._tipValid ? _sp.p2Ent : null;
   for (let i = 0; i < particles.length; i++) {
     const p = particles[i];
     const sx = p.x - p.y, sy = (p.x + p.y) * iso - (p.z || 0);
@@ -1928,9 +1966,18 @@ function _spRenderParticles() {
       const og = p.owner && p.owner._spG;
       if (og && og._hasMuz && og.visible) {
         mx = _spSnap(og.x + og._muzX * A); my = _spSnap(og.y + og._muzY * A);
-      } else if (!p.owner && _sp.pTipValid) {
-        const dx = p.x - px, dy = p.y - py;
-        if (dx * dx + dy * dy < 1600) { mx = _spSnap(_sp.pTipX); my = _spSnap(_sp.pTipY); }
+      } else if (!p.owner || p.owner === player || (q2 !== null && p.owner === q2)) {
+        // player flashes (no owner, or a player owner): the drawn gun tip of
+        // the player within 40 u, P1 first (M11 K2: P2 via p2G._tip*)
+        let hit = false;
+        if (_sp.pTipValid && (!p.owner || p.owner === player)) {
+          const dx = p.x - px, dy = p.y - py;
+          if (dx * dx + dy * dy < 1600) { mx = _spSnap(_sp.pTipX); my = _spSnap(_sp.pTipY); hit = true; }
+        }
+        if (!hit && q2 !== null && (!p.owner || p.owner === q2)) {
+          const dx = p.x - q2.x, dy = p.y - q2.y;
+          if (dx * dx + dy * dy < 1600) { mx = _spSnap(_sp.p2G._tipX); my = _spSnap(_sp.p2G._tipY); }
+        }
       }
       const tex = _sp.texMuzzle[(p.shape | 0) % 3];
       const s = _spSprite(tex, mx, my, z + 2);
@@ -2595,6 +2642,10 @@ function _spRenderFx() {
   const g = _sp.fxG, A = ART, iso = CFG.ISO_SCALE;
   const pX = player ? _spSnap(player.x - player.y) : 0;
   const pY = player ? _spSnap((player.x + player.y) * iso) - 9 * A : 0;
+  // M11 K2: a sniper whose target is the drawn P2 aims its laser at P2
+  const q2 = _sp.p2Ent;
+  const q2X = q2 !== null ? _spSnap(q2.x - q2.y) : 0;
+  const q2Y = q2 !== null ? _spSnap((q2.x + q2.y) * iso) - 9 * A : 0;
 
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i];
@@ -2633,7 +2684,8 @@ function _spRenderFx() {
     // A5 sniper: dotted laser sight + scope glint before firing
     if (k === SP_K_SNIPER && player && eg._hasMuz && e.distToPlayer < (t.range || 550) && e.fireTimer < 1.5) {
       const x0 = ex + eg._muzX * A, y0 = ey + eg._muzY * A;
-      const dx = pX - x0, dy = pY - y0;
+      const onQ2 = q2 !== null && e.target === q2;
+      const dx = (onQ2 ? q2X : pX) - x0, dy = (onQ2 ? q2Y : pY) - y0;
       const len = Math.sqrt(dx * dx + dy * dy);
       const n = Math.min(240, (len / (2 * A)) | 0);
       for (let j = 1; j < n; j++) {
@@ -2758,8 +2810,16 @@ function _spDrawText(g, cx, y, scale, color, alpha) {
   g.fill({ color: color, alpha: alpha });
 }
 
+// M11 K3a: world-anchored text keeps its zoom-1 pixel size. textG is
+// counter-scaled by 1/cam.z, so its local units are zoomed screen units:
+// anchors are world-screen x z (then snapped to ART there, so the glyph grid
+// stays ART-aligned on screen as at zoom 1), glyph geometry is unscaled.
+// At cam.z === 1 every product is x 1 and the output is unchanged.
 function _spRenderTexts() {
   const g = _sp.textG, iso = CFG.ISO_SCALE, A = ART;
+  const z = (typeof cam !== 'undefined' && cam.z > 0) ? cam.z : 1;
+  const iz = 1 / z;
+  if (g.scale.x !== iz) g.scale.set(iz);
 
   // G8 damage numbers: pop with overshoot, fall, blink out
   for (let i = 0; i < dmgNumbers.length; i++) {
@@ -2771,7 +2831,7 @@ function _spRenderTexts() {
     let scale = crit ? 2 : 1;
     if (n.age < 0.08) scale += 1;
     _spTextFromInt(n.value, false);
-    _spDrawText(g, sx, _spSnap(sy) - 5 * scale * A, scale, crit ? 0xff3030 : shield ? 0x60a8ff : 0xfff0a0, 1);
+    _spDrawText(g, sx * z, _spSnap(sy * z) - 5 * scale * A, scale, crit ? 0xff3030 : shield ? 0x60a8ff : 0xfff0a0, 1);
   }
 
   // Kill score popups
@@ -2782,17 +2842,19 @@ function _spRenderTexts() {
     if (ft.life < 0.25 && (((ft.life * 24) | 0) & 1)) continue;
     const scale = (ft.size || 14) >= 18 ? 2 : 1;
     _spTextFromString(String(ft.text));
-    _spDrawText(g, sx, _spSnap(sy) - 6 * A, scale, cssColorToHex(ft.color || '#ff0'), 1);
+    _spDrawText(g, sx * z, _spSnap(sy * z) - 6 * A, scale, cssColorToHex(ft.color || '#ff0'), 1);
   }
 
-  // Boss names
+  // Boss names: anchored at the drawn head top (world), lifted 18 text px
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i];
     if (!e.isBoss || !e.bossName) continue;
     const eg = e._spG;
     if (!eg || eg._owner !== e || !eg.visible) continue;
     _spTextFromString(e.bossName);
-    _spDrawText(g, eg.x, eg.y + ((eg._top | 0) - 18) * A, 2, 0xff4040, 1);
+    const by = z === 1 ? eg.y + ((eg._top | 0) - 18) * A          // zoom 1: exactly as before
+      : _spSnap((eg.y + (eg._top | 0) * A) * z) - 18 * A;
+    _spDrawText(g, eg.x * z, by, 2, 0xff4040, 1);
   }
 }
 
@@ -3230,26 +3292,41 @@ const _spFadeA = [1, 0.7, 0.4];
 const SP_FADE_STEP_F = 4;   // 2 steps x 4 frames ~ 0.13 s
 const SP_FADE_BODY = 15;    // player body height (art px)
 let _spFadeF = -1, _spFadePX = 0, _spFadePY = 0, _spFadePZ = 0, _spFadeOn = false;
+// M11 K2: the same for P2 (a canopy fades over EITHER player). A downed
+// player (K5) still counts, so a revive target is never hidden by a tree.
+let _spFadeQX = 0, _spFadeQY = 0, _spFadeQZ = 0, _spFadeQOn = false;
+function _spFadeStands(p) { return p !== null && p !== undefined && !p.dead && p.state !== 'dead'; }
+// does the tree sprite g at (sx, sy) cover a player body at (PX, PY), depth PZ?
+function _spFadeCovers(g, sx, sy, PX, PY, PZ) {
+  // cheap reject first: only trees near the player and in front of it
+  if (sy >= PY && sy - PY < 400 && sx - PX < 240 && PX - sx < 240 && g._z0 > PZ) {
+    const tex = g.texture;
+    const w = tex.width, h = tex.height;
+    const l = sx - g.anchor.x * w, r = l + w, top = sy - g.anchor.y * h;
+    const bodyTop = PY - SP_FADE_BODY * ART;
+    if (PX > l && PX < r && PY > top && bodyTop < sy) return true;
+  }
+  return false;
+}
 function _spCanopyFade(g, obj, rec, sx, sy, f) {
   if (_spFadeF !== f) {
     _spFadeF = f;
-    _spFadeOn = typeof player !== 'undefined' && player !== null && !player.dead;
+    _spFadeOn = typeof player !== 'undefined' && _spFadeStands(player);
     if (_spFadeOn) {
       _spFadePX = player.x - player.y; _spFadePY = (player.x + player.y) * CFG.ISO_SCALE;
       _spFadePZ = depthKey(player.x, player.y);
     }
+    const q = typeof players !== 'undefined' && players.length > 1 ? players[1] : null;
+    _spFadeQOn = q !== player && _spFadeStands(q);
+    if (_spFadeQOn) {
+      _spFadeQX = q.x - q.y; _spFadeQY = (q.x + q.y) * CFG.ISO_SCALE;
+      _spFadeQZ = depthKey(q.x, q.y);
+    }
   }
   let want = 0;
   const standing = rec === null || rec.state === 'standing' || rec.state === 'scorched';
-  // cheap reject first: only trees near the player and in front of it
-  if (standing && _spFadeOn && sy >= _spFadePY && sy - _spFadePY < 400 &&
-      sx - _spFadePX < 240 && _spFadePX - sx < 240 && g._z0 > _spFadePZ) {
-    const tex = g.texture;
-    const w = tex.width, h = tex.height;
-    const l = sx - g.anchor.x * w, r = l + w, top = sy - g.anchor.y * h;
-    const bodyTop = _spFadePY - SP_FADE_BODY * ART;
-    if (_spFadePX > l && _spFadePX < r && _spFadePY > top && bodyTop < sy) want = 2;
-  }
+  if (standing && ((_spFadeOn && _spFadeCovers(g, sx, sy, _spFadePX, _spFadePY, _spFadePZ)) ||
+      (_spFadeQOn && _spFadeCovers(g, sx, sy, _spFadeQX, _spFadeQY, _spFadeQZ)))) want = 2;
   const lv = g._fade | 0;
   if (lv === want) return;
   if (f - (g._fadeF | 0) < SP_FADE_STEP_F) return;

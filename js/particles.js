@@ -288,10 +288,15 @@ function spawnExplosion(x, y, radius=80, byPlayer=false, src=SRC_EXPLOSIVE, snd=
   addDecal(DECAL_SCORCH, x, y, radius * 0.38, 0x16100c, Math.random() * Math.PI);
 
   addShake(Math.min(16, 3 + radius * 0.06));
-  // M10 C4: strong motor by how near the blast is (f = 1 - d / 2R), capped like J5a
-  if (player && typeof padRumble === 'function') {
-    const f = 1 - Math.sqrt((player.x - x) ** 2 + (player.y - y) ** 2) / (radius * 2);
-    if (f > 0) padRumble(f * 0.4, Math.min(1, f * Math.min(1, radius / 140)), 100 + 120 * f);
+  // M10 C4: strong motor by how near the blast is (f = 1 - d / 2R), capped like J5a;
+  // M11 K2: measured from each player, on that player's pad
+  if (typeof padRumble === 'function') {
+    for (let i = 0; i < players.length; i++) {
+      const p = players[i];
+      if (!p) continue;
+      const f = 1 - Math.sqrt((p.x - x) ** 2 + (p.y - y) ** 2) / (radius * 2);
+      if (f > 0) padRumble(f * 0.4, Math.min(1, f * Math.min(1, radius / 140)), 100 + 120 * f, p);
+    }
   }
   if (radius >= 100) addHitStop(radius >= 200 ? 0.06 : 0.04);
   playSound(snd || (radius > 150 ? 'big_explosion' : 'explosion'), Math.min(1, radius / 100));

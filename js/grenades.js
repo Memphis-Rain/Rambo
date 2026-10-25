@@ -26,10 +26,9 @@ function _grenadeOnWater(x, y) {
   return getTerrainTypeAt(Math.floor(x / ts) * ts, Math.floor(y / ts) * ts) === 'water';
 }
 
-// Throw from the player toward (tx, ty); range clamps to GRENADE_RANGE.
-// Arc apex ~0.3 x distance, flight 0.6-0.9 s (N1)
-function throwGrenade(tx, ty) {
-  const p = player;
+// Throw from player p (default P1) toward (tx, ty); range clamps to
+// GRENADE_RANGE. Arc apex ~0.3 x distance, flight 0.6-0.9 s (N1)
+function throwGrenade(tx, ty, p = player) {
   if (!p || p.grenades <= 0 || p.grenadeCd > 0) return false;
   let dx = tx - p.x, dy = ty - p.y;
   let d = Math.sqrt(dx * dx + dy * dy);
@@ -44,6 +43,7 @@ function throwGrenade(tx, ty) {
     t: 0, fuse: CFG.GRENADE_FUSE, bounces: 0,
     inWater: false, sinkT: 0, spin: Math.random() * 6.28,
     born: true, // the throw frame's dt doesn't count toward the fuse
+    by: p.num - 1, // M11: thrower (players[] index)
   });
   p.grenades--;
   p.grenadeCd = CFG.GRENADE_COOLDOWN;
@@ -74,7 +74,10 @@ function _grenadeObstacleBounce(gr) {
 }
 
 function updateGrenades(dt) {
-  if (player && player.grenadeCd > 0) player.grenadeCd = Math.max(0, player.grenadeCd - dt);
+  for (let i = 0; i < players.length; i++) { // M11: every player's cooldown
+    const p = players[i];
+    if (p && p.grenadeCd > 0) p.grenadeCd = Math.max(0, p.grenadeCd - dt);
+  }
   for (let i = grenades.length - 1; i >= 0; i--) {
     const gr = grenades[i];
     if (gr.born) gr.born = false; else gr.t += dt;

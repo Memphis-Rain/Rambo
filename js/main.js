@@ -263,7 +263,7 @@ function initInput() {
 // =====================================================================
 function update(dt) {
   gameTime += dt;
-  updatePlayer(dt);
+  for (let i = 0; i < players.length; i++) updatePlayer(dt, players[i]); // M11 K2: each with its own controls
   processPendingDamage();
   updateEnemies(dt);
   updateBullets(dt);
@@ -334,6 +334,7 @@ function update(dt) {
   else if(combo === 50) showNotification('LEGENDARY!', 2.5);
 
   mouseJustPressed = false;
+  coopEndFrame(); // M11 K2: P2's edges
 }
 
 // =====================================================================
@@ -349,6 +350,7 @@ function gameLoop() {
 
   if(!gameStarted) {
     if (typeof updateDemoIdle === 'function') updateDemoIdle(Math.min(frameMs / 1000, 0.1));
+    coopTitleTick(); // M11 K2: 2P hint + player count
     return;
   }
   if(paused) return;
@@ -478,7 +480,9 @@ function startGame() {
   if (typeof demoActive !== 'undefined' && demoActive) stopDemo();
   document.getElementById('start-screen').style.display = 'none';
   if(!audioCtx) initAudio();
+  const p2Pad = coopPendingPad(); // M11 K2: P2 joined on the title
   resetRound();
+  if (p2Pad !== null) coopJoin(p2Pad);
   gameStarted = true;
   console.log('[RAMBO] Mission started');
 }
