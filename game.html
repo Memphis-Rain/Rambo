@@ -21,6 +21,9 @@ canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh;ima
 #start-screen .controls{display:grid;grid-template-columns:auto auto;gap:12px 48px;margin-bottom:12px;text-align:left}
 #start-screen .controls div{font-size:16px;color:#bfc6d4;white-space:nowrap;text-shadow:2px 2px 0 #000}
 #start-screen .controls span{color:#ffe000;display:inline-block;min-width:144px}
+/* C7 (M10): the pad legend replaces the keyboard one while a pad is connected */
+#start-screen .pad-controls,body.pad-connected #start-screen .kbm-controls{display:none}
+body.pad-connected #start-screen .pad-controls{display:grid}
 #start-screen .showcase{margin:16px 0 8px;padding:12px 16px;border:2px solid;border-color:#8a99b8 #04060a #04060a #8a99b8;background:#1a2030}
 #start-screen .showcase div{font-size:16px;color:#bfc6d4;text-shadow:2px 2px 0 #000;line-height:1.6}
 #start-screen .showcase b{font-weight:normal;color:#40e0ff}
@@ -54,7 +57,7 @@ canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh;ima
 <div id="start-screen">
   <h1>RAMBO</h1>
   <h2>ENDLESS ASSAULT</h2>
-  <div class="controls">
+  <div class="controls kbm-controls">
     <div><span>WASD</span>MOVE</div>
     <div><span>MOUSE</span>AIM</div>
     <div><span>L-CLICK</span>SHOOT</div>
@@ -66,6 +69,20 @@ canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh;ima
     <div><span>Q/E</span>PREV/NEXT</div>
     <div><span>SHIFT</span>SPRINT</div>
     <div><span>P</span>PAUSE</div>
+  </div>
+  <div class="controls pad-controls">
+    <div><span>LS</span>MOVE</div>
+    <div><span>RS</span>AIM</div>
+    <div><span>RT</span>SHOOT</div>
+    <div><span>LT</span>SHOCKWAVE</div>
+    <div><span>B</span>GRENADE</div>
+    <div><span>X</span>RELOAD</div>
+    <div><span>A</span>DODGE ROLL</div>
+    <div><span>LB/RB</span>PREV/NEXT</div>
+    <div><span>Y</span>NEXT WEAPON</div>
+    <div><span>D-PAD</span>PREV/NEXT</div>
+    <div><span>L3</span>SPRINT</div>
+    <div><span>START</span>PAUSE</div>
   </div>
   <div class="showcase">
     <div><b>F6</b> PIXEL SCALE &nbsp; <b>F7</b> DITHER &nbsp; <b>F8</b> CRT</div>
@@ -94,6 +111,7 @@ canvas{display:block;position:absolute;top:0;left:0;width:100vw;height:100vh;ima
 <script src="js/grenades.js?v=f88a479"></script>
 <script src="js/water.js?v=f88a479"></script>
 <script src="js/demo.js?v=f88a479"></script>
+<script src="js/gamepad.js?v=f88a479"></script>
 
 <!-- PixiJS Rendering Modules (replaces renderer.js) -->
 <script src="js/pixi-terrain.js?v=f88a479"></script>
