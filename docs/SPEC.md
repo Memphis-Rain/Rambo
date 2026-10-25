@@ -663,12 +663,19 @@ This is the one new game mode the user asked for, so it is an explicit exception
   - P2 uses a distinct palette swap, red bandana and darker vest, readable at x1 and x3. Each player has a small pixel "1P" / "2P" tag above the head, in the H-series font.
   - **HUD:** the P1 panel (HP, weapon, ammo, grenades, score) stays where it is. The P2 panel mirrors it on the right. The minimap moves if it would overlap.
   - Everything must fit at 800×600 and 1920×1080 with no overlap. This is checked with HUD-free-box style asserts, as in the W5 test.
-- **K5. Down, revive and game over.**
+- **K5. Down, revive and team second wind.**
   - At 0 HP in 2P, a player is **DOWN**: they lie bleeding, can't act, and get a "HELP!" blink plus an 8 s ring timer. Enemies ignore downed players.
   - **Revive:** the partner stands within 50u for 1.5 s, and gets a progress ring. The downed player comes back at 50% HP with 1 s invulnerability.
   - If the 8 s run out, the player is **dead**. Dead means gibbed per G-series, so it's bloody, and they respawn next to the partner at the start of the next wave with 100 HP.
-  - **Game over** happens only when no player is alive and standing.
-  - 1P: unchanged, so 0 HP is game over as now.
+  - **No game over (ruling 2026-10-25, a gap Anna found).** The game is endless, and today 1P has no game over: at 0 HP, `damagePlayer` gives **SECOND WIND** (30% HP, 20% shield, 2 s invulnerable, the blast and the banner). The 2P mode keeps that design.
+    - **1P:** SECOND WIND is unchanged (Q4).
+    - **2P:** a single player at 0 HP goes DOWN (above) instead of getting SECOND WIND.
+    - **When no player is standing,** meaning everyone is downed or dead: **TEAM SECOND WIND!** is the banner.
+      - Every downed player stands up on the spot with the 1P second-wind values, and gets the blast.
+      - Every dead player respawns next to the first downed one, with the same values.
+      - If nobody is downed, the dead respawn at the last midpoint.
+      - The revive timers are cleared.
+    - **Demo:** `demoOnPlayerDeath` fires when no player is standing, the same moment as TEAM SECOND WIND, so the D6 exit stays the same.
 - **K6. Rules in 2P.**
   - **Enemy targeting:** each enemy targets the **nearest standing** player. It re-picks at most every 1 s, and switches only if the other player is ≥ 25% closer (hysteresis, so enemies don't jitter).
   - **Scaling:** wave enemy count ×1.5 (rounded up), boss HP ×1.5. Everything else is unchanged. Values are `CFG.COOP_ENEMY_MULT` and `CFG.COOP_BOSS_HP_MULT`.
@@ -690,7 +697,7 @@ This is the one new game mode the user asked for, so it is an explicit exception
     - The scaling numbers.
     - Team-total unlocks.
     - The revive timer and range.
-    - Game over only when nobody is standing.
+    - TEAM SECOND WIND only when nobody is standing, with its values equal to 1P SECOND WIND. 1P SECOND WIND is unchanged.
     - 1P values identical to before (Q4 lock).
   - **E2e:**
     - P2 joins from the title and mid-game.
@@ -700,7 +707,7 @@ This is the one new game mode the user asked for, so it is an explicit exception
     - Neither player can leave the screen at the minimum zoom.
     - An enemy chases the nearer player.
     - P2 goes down and P1 revives them.
-    - Both down → game over.
+    - Both down → TEAM SECOND WIND: both stand at 30% HP, 2 s invulnerable, and the game continues.
     - Each pad's rumble spy sees only its own events.
     - P2 disconnect → auto-pause.
     - The HUD fits at 800×600 (screenshot + boxes).
