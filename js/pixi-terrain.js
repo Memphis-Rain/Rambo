@@ -469,6 +469,9 @@ function _bakeWaterLayer(g, w, h) {
 function bakeChunkWater(cx, cy) {
   const key = `${cx},${cy}`;
   destroyChunkWater(key);
+  // W5: every (re)bake is counted, so tests can prove the camo is not rebaked
+  // per frame (waterFxStats().camoRebakes); the blood tint is an overlay layer
+  if (typeof waterCamoBakes !== 'undefined') waterCamoBakes++;
   const sz = CFG.CHUNK_SIZE, ts = CFG.TILE_SIZE, iso = CFG.ISO_SCALE;
   const w = sz * ts * 2 + ts * 2, h = sz * ts * iso * 2 + ts * 2;
   // Same local frame as the terrain chunk sprite

@@ -23,6 +23,8 @@ const SP_Z_DECAL = -999999;      // baked decal chunks
 const SP_Z_DECAL_RECENT = -999998.5;
 const SP_Z_ENVL = -999996.5;     // M8 E10: per-chunk remains (stumps, logs, rubble): above the water overlay (logs float), below ground shadows
 const SP_Z_GROUND = -999996;     // ground shadows / flat debris (water overlay is -999997)
+const SP_Z_WBLOOD = -999996.9;   // M9 W5: blood tint over the water camo, below remains / shadows / bodies
+const SP_Z_CLOUD = -999996.8;    // M9 W3: blood clouds on the water surface (above the tint)
 const SP_Z_FX = 999000;          // telegraphs, rings, health bars
 const SP_Z_TEXT = 999500;        // pixel font
 
@@ -88,6 +90,10 @@ const _sp = {
   dec: null,
   // M8 E10: env remains layer (per terrain chunk)
   envL: null,
+  // M9 W3/W5: blood on the water
+  wbG: null, wbVer: -1,      // W5 tint overlay, rebuilt only when waterBloodVersion changes
+  cloudG: null,              // W3 blood clouds (per frame)
+  texBayer: [], patStyle: new Map(), patMat: null,
 };
 
 // Type -> visual kind lookup (by enemy name, so table order can change)
@@ -190,6 +196,35 @@ function _spShapeTex(rows, pal) {
   });
 }
 
+// M9 W3/W4/W5 ordered dither: 4x4 Bayer textures (white texel where the
+// Bayer rank < n, n = 1..15 of 16), repeated in the Graphics' own space at
+// one texel per art pixel. Fills with them are stepped coverage, never a
+// smooth alpha; in worldContainer space the grid is fixed to the world, so a
+// drifting cloud moves over a still pattern (no shimmer).
+const _spBayer4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+function _spPatTex(n) {
+  let t = _sp.texBayer[n];
+  if (!t) {
+    t = _sp.texBayer[n] = _spCanvasTex(4, 4, (c) => {
+      c.fillStyle = '#fff';
+      for (let i = 0; i < 16; i++) if (_spBayer4[i] < n) c.fillRect(i & 3, i >> 2, 1, 1);
+    });
+    t.source.addressMode = 'repeat';
+  }
+  return t;
+}
+// Cached fill style: n of 16 pixels in colour c (no per-frame allocation)
+function _spPat(n, c) {
+  const key = n * 0x1000000 + c;
+  let st = _sp.patStyle.get(key);
+  if (!st) {
+    if (!_sp.patMat) _sp.patMat = new PIXI.Matrix(ART, 0, 0, ART, 0, 0);
+    st = { texture: _spPatTex(n), color: c, alpha: 1, textureSpace: 'global', matrix: _sp.patMat };
+    _sp.patStyle.set(key, st);
+  }
+  return st;
+}
+
 // N1 grenade art. O outline, G olive, L highlight, D shade, S steel cap/lever, s steel shade
 const _spGrenadePal = { O: '#120c08', G: '#5a6a2c', L: '#8c9c4c', D: '#34401a', S: '#b4b4a8', s: '#62625a' };
 // Spin frames: upright, on its side (cap right), upside down; frame 3 = side mirrored.
@@ -252,6 +287,7 @@ function initPixiSprites() {
     _sp.env.forEach((g) => { if (g && g._notchG) _spDestroy(g._notchG); _spDestroy(g); });
     _spDestroy(_sp.playerG); _spDestroy(_sp.ghostG); _spDestroy(_sp.shadowG);
     _spDestroy(_sp.fxG); _spDestroy(_sp.textG); _spDestroy(_sp.groundG); _spDestroy(_sp.hurtG);
+    _spDestroy(_sp.wbG); _spDestroy(_sp.cloudG);
     if (_sp.dec) {
       for (const c of _sp.dec.chunks) _spDestroy(c.g);
       for (const g of _sp.dec.freeG) _spDestroy(g);
@@ -289,6 +325,10 @@ function initPixiSprites() {
   _sp.ghostG = mk(0);
   _sp.fxG = mk(SP_Z_FX);
   _sp.textG = mk(SP_Z_TEXT);
+  _sp.wbG = mk(SP_Z_WBLOOD);           // W5 (static between band changes)
+  _sp.cloudG = mk(SP_Z_CLOUD);         // W3
+  _sp.wbG.eventMode = 'none'; _sp.cloudG.eventMode = 'none';
+  _sp.wbVer = -1;
 
   // G10 hurt overlay: full-res UI, below the HUD, never takes input
   _sp.hurtG = new PIXI.Graphics();
@@ -582,6 +622,21 @@ function _spClipFor(g, wy) {
 function _spKeepBounds(g, waterY) {
   g._bx0 = _pbBX0; g._by0 = _pbBY0; g._bx1 = _pbBX1; g._by1 = _pbBY1;
   g._waterY = waterY;
+}
+
+// W4: the buffer's silhouette (outlines included) as one fill with style st
+// (a dither pattern), honouring the one-shot clip
+function _pflushPat(g, st) {
+  const A = ART;
+  let any = false;
+  for (let i = 0; i < _pbN; i++) {
+    const o = _pbO[i];
+    if (!_pcut(_pbX[i] - o, _pbY[i] - o, _pbX[i] + _pbW[i] + o, _pbY[i] + _pbH[i] + o)) continue;
+    g.rect(_pcX0 * A, _pcY0 * A, (_pcX1 - _pcX0) * A, (_pcY1 - _pcY0) * A);
+    any = true;
+  }
+  if (any) g.fill(st);
+  _pcAx = -1;
 }
 
 // =====================================================================
@@ -980,6 +1035,8 @@ function renderPixiSprites() {
   const t0 = performance.now();
   _spBeginFrame();
   _spRenderDecals();
+  _spRenderWaterBlood();
+  _spRenderBloodClouds();
   _spRenderEnvLayer();
   const t1 = performance.now();
   _spRenderEnv();
@@ -1352,24 +1409,82 @@ function _spRenderBodies() {
       astep = 1 + Math.min(3, ((age - CFG.BODY_FADE_START) / span * 4) | 0);
       alpha = 1 - astep * 0.2;
     }
-    const fading = astep > 0 ? 1 : 0;
-    if (g._key !== fading) {
-      g._key = fading;
-      g.clear();
-      const k = b.type !== undefined ? _spTypeKind[b.type] : 0;
-      const P = _P;
-      P.kind = k; P.s = b.size || 1; P.aim = 0.6;
-      P.flip = (b.flip || 1) < 0 ? -1 : 1;
-      P.walkF = -1; P.bob = 0; P.headBob = 0; P.recoil = 0; P.attack = 0;
-      P.dead = true; P.curl = false; P.gunOverride = false; P.spin = -1;
-      P.blink = 0; P.visor = 0; P.tail = 0; P.glowTip = 0;
-      _spBuildPuppet();
-      _pflush(g, b.isBoss ? SP_OUTLINE_BOSS : SP_OUTLINE, 0, fading === 1, 0);
-    }
     g.rotation = m * Q;
     g.alpha = alpha;
     g.position.set(_spSnap(sx), _spSnap(sy - z));
     g.zIndex = depthKey(b.x, b.y) - 1;
+    // W4: in water. Never baked anywhere: corpses are live Graphics, and the
+    // logic blocks their blood decals on water.
+    if (b.inWater) { _spBodyInWater(b, g, m); continue; }
+    const fading = astep > 0 ? 1 : 0;
+    if (g._key !== fading) {
+      g._key = fading;
+      g.clear();
+      _spBodyPuppet(b);
+      _pflush(g, b.isBoss ? SP_OUTLINE_BOSS : SP_OUTLINE, 0, fading === 1, 0);
+    }
+  }
+}
+
+// Dead-pose puppet of corpse b into the command buffer
+function _spBodyPuppet(b) {
+  const P = _P;
+  P.kind = b.type !== undefined ? _spTypeKind[b.type] : 0; P.s = b.size || 1; P.aim = 0.6;
+  P.flip = (b.flip || 1) < 0 ? -1 : 1;
+  P.walkF = -1; P.bob = 0; P.headBob = 0; P.recoil = 0; P.attack = 0;
+  P.dead = true; P.curl = false; P.gunOverride = false; P.spin = -1;
+  P.blink = 0; P.visor = 0; P.tail = 0; P.glowTip = 0;
+  _spBuildPuppet();
+}
+
+// W4 corpse in water: lying (rotation m = 2 or 6, quarter turns), local x is
+// screen-vertical. The waterline rises from the bottom in whole art rows:
+// floating it hides SP_FLOAT_HIDE of the body, sinking rises to all of it.
+// Below the waterline the body shows as a dithered murky silhouette, which
+// the dissolve thins out in 4 steps. Rebuilt only when the row / step changes.
+const SP_FLOAT_HIDE = 0.4;
+const SP_SUB_COL = 0x2e141c;            // the drowned body seen through the water
+const SP_SUB_DENS = [8, 6, 4, 2, 1];    // 16ths: sinking, then dissolve steps 0..3
+function _spBodyInWater(b, g, m) {
+  if (b._spWX0 === undefined) {
+    _spBodyPuppet(b);
+    let x0 = 32767, x1 = -32767, y0 = 32767, y1 = -32767;
+    for (let i = 0; i < _pbN; i++) {
+      const o = _pbO[i];
+      if (_pbX[i] - o < x0) x0 = _pbX[i] - o;
+      if (_pbX[i] + _pbW[i] + o > x1) x1 = _pbX[i] + _pbW[i] + o;
+      if (_pbY[i] - o < y0) y0 = _pbY[i] - o;
+      if (_pbY[i] + _pbH[i] + o > y1) y1 = _pbY[i] + _pbH[i] + o;
+    }
+    b._spWX0 = x0; b._spWX1 = x1; b._spWY0 = y0; b._spWY1 = y1;
+    g._key = -1;
+  }
+  const lo = b._spWX0, hi = b._spWX1, rows = hi - lo;
+  const ph = b.sinkPhase;
+  const f = ph === 'float' ? SP_FLOAT_HIDE : ph === 'sink' ? SP_FLOAT_HIDE + (1 - SP_FLOAT_HIDE) * (b.sinkFrac || 0) : 1;
+  const hidden = Math.min(rows, Math.round(f * rows));
+  const dstep = ph === 'dissolve' ? 1 + Math.min(4, ((b.dissolve || 0) * 4) | 0) : 0;
+  if (dstep > 4) { g.visible = false; return; }
+  const down = m !== 6; // m 2: screen y grows with local x (bottom = hi); m 6: bottom = lo
+  const cut = down ? hi - hidden : lo + hidden;
+  const key = 1000 + hidden * 8 + dstep;
+  if (g._key !== key) {
+    g._key = key;
+    g.clear();
+    _spBodyPuppet(b);
+    if (hidden > 0) { _spClip(1, !down, cut); _pflushPat(g, _spPat(SP_SUB_DENS[dstep], SP_SUB_COL)); }
+    if (hidden < rows) { _spClip(1, down, cut); _pflush(g, b.isBoss ? SP_OUTLINE_BOSS : SP_OUTLINE, 0, false, 0); }
+  }
+  // ripple ring where the body cuts the surface (ground layer, under it)
+  if (hidden < rows && dstep === 0) {
+    const A = ART, wy = g.y + (down ? cut : -cut) * A;
+    const mid = (b._spWY0 + b._spWY1) * 0.5 * A;
+    const X = _spSnap(down ? g.x - mid : g.x + mid);
+    const fr = ((gameTime * 5) | 0) % 3;
+    const rx = Math.round((b._spWY1 - b._spWY0) * 0.5) + 1 + fr;
+    const gg = _sp.groundG;
+    _spRingRows(gg, X, wy, rx, Math.max(1, Math.round(rx * 0.3)));
+    gg.fill({ color: 0xd8f0ff, alpha: fr === 0 ? 0.75 : fr === 1 ? 0.5 : 0.3 });
   }
 }
 
@@ -1668,7 +1783,8 @@ function _spRenderGibs() {
     const gb = gibs[i];
     const sx = gb.x - gb.y, gy = (gb.x + gb.y) * iso;
     if (!_spInView(sx, gy)) continue;
-    const z = gb.z || 0;
+    const wet = gb.inWater === true;
+    const z = wet ? 0 : gb.z || 0;
     const X = _spSnap(sx), Y = _spSnap(gy - z);
     if (z > 2) sg.rect(X - A, _spSnap(gy), 3 * A, A);
     const part = gb.part | 0;
@@ -1682,6 +1798,7 @@ function _spRenderGibs() {
     if (r & 1) { const t = w; w = h; h = t; }
     const zz = depthKey(gb.x, gb.y);
     const x0 = X - ((w * A) >> 1) - ((w * A >> 1) % A), y0 = Y - h * A;
+    if (wet) { _spGibSink(gb, x0, y0, w, h, r, Y, zz); continue; }
     _spRectSprite(x0 - A, y0 - A, (w + 2) * A, (h + 2) * A, 0x2a0808, zz);
     _spRectSprite(x0, y0, w * A, h * A, gb.color === undefined ? 0x8a1010 : gb.color, zz + 0.001);
     // red meat pixel at the torn end
@@ -1690,6 +1807,95 @@ function _spRenderGibs() {
     _spRectSprite(mx, my, A, A, 0xc01818, zz + 0.002);
   }
   sg.fill({ color: 0, alpha: 0.35 });
+}
+
+// W4: a gib in water goes down through the waterline (its ground row Y) one
+// art row at a time over CFG.GIB_SINK_S; the rows below Y are cropped. No
+// shadow; a foam pixel either side while it is still above the surface.
+function _spGibSink(gb, x0, y0, w, h, r, Y, zz) {
+  const A = ART, R = h + 2;
+  const k = Math.min(R, ((gb.sinkT || 0) / CFG.GIB_SINK_S * (R + 1)) | 0) * A;
+  const top = y0 - A + k;
+  if (top >= Y) return;
+  _spRectSprite(x0 - A, top, (w + 2) * A, Y - top, 0x2a0808, zz);
+  const ft = y0 + k;
+  if (ft < Y) {
+    _spRectSprite(x0, ft, w * A, Math.min(h * A, Y - ft), gb.color === undefined ? 0x8a1010 : gb.color, zz + 0.001);
+    const mx = (r === 0 || r === 3) ? x0 + (w - 1) * A : x0;
+    const my = ((r < 2) ? y0 + (h - 1) * A : y0) + k;
+    if (my < Y) _spRectSprite(mx, my, A, A, 0xc01818, zz + 0.002);
+  }
+  _spRectSprite(x0 - 2 * A, Y - A, A, A, 0xe8f4ff, zz + 0.003);
+  _spRectSprite(x0 + (w + 1) * A, Y - A, A, A, 0xe8f4ff, zz + 0.003);
+}
+
+// =====================================================================
+// BLOOD ON THE WATER (M9 W3 clouds, W5 tint)
+// =====================================================================
+// W5: one Graphics of tile diamonds, a dither pattern per band (coverage
+// 3 / 6 / 9 / 12 of 16, i.e. up to 75%, darker red as it thickens). Tile
+// (i, j) = world [i ts, (i+1) ts) x [j ts, (j+1) ts): the same diamond the
+// terrain chunk draws for it. Rebuilt only when waterBloodVersion changes
+// (<= 4 Hz, and resetWater bumps it), never per frame, and the baked water
+// camo is untouched (the tint sits on top of it).
+const SP_WB_DENS = [0, 3, 6, 9, 12];
+const SP_WB_COL = [0, 0x781818, 0x701212, 0x660c0c, 0x5a0808];
+function _spRenderWaterBlood() {
+  const g = _sp.wbG;
+  if (!g || typeof waterBloodTiles === 'undefined' || waterBloodVersion === _sp.wbVer) return;
+  _sp.wbVer = waterBloodVersion;
+  g.clear();
+  if (!waterBloodTiles.size) return;
+  const ts = CFG.TILE_SIZE, hh = ts * CFG.ISO_SCALE;
+  for (let band = 1; band <= 4; band++) {
+    let any = false;
+    for (const t of waterBloodTiles.values()) {
+      if (t.band !== band) continue;
+      const x = (t.i - t.j) * ts, y = (t.i + t.j) * hh;
+      g.moveTo(x, y).lineTo(x + ts, y + hh).lineTo(x, y + 2 * hh).lineTo(x - ts, y + hh).closePath();
+      any = true;
+    }
+    if (any) g.fill(_spPat(SP_WB_DENS[band], SP_WB_COL[band]));
+  }
+}
+
+// W3: each cloud = a seeded 3-lobe dithered rim + a denser core, both
+// fading in 4 coverage steps over its life (and darkening). Per frame into
+// one Graphics, grouped by step so it is <= 8 fills.
+const SP_CLOUD_RIM = [6, 4, 2, 1], SP_CLOUD_CORE = [12, 8, 5, 2];
+const SP_CLOUD_COL = [0x9a1212, 0x881010, 0x760e0e, 0x640c0c];
+function _spRenderBloodClouds() {
+  const g = _sp.cloudG;
+  if (!g) return;
+  g.clear();
+  if (typeof bloodClouds === 'undefined' || !bloodClouds.length) return;
+  const iso = CFG.ISO_SCALE, A = ART, K = Math.SQRT2;
+  for (let step = 0; step < 4; step++) {
+    for (let core = 0; core < 2; core++) {
+      let any = false;
+      for (let i = 0; i < bloodClouds.length; i++) {
+        const c = bloodClouds[i];
+        if (Math.min(3, (c.t / c.life * 4) | 0) !== step) continue;
+        const sx = c.x - c.y, sy = (c.x + c.y) * iso;
+        if (!_spInView(sx, sy)) continue;
+        const X = _spSnap(sx), Y = _spSnap(sy);
+        const rx = Math.max(A, _spSnap(c.r * K)), ry = Math.max(A, _spSnap(c.r * K * iso));
+        if (core) {
+          g.ellipse(X, Y, Math.max(A, _spSnap(rx * 0.55)), Math.max(A, _spSnap(ry * 0.55)));
+        } else {
+          const h = c.seed | 0;
+          g.ellipse(X, Y, _spSnap(rx * 0.85), Math.max(A, _spSnap(ry * 0.85)));
+          for (let l = 0; l < 2; l++) {
+            const hl = h >>> (l * 8);
+            const ox = (((hl & 15) - 7.5) / 7.5) * rx * 0.4, oy = ((((hl >> 4) & 15) - 7.5) / 7.5) * ry * 0.4;
+            g.ellipse(_spSnap(X + ox), _spSnap(Y + oy), Math.max(A, _spSnap(rx * 0.6)), Math.max(A, _spSnap(ry * 0.6)));
+          }
+        }
+        any = true;
+      }
+      if (any) g.fill(_spPat(core ? SP_CLOUD_CORE[step] : SP_CLOUD_RIM[step], SP_CLOUD_COL[step]));
+    }
+  }
 }
 
 // M8 E4: flying env debris (envphys.js envDebris), pooled sprites like gibs.

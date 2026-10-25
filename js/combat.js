@@ -56,6 +56,8 @@ function _tickAnimTimers(o, dt) {
 
 // Bloody footprints (G7) after walking through a pool
 function _updateFootprints(p, dt) {
+  // W3: no prints on water, and wading washes the feet
+  if (waterTileAt(p.x, p.y)) { p.bloodyFeet = 0; return; }
   if (isBloodAt(p.x, p.y)) p.bloodyFeet = 3;
   if (p.bloodyFeet <= 0) return;
   p.bloodyFeet -= dt;
@@ -65,8 +67,8 @@ function _updateFootprints(p, dt) {
   if (!p.walking) return;
   const a = Math.atan2(p.vy, p.vx);
   const side = (step & 1) ? 3 : -3;
-  const d = addDecal(DECAL_FOOT, p.x - Math.sin(a) * side, p.y + Math.cos(a) * side, 2, BLOOD_COLORS[3], a);
-  d.alpha = p.bloodyFeet > 2 ? 0.9 : p.bloodyFeet > 1 ? 0.6 : 0.35;
+  const d = bloodDecal(DECAL_FOOT, p.x - Math.sin(a) * side, p.y + Math.cos(a) * side, 2, BLOOD_COLORS[3], a);
+  if (d) d.alpha = p.bloodyFeet > 2 ? 0.9 : p.bloodyFeet > 1 ? 0.6 : 0.35; // null: landed on water (W3)
 }
 
 function updatePlayer(dt) {
@@ -716,6 +718,7 @@ function damageEnemy(e, dmg, bulletAngle, src=SRC_BULLET) {
   e.knockbackY = Math.sin(bulletAngle) * kb;
 
   spawnBloodSpray(e.x, e.y, bulletAngle, 0.6 + Math.min(1.2, dmg / 60), 12 * e.size);
+  waterBloodAdd(e.x, e.y, CFG.W5_HIT, 1); // W5: a hit reddens the water nearby
   spawnDamageNumber(e, e.x, e.y, Math.round(dmg), (overkill && e.hp <= 0) || dmg >= 150 ? DMG_CRIT : DMG_NORMAL, numZ);
   playSound('hit', 0.3);
 
@@ -728,6 +731,7 @@ let _pendingDamage = [];
 function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
   if (e.dead) return; // already dead - prevent double processing
   e.dead = true; // mark immediately to prevent re-entry
+  waterBloodAdd(e.x, e.y, CFG.W5_KILL, 3); // W5: a kill reddens the water nearby
 
   const t = ENEMY_TYPES[e.type];
   const isBoss = e.isBoss;
@@ -785,7 +789,7 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
     spawnGibs(e.x, e.y, bulletAngle, e.type, src === SRC_BFG ? 1.8 : 1.25, e.size);
     spawnBloodSpray(e.x, e.y, bulletAngle, 2.2, torsoZ);
     spawnBloodSpray(e.x, e.y, bulletAngle + Math.PI, 1.4, torsoZ);
-    addDecal(DECAL_POOL, e.x, e.y, 4, BLOOD_COLORS[3], 0, randRange(16, 26) * e.size);
+    bloodDecal(DECAL_POOL, e.x, e.y, 4, BLOOD_COLORS[3], 0, randRange(16, 26) * e.size);
     addShake(4);
   } else {
     spawnBloodSpray(e.x, e.y, bulletAngle, 2.0, torsoZ);
