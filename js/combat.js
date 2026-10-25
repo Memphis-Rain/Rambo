@@ -130,7 +130,7 @@ function updatePlayer(dt) {
       p.vy = Math.sin(p.dodgeAngle) * CFG.DODGE_SPEED;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
-      coopApplyLeash(p); // M11 K3b
+      coopApplyLeash(p, p.x - p.vx * dt, p.y - p.vy * dt); // M11 K3b
       if (Math.random()<0.3) spawnSmoke(p.x, p.y, 1);
       return;
     }
@@ -184,9 +184,10 @@ function updatePlayer(dt) {
   // E11: climbing over a fallen log (a hurdle, not a wall) is slow
   if (envLogs.length) { const ls = envLogSlow(p.x, p.y, 10); p.vx *= ls; p.vy *= ls; }
 
+  const lx0 = p.x, ly0 = p.y;
   p.x += p.vx * dt;
   p.y += p.vy * dt;
-  coopApplyLeash(p); // M11 K3b: only at COOP_ZOOM_MIN with a partner
+  coopApplyLeash(p, lx0, ly0); // M11 K3b: only at COOP_ZOOM_MIN with a partner
 
   // Collision with trees, rocks, boulders
   resolveEnvCollision(p, 10);

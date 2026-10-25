@@ -69,46 +69,54 @@ function coopUpdateZoom(dt) {
   if (t < z) { // out: fast, so a runner never reaches the edge
     _coop.zoomingIn = false;
     cam.z = Math.max(t, z - CFG.COOP_ZOOM_OUT_RATE * dt);
-  } else if (t > z) { // in: only past the deadband, then all the way (no breathing)
-    if (!_coop.zoomingIn && t >= z * (1 + CFG.COOP_ZOOM_DEADBAND)) _coop.zoomingIn = true;
-    if (_coop.zoomingIn) {
-      cam.z = Math.min(t, z + CFG.COOP_ZOOM_IN_RATE * dt);
-      if (cam.z >= t) _coop.zoomingIn = false;
-    }
-  } else _coop.zoomingIn = false;
+  } else if (t > z) {
+    // in: starts only past the deadband (or for the last step to exactly 1),
+    // then keeps following a rising target until it has to zoom out again,
+    // so a partner walking back gives one smooth ease, not 5% steps
+    if (!_coop.zoomingIn && (t >= z * (1 + CFG.COOP_ZOOM_DEADBAND) || t === 1)) _coop.zoomingIn = true;
+    if (_coop.zoomingIn) cam.z = Math.min(t, z + CFG.COOP_ZOOM_IN_RATE * dt);
+  }
+  if (cam.z >= 1) _coop.zoomingIn = false;
 }
 
 function camZoom() { return { zoom: cam.z, target: _coop.target, forced: _coop.forced !== null }; }
 
 function setCamZoom(z) {
   if (z === null || z === undefined) { _coop.forced = null; return; }
-  _coop.forced = Math.max(0.05, Math.min(1, +z));
+  if (!Number.isFinite(+z)) return;
+  _coop.forced = Math.max(CFG.COOP_ZOOM_MIN, Math.min(1, +z));
   cam.z = _coop.forced;
 }
 
 // K3b: at COOP_ZOOM_MIN, with the camera on the pair's midpoint, each player
 // sits half the screen-space separation from the centre; keep that half
-// within the view minus COOP_LEASH_PX on each axis
+// within the view minus COOP_LEASH_PX on each axis. Only the part of a move
+// (mover.x/y -> nx/ny) that widens the separation past the limit is cut: a
+// player knocked past it isn't yanked back, and can't walk further out
 function coopLeashClamp(mover, other, nx, ny, out) {
   const iso = CFG.ISO_SCALE, s = RETRO.PIXEL_SCALE, z = CFG.COOP_ZOOM_MIN;
   const limX = (W - 2 * CFG.COOP_LEASH_PX * s) / z; // max |separation| in zoom-1 screen units
   const limY = (H - 2 * CFG.COOP_LEASH_PX * s) / z;
   let sx = (nx - other.x) - (ny - other.y), sy = ((nx - other.x) + (ny - other.y)) * iso;
   if (Math.abs(sx) <= limX && Math.abs(sy) <= limY) { out.x = nx; out.y = ny; return out; }
-  sx = Math.max(-limX, Math.min(limX, sx));
-  sy = Math.max(-limY, Math.min(limY, sy));
+  const ox = (mover.x - other.x) - (mover.y - other.y), oy = ((mover.x - other.x) + (mover.y - other.y)) * iso;
+  const lx = Math.max(limX, Math.abs(ox)), ly = Math.max(limY, Math.abs(oy));
+  sx = Math.max(-lx, Math.min(lx, sx));
+  sy = Math.max(-ly, Math.min(ly, sy));
   out.x = other.x + (sx + sy / iso) * 0.5;
   out.y = other.y + (sy / iso - sx) * 0.5;
   return out;
 }
 
-// The leash for player p after its own move this frame (updatePlayer)
-function coopApplyLeash(p) {
+// The leash for player p's own move this frame, from (ox, oy) to p.x/p.y (updatePlayer)
+function coopApplyLeash(p, ox, oy) {
   if (players.length < 2 || cam.z > CFG.COOP_ZOOM_MIN + 1e-6 || !playerStanding(p)) return;
   for (let i = 0; i < players.length; i++) {
     const o = players[i];
     if (o === p || !coopCounted(o)) continue;
-    coopLeashClamp(p, o, p.x, p.y, _coopV);
+    const nx = p.x, ny = p.y;
+    p.x = ox; p.y = oy;
+    coopLeashClamp(p, o, nx, ny, _coopV);
     p.x = _coopV.x; p.y = _coopV.y;
   }
 }
