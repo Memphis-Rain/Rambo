@@ -24,7 +24,31 @@ function createPlayer() {
     idleT: 0, fidgetT: 0,
     bloodyFeet: 0, footStep: 0, hurtFlash: 0,
     grenades: CFG.GRENADE_AMMO_START, grenadeCd: 0, wavesStarted: 0, // N1
+    // M11: 1 = P1, 2 = P2; 'up' | 'down' | 'dead' (K5); own score / kills (team totals stay global)
+    num: 1, state: 'up', score: 0, kills: 0,
   };
+}
+
+// M11 K1: a player that can be hit, picked up after and chased (K5 adds DOWN)
+function playerStanding(p) { return !!p && p.state === 'up'; }
+
+// The nearest standing player to (x, y), or null
+function nearestPlayer(x, y) {
+  let best = null, bd = Infinity;
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i];
+    if (!playerStanding(p)) continue;
+    const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best;
+}
+
+// The player an enemy goes for (K6 adds re-pick timing and hysteresis)
+function enemyTarget(e) {
+  const p = nearestPlayer(e.x, e.y) || player;
+  e.target = p;
+  return p;
 }
 
 // Hit-stop (G9): the main loop skips update() while this is above 0.
@@ -414,7 +438,8 @@ function updateEnemies(dt) {
     }
     const ex0 = e.x, ey0 = e.y;
 
-    const dx = player.x - e.x, dy = player.y - e.y;
+    const tp = enemyTarget(e); // M11 K1
+    const dx = tp.x - e.x, dy = tp.y - e.y;
     const d = Math.sqrt(dx*dx+dy*dy);
     e.angle = Math.atan2(dy, dx);
     e.distToPlayer = d; // render telegraphs (bomber blink, sniper laser)
@@ -471,7 +496,7 @@ function updateEnemies(dt) {
         e.fireTimer = t.fireRate * randRange(0.8, 1.2);
         const spread = 0.15;
         // W2: at a wading player, aim at the visible body column
-        const aim = player.submerge > 0 ? Math.atan2(aimPointOf(player, _aimPt).y - e.y, _aimPt.x - e.x) : e.angle;
+        const aim = tp.submerge > 0 ? Math.atan2(aimPointOf(tp, _aimPt).y - e.y, _aimPt.x - e.x) : e.angle;
         const a = aim + randRange(-spread, spread);
         const bs = t.bulletSpeed || 400;
         if (bullets.length < CFG.MAX_BULLETS) {
@@ -499,7 +524,7 @@ function updateEnemies(dt) {
         if (e.fireTimer <= 0) {
           e.fireTimer = 0.8;
           e.attackT = 0.25; // melee swing pose
-          damagePlayer(e.dmg);
+          damagePlayer(e.dmg, tp);
         }
       }
     }
@@ -601,7 +626,8 @@ function _enemyLogAvoid(e, er, dp, dt) {
   const sp = Math.sqrt(e.vx * e.vx + e.vy * e.vy);
   const ux = e.vx / sp, uy = e.vy / sp;
   // target of the straight path: the player when heading for them
-  let tx = player.x, ty = player.y;
+  const tp = e.target || player;
+  let tx = tp.x, ty = tp.y;
   if (dp <= 0 || (ux * (tx - e.x) + uy * (ty - e.y)) < 0.7 * dp) {
     tx = e.x + ux * 60; ty = e.y + uy * 60;
   } else if (dp > CFG.ENV_LOG_AVOID_LOOK) {
@@ -749,6 +775,7 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
     const pts = Math.round(basePts * comboMult);
     score += pts;
     kills++;
+    if (player) { player.score += pts; player.kills++; } // K6 credits the killer
     combo++;
     comboTimer = CFG.COMBO_TIMEOUT;
     if (combo > bestCombo) bestCombo = combo;
@@ -781,8 +808,12 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
         _pendingDamage.push({ target: e2, dmg: 80*(1-d2/r), angle: Math.atan2(e2.y-e.y, e2.x-e.x), src: SRC_EXPLOSIVE, noCredit: envNoCredit });
       }
     }
-    const pd = dist(e.x, e.y, player.x, player.y);
-    if (pd < r) damagePlayer(50*(1-pd/r));
+    for (let pi = 0; pi < players.length; pi++) {
+      const pl = players[pi];
+      if (!playerStanding(pl)) continue;
+      const pd = dist(e.x, e.y, pl.x, pl.y);
+      if (pd < r) damagePlayer(50*(1-pd/r), pl);
+    }
   }
 
   // === Death style (G5): disintegrate, gib, or fall and leave a corpse ===
@@ -886,40 +917,41 @@ function processPendingDamage() {
   // frame, so chains keep cascading as a ripple instead of being dropped
 }
 
-function damagePlayer(dmg) {
-  if (player.invincible > 0 || player.dodging) return;
+// M11 K1: `p` = the player hit (default P1)
+function damagePlayer(dmg, p = player) {
+  if (p.invincible > 0 || p.dodging) return;
   if (typeof demoActive !== 'undefined' && demoActive) dmg *= CFG.DEMO_DAMAGE_MULT; // D4
 
   shieldRegenTimer = 0; // reset shield regen delay
 
   // Shield absorbs damage first
-  if (player.shield > 0) {
-    player.shield -= dmg;
+  if (p.shield > 0) {
+    p.shield -= dmg;
     playSound('shield_hit', 0.3);
-    if (player.shield < 0) {
-      const overflow = -player.shield;
-      player.shield = 0;
+    if (p.shield < 0) {
+      const overflow = -p.shield;
+      p.shield = 0;
       playSound('shield_break', 0.5);
-      player.hp -= overflow;
+      p.hp -= overflow;
     }
   } else {
-    player.hp -= dmg;
+    p.hp -= dmg;
   }
 
-  player.hitFlash = 0.15;
+  p.hitFlash = 0.15;
   // G10: screen-edge red flash, intensity from damage taken
-  player.hurtFlash = Math.min(1, player.hurtFlash + 0.25 + dmg / 60);
-  if (player.shield <= 0) spawnBloodSpray(player.x, player.y, Math.random() * Math.PI * 2, 0.5, 14);
+  p.hurtFlash = Math.min(1, p.hurtFlash + 0.25 + dmg / 60);
+  if (p.shield <= 0) spawnBloodSpray(p.x, p.y, Math.random() * Math.PI * 2, 0.5, 14);
   addShake(3);
   padRumble(0.3, 0.7, 90); // M10 C4: a short strong pulse
 
-  if (player.hp <= 0) {
+  if (p.hp <= 0) {
     if (typeof demoActive !== 'undefined' && demoActive) demoOnPlayerDeath(); // D6: demo ends on death
     // Near-death recovery (Rambo style)
-    player.hp = player.maxHp * 0.3;
-    player.shield = player.maxShield * 0.2;
-    player.invincible = 2;
-    spawnExplosion(player.x, player.y, 60, false, SRC_EXPLOSIVE);
+    p.hp = p.maxHp * 0.3;
+    p.shield = p.maxShield * 0.2;
+    p.invincible = 2;
+    spawnExplosion(p.x, p.y, 60, false, SRC_EXPLOSIVE);
     showNotification('SECOND WIND!', 1.5);
   }
 }
@@ -1029,20 +1061,26 @@ function updateBullets(dt) {
         }
       }
     } else {
-      // Enemy bullet -> player (unless a barrel or trunk is nearer on its path)
+      // Enemy bullet -> the nearest player on its path (unless a barrel or trunk is nearer)
       const kp = bodyColumnK(PLAYER_BODY_H);
-      const kw = player.submerge > 0 && !b.explosive ? bodyColumnK(entityWaterlineH(player)) : 0; // W2
-      const rpv = kw > 0 ? wadeRadius(player, 16) : 16;
-      const t = segCapsuleT(px, py, sdx, sdy, len2, player.x - kw, player.y - kw, player.x - kp, player.y - kp, rpv);
-      if(t < 0 && kw > 0){
-        const tw = segCapsuleT(px, py, sdx, sdy, len2, player.x, player.y, player.x - kw, player.y - kw, 16);
-        if(tw >= 0 && tw < nearT && !wadeVisibleAhead(px, py, sdx, sdy, tw, player.x - kw, player.y - kw, player.x - kp, player.y - kp, rpv, 1.5 * kp + 32)){
-          nearT = tw; nearW = true; nearB = null; nearO = null;
+      let hitP = null;
+      for(let pi=0; pi<players.length; pi++){
+        const pl = players[pi];
+        if(!playerStanding(pl)) continue;
+        const kw = pl.submerge > 0 && !b.explosive ? bodyColumnK(entityWaterlineH(pl)) : 0; // W2
+        const rpv = kw > 0 ? wadeRadius(pl, 16) : 16;
+        const t = segCapsuleT(px, py, sdx, sdy, len2, pl.x - kw, pl.y - kw, pl.x - kp, pl.y - kp, rpv);
+        if(t < 0 && kw > 0){
+          const tw = segCapsuleT(px, py, sdx, sdy, len2, pl.x, pl.y, pl.x - kw, pl.y - kw, 16);
+          if(tw >= 0 && tw < nearT && !wadeVisibleAhead(px, py, sdx, sdy, tw, pl.x - kw, pl.y - kw, pl.x - kp, pl.y - kp, rpv, 1.5 * kp + 32)){
+            nearT = tw; nearW = true; nearB = null; nearO = null; hitP = null;
+          }
         }
+        if(t >= 0 && t < nearT){ nearT = t; hitP = pl; }
       }
-      if(t >= 0 && t < nearT){
-        b.x = px + sdx * t; b.y = py + sdy * t;
-        damagePlayer(b.dmg);
+      if(hitP){
+        b.x = px + sdx * nearT; b.y = py + sdy * nearT;
+        damagePlayer(b.dmg, hitP);
         if(b.explosive) spawnExplosion(b.x, b.y, b.radius||60, false, SRC_EXPLOSIVE, null, b.dmg);
         bullets.splice(i,1);
         continue;
@@ -1130,8 +1168,12 @@ function hitBarrel(obj, dmg, byPlayer = true) {
       const ed = dist(obj.x, obj.y, e2.x, e2.y);
       if(ed < 220) _pendingDamage.push({ target: e2, dmg: 200*(1-ed/220), angle: Math.atan2(e2.y-obj.y, e2.x-obj.x), src: SRC_EXPLOSIVE });
     }
-    const pd = dist(obj.x, obj.y, player.x, player.y);
-    if(pd < 220) damagePlayer(80*(1-pd/220));
+    for(let pi=0; pi<players.length; pi++){
+      const pl = players[pi];
+      if(!playerStanding(pl)) continue;
+      const pd = dist(obj.x, obj.y, pl.x, pl.y);
+      if(pd < 220) damagePlayer(80*(1-pd/220), pl);
+    }
     score += 50;
   }
 }
@@ -1363,16 +1405,21 @@ function updatePickups(dt) {
     const pk = pickups[i];
     pk.life -= dt;
     if(pk.life <= 0){ pickups.splice(i,1); continue; }
-    const d = dist(pk.x, pk.y, player.x, player.y);
-    if(d < 25){
+    // M11 K1: whoever touches it first (players[] order breaks a same-frame tie)
+    let pl = null;
+    for(let pi=0; pi<players.length && !pl; pi++){
+      const q = players[pi];
+      if(playerStanding(q) && dist(pk.x, pk.y, q.x, q.y) < 25) pl = q;
+    }
+    if(pl){
       if(pk.type === 'health'){
-        player.hp = Math.min(player.hp + pk.amount, player.maxHp);
+        pl.hp = Math.min(pl.hp + pk.amount, pl.maxHp);
         playSound('pickup', 0.5);
       } else if(pk.type === 'shield'){
-        player.shield = Math.min(player.shield + pk.amount, player.maxShield);
+        pl.shield = Math.min(pl.shield + pk.amount, pl.maxShield);
         playSound('pickup', 0.5);
       } else if(pk.type === 'grenade'){
-        player.grenades = Math.min(player.grenades + pk.amount, CFG.GRENADE_AMMO_MAX);
+        pl.grenades = Math.min(pl.grenades + pk.amount, CFG.GRENADE_AMMO_MAX);
         playSound('pickup', 0.5);
       }
       pickups.splice(i,1);

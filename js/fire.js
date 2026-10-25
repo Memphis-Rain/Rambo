@@ -47,7 +47,8 @@ function _burningCount() {
 }
 
 function _panicPick(e) {
-  const away = player ? Math.atan2(e.y - player.y, e.x - player.x) : Math.random() * Math.PI * 2;
+  const p = nearestPlayer(e.x, e.y); // M11: away from the nearest standing player
+  const away = p ? Math.atan2(e.y - p.y, e.x - p.x) : Math.random() * Math.PI * 2;
   let a = away + randRange(-1.2, 1.2);
   if (e.panicDir !== undefined) {
     let d = a - e.panicDir;

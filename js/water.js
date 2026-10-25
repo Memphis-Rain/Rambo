@@ -70,7 +70,7 @@ function wadeRadius(ent, r) { return r * (1 - WADE_RING * (ent.submerge || 0)); 
 function aimPointOf(ent, out) {
   const sub = ent.submerge || 0;
   if (sub <= 0) { out.x = ent.x; out.y = ent.y; return out; }
-  const top = ent === player ? PLAYER_BODY_H : ENEMY_BODY_H * (ent.size || 1);
+  const top = ent.num ? PLAYER_BODY_H : ENEMY_BODY_H * (ent.size || 1); // M11: any player
   const k = bodyColumnK((entityWaterlineH(ent) + top) * 0.5);
   out.x = ent.x - k; out.y = ent.y - k;
   return out;
@@ -83,7 +83,10 @@ function _wadeStep(ent, wet, dt) {
 
 // After movement: the depth ramps toward the tile under each entity's feet
 function updateWading(dt) {
-  if (player) _wadeStep(player, waterTileAt(player.x, player.y), dt);
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i];
+    if (p) _wadeStep(p, waterTileAt(p.x, p.y), dt);
+  }
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i];
     if (!e.dead) _wadeStep(e, waterTileAt(e.x, e.y), dt);
