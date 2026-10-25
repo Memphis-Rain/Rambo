@@ -125,6 +125,7 @@ function updateGrenades(dt) {
 // at R x 0.7 instead of the fireball/scorch (W5 untouched)
 function grenadeExplode(gr) {
   _grenadeStats.exploded++;
+  dmgBy = gr.by || 0; // M11 K6: the thrower's kills (queued with the splash)
   const dmg = CFG.GRENADE_DMG;
   if (gr.inWater) {
     const R = CFG.GRENADE_RADIUS * CFG.GRENADE_GEYSER_SCALE;

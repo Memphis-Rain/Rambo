@@ -51,6 +51,18 @@ const CFG = {
   COOP_ZOOM_IN_RATE: 1,        // zoom units / s (linear), after the deadband
   COOP_ZOOM_DEADBAND: 0.05,    // zoom in only once the target is >= 5% above the zoom
   COOP_LEASH_PX: 48,           // K3b: at COOP_ZOOM_MIN, low-res px from the view edge
+  // M11 K5: down / revive (2P)
+  COOP_DOWN_TIME: 8,           // s a downed player waits for a revive before dying
+  COOP_REVIVE_RANGE: 50,       // u: the partner stands this close...
+  COOP_REVIVE_TIME: 1.5,       // ...for this long
+  COOP_REVIVE_HP: 0.5,         // x maxHp on revive
+  COOP_REVIVE_INVULN: 1,       // s invulnerable after a revive / wave respawn
+  // M11 K6: rules in 2P
+  COOP_RETARGET: 1,            // s: an enemy re-picks its target at most this often
+  COOP_SWITCH: 0.25,           // ...and switches only to a player >= 25% closer
+  COOP_ENEMY_MULT: 1.5,        // wave enemy count x (rounded up)
+  COOP_BOSS_HP_MULT: 1.5,
+  COOP_FRIENDLY_FIRE: false,   // partner takes damage from your explosions
   // M9 F1-F3: flamethrower, burning enemies, burning trees
   FLAME_RANGE: 260,            // F1: a flame slows to a stop at about this distance
   FLAME_LIFE: 0.45,            // s (+-10%)

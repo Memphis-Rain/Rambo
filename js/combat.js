@@ -26,6 +26,7 @@ function createPlayer() {
     grenades: CFG.GRENADE_AMMO_START, grenadeCd: 0, wavesStarted: 0, // N1
     // M11: 1 = P1, 2 = P2; 'up' | 'down' | 'dead' (K5); own score / kills (team totals stay global)
     num: 1, state: 'up', score: 0, kills: 0,
+    combo: 0, comboTimer: 0, downT: 0, reviveT: 0, // K6 per-player combo (P1 mirrors the globals); K5
   };
 }
 
@@ -44,11 +45,22 @@ function nearestPlayer(x, y) {
   return best;
 }
 
-// The player an enemy goes for (K6 adds re-pick timing and hysteresis)
+// The player an enemy goes for. K6 (2P): the nearest standing player, re-picked
+// at most every COOP_RETARGET s, switching only to one >= COOP_SWITCH closer;
+// a target that goes down / dies is dropped at once (enemies ignore downed)
 function enemyTarget(e) {
-  const p = nearestPlayer(e.x, e.y) || player;
-  e.target = p;
-  return p;
+  if (players.length < 2) { e.target = player; return player; }
+  let cur = e.target;
+  if (!playerStanding(cur) || players.indexOf(cur) < 0) cur = null;
+  if (cur && gameTime < e.retargetAt) return cur;
+  const n = nearestPlayer(e.x, e.y) || player;
+  e.retargetAt = gameTime + CFG.COOP_RETARGET;
+  if (cur && n !== cur) {
+    const dc = dist(e.x, e.y, cur.x, cur.y), dn = dist(e.x, e.y, n.x, n.y);
+    if (dn > dc * (1 - CFG.COOP_SWITCH)) return cur;
+  }
+  e.target = n;
+  return n;
 }
 
 // Hit-stop (G9): the main loop skips update() while this is above 0.
@@ -128,6 +140,11 @@ function playerCtl(p) { return (p && p.ctl) || _p1Ctl; }
 
 function updatePlayer(dt, p = player) {
   if (!p) return;
+  if (p.state !== 'up') { // M11 K5: downed / dead players don't act
+    if (p.hurtFlash > 0) p.hurtFlash = Math.max(0, p.hurtFlash - dt * 2.5);
+    p.vx = 0; p.vy = 0; p.walking = false; p.dodging = false;
+    return;
+  }
   const c = playerCtl(p), K = c.keys;
   if (K['f']) {
     if (!c.grenadeKeyHeld) { c.grenadeKeyHeld = true; c.grenadeWant = true; }
@@ -336,7 +353,7 @@ function updatePlayer(dt, p = player) {
         e.stunTimer = 0.4;
         e.knockbackX = (e.x-p.x)/d * kb;
         e.knockbackY = (e.y-p.y)/d * kb;
-        _pendingDamage.push({ target: e, dmg: CFG.SPECIAL_DAMAGE * (1 - d/CFG.SPECIAL_RADIUS), angle: Math.atan2(e.y-p.y, e.x-p.x), src: SRC_SHOCK });
+        _pendingDamage.push({ target: e, dmg: CFG.SPECIAL_DAMAGE * (1 - d/CFG.SPECIAL_RADIUS), angle: Math.atan2(e.y-p.y, e.x-p.x), src: SRC_SHOCK, by: p.num - 1 });
       }
     }
   }
@@ -371,7 +388,7 @@ function updatePlayer(dt, p = player) {
             ? aim + (i/(wep.count-1) - 0.5) * wep.spread * 2 + randRange(-wep.spread*0.3, wep.spread*0.3)
             : aim + randRange(-wep.spread, wep.spread);
           if (wep.flame) {
-            spawnFlame(muzzleX, muzzleY, bAngle, wep); // F1: flame particles, not bullets
+            spawnFlame(muzzleX, muzzleY, bAngle, wep, p.num - 1); // F1: flame particles, not bullets
           } else if (bullets.length < CFG.MAX_BULLETS) {
             bullets.push({
               x: muzzleX, y: muzzleY,
@@ -432,7 +449,7 @@ function spawnEnemy(type, x, y, bossData) {
     stunTimer: 0, knockbackX:0, knockbackY:0,
     walking: false,
     walkDist: Math.random() * 40, recoilT: 0, attackT: 0, healPulse: 0, healGlow: 0, distToPlayer: 9999,
-    target: null, // M11 K6: the player it goes for (enemyTarget)
+    target: null, retargetAt: 0, // M11 K6: the player it goes for (enemyTarget)
     shieldHp: t.hasShield ? t.shieldHp * (1 + wave*0.04) : 0,
     maxShieldHp: t.hasShield ? t.shieldHp * (1 + wave*0.04) : 0,
   };
@@ -798,6 +815,9 @@ function damageEnemy(e, dmg, bulletAngle, src=SRC_BULLET) {
 
 // Deferred damage queue - prevents recursive bomber chain explosions from causing stack overflow
 let _pendingDamage = [];
+// M11 K6: players[] index of whoever deals the damage being applied (kill
+// credit, combo, shockwave charge); set by each damage source, 0 = P1
+let dmgBy = 0;
 
 function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
   if (e.dead) return; // already dead - prevent double processing
@@ -810,24 +830,36 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
 
   // Score (E6: not for an enemy crushed by a tree the player didn't fell)
   if (!envNoCredit) {
-    const comboMult = 1 + combo * 0.1;
+    // M11 K6: the killer's own score, kills, combo and shockwave charge; the
+    // globals are the team totals (unlocks), P1's combo is the global combo
+    const killer = players[dmgBy] || player, own = killer === player;
+    const kc = own ? combo : killer.combo;
+    const comboMult = 1 + kc * 0.1;
     const basePts = isBoss ? t.score * 10 : t.score;
     const pts = Math.round(basePts * comboMult);
     score += pts;
     kills++;
-    if (player) { player.score += pts; player.kills++; } // K6 credits the killer
-    combo++;
-    comboTimer = CFG.COMBO_TIMEOUT;
-    if (combo > bestCombo) bestCombo = combo;
+    killer.score += pts; killer.kills++;
+    let kcNow;
+    if (own) {
+      combo++;
+      comboTimer = CFG.COMBO_TIMEOUT;
+      if (combo > bestCombo) bestCombo = combo;
+      player.combo = kcNow = combo;
+    } else {
+      kcNow = ++killer.combo;
+      killer.comboTimer = CFG.COMBO_TIMEOUT;
+      if (kcNow > bestCombo) bestCombo = kcNow;
+    }
 
     // Charge special ability on kills
-    if (player.specialCharge < CFG.SPECIAL_MAX_CHARGE) {
-      player.specialCharge++;
+    if (killer.specialCharge < CFG.SPECIAL_MAX_CHARGE) {
+      killer.specialCharge++;
     }
 
     // Floating text
-    const color = isBoss ? '#f0f' : combo > 10 ? '#f44' : combo > 5 ? '#fa0' : '#ff0';
-    const size = isBoss ? 24 : combo > 5 ? 18 : 14;
+    const color = isBoss ? '#f0f' : kcNow > 10 ? '#f44' : kcNow > 5 ? '#fa0' : '#ff0';
+    const size = isBoss ? 24 : kcNow > 5 ? 18 : 14;
     floatingTexts.push({
       x: e.x, y: e.y, text: `+${pts}`, life: 1.2, maxLife: 1.2, color, size,
     });
@@ -845,7 +877,7 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
       const d2 = dist(e.x, e.y, e2.x, e2.y);
       if (d2 < r) {
         // E6: a chain set off by a fall the player didn't cause earns nothing either
-        _pendingDamage.push({ target: e2, dmg: 80*(1-d2/r), angle: Math.atan2(e2.y-e.y, e2.x-e.x), src: SRC_EXPLOSIVE, noCredit: envNoCredit });
+        _pendingDamage.push({ target: e2, dmg: 80*(1-d2/r), angle: Math.atan2(e2.y-e.y, e2.x-e.x), src: SRC_EXPLOSIVE, noCredit: envNoCredit, by: dmgBy });
       }
     }
     for (let pi = 0; pi < players.length; pi++) {
@@ -948,18 +980,20 @@ function processPendingDamage() {
       if (!pd.target.dead) {
         const nc = envNoCredit;
         if (pd.noCredit) envNoCredit = true; // E6: no score for an uncredited chain
+        dmgBy = pd.by || 0; // M11 K6
         damageEnemy(pd.target, pd.dmg, pd.angle, pd.src || SRC_BULLET);
         envNoCredit = nc;
       }
     }
   }
+  dmgBy = 0;
   // G11: anything still queued (long bomber chains) carries over to the next
   // frame, so chains keep cascading as a ripple instead of being dropped
 }
 
 // M11 K1: `p` = the player hit (default P1)
 function damagePlayer(dmg, p = player) {
-  if (p.invincible > 0 || p.dodging) return;
+  if (p.invincible > 0 || p.dodging || p.state !== 'up') return; // K5: not when down / dead
   if (typeof demoActive !== 'undefined' && demoActive) dmg *= CFG.DEMO_DAMAGE_MULT; // D4
 
   if (p === player) shieldRegenTimer = 0; else p.shieldRegenT = 0; // reset shield regen delay
@@ -986,14 +1020,20 @@ function damagePlayer(dmg, p = player) {
   padRumble(0.3, 0.7, 90, p); // M10 C4: a short strong pulse, on the hit player's pad
 
   if (p.hp <= 0) {
+    if (players.length > 1) { coopDown(p); return; } // M11 K5: DOWN in 2P (TEAM SECOND WIND when nobody stands)
     if (typeof demoActive !== 'undefined' && demoActive) demoOnPlayerDeath(); // D6: demo ends on death
-    // Near-death recovery (Rambo style)
-    p.hp = p.maxHp * 0.3;
-    p.shield = p.maxShield * 0.2;
-    p.invincible = 2;
-    spawnExplosion(p.x, p.y, 60, false, SRC_EXPLOSIVE);
+    secondWind(p);
     showNotification('SECOND WIND!', 1.5);
   }
+}
+
+// Near-death recovery (Rambo style): 1P SECOND WIND and 2P TEAM SECOND WIND
+// (K5) share these values
+function secondWind(p) {
+  p.hp = p.maxHp * 0.3;
+  p.shield = p.maxShield * 0.2;
+  p.invincible = 2;
+  spawnExplosion(p.x, p.y, 60, false, SRC_EXPLOSIVE);
 }
 
 // =====================================================================
@@ -1031,6 +1071,7 @@ function updateBullets(dt) {
     const fresh = b.fresh; b.fresh = false;
     let nearT = 2, nearE = null, nearB = null, nearO = null, nearW = false;
     const byPlayer = b.owner === 'player';
+    dmgBy = b.by || 0; // M11 K6: kill credit for this round's hits
 
     // Explosive barrels (G12b) and env blockers (E3/E4: tree trunks, stumps,
     // crates, sandbags). Fallen logs are low cover: bullets fly over them.
@@ -1155,6 +1196,7 @@ function _bulletExplode(b) {
     return;
   }
   const src = b.bfg ? SRC_BFG : SRC_EXPLOSIVE;
+  dmgBy = b.by || 0; // M11 K6
   spawnExplosion(b.x, b.y, b.radius, true, src, null, b.dmg);
   splashDamage(b.x, b.y, b.dmg, b.radius, src, b.vx, b.vy);
 }
@@ -1168,8 +1210,8 @@ function splashDamage(x, y, dmg, R, src, vx, vy) {
     const d2 = dist(x, y, e2.x, e2.y);
     if(d2 < R){
       // Dead-centre (G13c target): knock back along the round's flight
-      const ang = d2 < 1 ? Math.atan2(vy, vx) : Math.atan2(e2.y-y, e2.x-x);
-      _pendingDamage.push({ target: e2, dmg: dmg * (1-d2/R) * 0.7, angle: ang, src });
+      const ang = d2 < 1 ? Math.atan2(vy, vx) : Math.atan2(e2.y-y, e2.x-x); // (by: the caller's dmgBy)
+      _pendingDamage.push({ target: e2, dmg: dmg * (1-d2/R) * 0.7, angle: ang, src, by: dmgBy });
     }
   }
 }
@@ -1206,11 +1248,12 @@ function hitBarrel(obj, dmg, byPlayer = true) {
       const e2 = enemies[ei];
       if(e2.dead) continue;
       const ed = dist(obj.x, obj.y, e2.x, e2.y);
-      if(ed < 220) _pendingDamage.push({ target: e2, dmg: 200*(1-ed/220), angle: Math.atan2(e2.y-obj.y, e2.x-obj.x), src: SRC_EXPLOSIVE });
+      if(ed < 220) _pendingDamage.push({ target: e2, dmg: 200*(1-ed/220), angle: Math.atan2(e2.y-obj.y, e2.x-obj.x), src: SRC_EXPLOSIVE, by: dmgBy });
     }
     for(let pi=0; pi<players.length; pi++){
       const pl = players[pi];
       if(!playerStanding(pl)) continue;
+      if(byPlayer && pi !== dmgBy && !CFG.COOP_FRIENDLY_FIRE) continue; // M11 K6: your barrel spares your partner
       const pd = dist(obj.x, obj.y, pl.x, pl.y);
       if(pd < 220) damagePlayer(80*(1-pd/220), pl);
     }
@@ -1360,7 +1403,8 @@ function spawnBoss(weaponIndex) {
   const name = BOSS_NAMES[weaponIndex-1] || 'Boss';
   // Pick a base enemy type that fits the power level
   const baseIdx = Math.min(Math.floor(weaponIndex * 1.2), ENEMY_TYPES.length - 1);
-  const bossHp = 300 + weaponIndex * 250; // Easy/relaxing HP scaling
+  let bossHp = 300 + weaponIndex * 250; // Easy/relaxing HP scaling
+  if (players.length > 1) bossHp = Math.ceil(bossHp * CFG.COOP_BOSS_HP_MULT); // M11 K6
 
   const a = Math.random() * Math.PI * 2;
   const o = coopSpawnOrigin(_spawnO), sd = (CFG.VIEW_RANGE + 80) / cam.z; // M11 K3a: off the zoomed view
@@ -1392,9 +1436,15 @@ function updateWaves(dt) {
     if(waveTimer <= 0) {
       wave++;
       waveActive = true;
-      // N1: +1 grenade per wave start after the round's first wave (cap 6)
-      if (player && player.wavesStarted++ > 0) player.grenades = Math.min(player.grenades + 1, CFG.GRENADE_AMMO_MAX);
-      const baseEnemies = 5 + wave * 2 + Math.floor(wave * 0.5);
+      // N1: +1 grenade per wave start after the round's first wave (cap 6), per player
+      for (let i = 0; i < players.length; i++) {
+        const p = players[i];
+        if (p && p.wavesStarted++ > 0) p.grenades = Math.min(p.grenades + 1, CFG.GRENADE_AMMO_MAX);
+      }
+      coopOnWaveStart(); // M11 K5: the dead respawn beside the partner
+      // M11 K6: x COOP_ENEMY_MULT (rounded up) in 2P
+      const baseEnemies = players.length > 1 ? Math.ceil((5 + wave * 2 + Math.floor(wave * 0.5)) * CFG.COOP_ENEMY_MULT)
+        : 5 + wave * 2 + Math.floor(wave * 0.5);
       const cap = Math.min(baseEnemies, CFG.MAX_ENEMIES - enemies.length);
       enemiesThisWave = cap;
       enemiesSpawned = 0;
@@ -1437,6 +1487,11 @@ function updateWaves(dt) {
   if(combo > 0) {
     comboTimer -= dt;
     if(comboTimer <= 0) combo = 0;
+  }
+  if (player) player.combo = combo; // M11 K6: P1's combo is the global one
+  for (let i = 1; i < players.length; i++) {
+    const p = players[i];
+    if (p && p.combo > 0) { p.comboTimer -= dt; if (p.comboTimer <= 0) p.combo = 0; }
   }
 }
 

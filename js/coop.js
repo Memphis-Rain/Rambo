@@ -23,7 +23,7 @@
 //   coopState()        { n, title2P, titleCount, titleHint, devices:
 //                      [{ kbm, pad }] per player, pendingPad }
 
-const _coop = { target: 1, zoomingIn: false, forced: null, pendingPad: null, titleHint: null, titleCount: 0 };
+const _coop = { target: 1, zoomingIn: false, forced: null, pendingPad: null, titleHint: null, titleCount: 0, midX: 0, midY: 0 };
 const _coopMid = { x: 0, y: 0 };
 const _coopPts = [];
 const _coopV = { x: 0, y: 0 };
@@ -41,6 +41,7 @@ function coopMidpoint(out) {
   if (n === 1) { // exact in 1P (Q4): no division rounding
     for (let i = 0; i < players.length; i++) if (coopCounted(players[i])) { out.x = players[i].x; out.y = players[i].y; }
   } else if (n > 1) { out.x = sx / n; out.y = sy / n; }
+  if (n > 0) { _coop.midX = out.x; _coop.midY = out.y; } // K5: the last midpoint (team second wind)
   return n;
 }
 
@@ -280,6 +281,108 @@ function coopState() {
     titleCount: _coop.pendingPad !== null || players.length > 1 ? 2 : 1,
     devices, pendingPad: _coop.pendingPad,
   };
+}
+
+// =====================================================================
+// K5: down, revive, team second wind (2P only; 1P keeps SECOND WIND)
+// =====================================================================
+function _coopAnyStanding() {
+  for (let i = 0; i < players.length; i++) if (playerStanding(players[i])) return true;
+  return false;
+}
+
+// damagePlayer at 0 HP in 2P
+function coopDown(p) {
+  p.state = 'down';
+  p.hp = 0;
+  p.downT = CFG.COOP_DOWN_TIME;
+  p.reviveT = 0;
+  p.dodging = false; p.reloading = false; p.vx = 0; p.vy = 0; p.walking = false;
+  p.bleedT = 0;
+  spawnBloodSpray(p.x, p.y, Math.random() * Math.PI * 2, 1.2, 10);
+  if (!_coopAnyStanding()) coopTeamSecondWind();
+}
+
+// Nobody standing: the downed get up on the spot, the dead respawn beside the
+// first downed one (or at the last midpoint), all with the SECOND WIND values
+function coopTeamSecondWind() {
+  if (typeof demoActive !== 'undefined' && demoActive) demoOnPlayerDeath(); // D6: same moment as 1P
+  let first = null;
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i];
+    if (!p || p.state !== 'down') continue;
+    if (!first) first = p;
+    p.state = 'up'; p.downT = 0; p.reviveT = 0;
+    secondWind(p);
+  }
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i];
+    if (!p || p.state !== 'dead') continue;
+    _coopRespawnAt(p, first ? first.x : _coop.midX, first ? first.y : _coop.midY);
+    secondWind(p);
+  }
+  showNotification('TEAM SECOND WIND!', 1.5);
+}
+
+function _coopRespawnAt(p, x, y) {
+  p.state = 'up'; p.downT = 0; p.reviveT = 0;
+  p.x = x + 30; p.y = y - 30;
+  if (typeof resolveEnvCollision === 'function') resolveEnvCollision(p, 10);
+  p.vx = 0; p.vy = 0; p.dodging = false; p.reloading = false; p.submerge = 0;
+}
+
+function _coopDie(p) {
+  p.state = 'dead'; p.downT = 0; p.reviveT = 0;
+  const a = Math.random() * Math.PI * 2;
+  spawnGibs(p.x, p.y, a, 0, 1.25, 1); // G5: bloody
+  spawnBloodSpray(p.x, p.y, a, 2.2, 12);
+  spawnBloodSpray(p.x, p.y, a + Math.PI, 1.4, 12);
+  bloodDecal(DECAL_POOL, p.x, p.y, 4, BLOOD_COLORS[3], 0, randRange(16, 26));
+  addShake(4);
+  playSound('hit', 0.6);
+  if (!_coopAnyStanding()) coopTeamSecondWind();
+}
+
+// After the players moved (update): bleed, count down, revive
+function coopUpdateDown(dt) {
+  if (players.length < 2) return;
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i];
+    if (!p || p.state !== 'down') continue;
+    p.downT -= dt;
+    p.bleedT = (p.bleedT || 0) - dt;
+    if (p.bleedT <= 0) { // lying, bleeding
+      p.bleedT = 0.45;
+      spawnBloodSpray(p.x, p.y, Math.random() * Math.PI * 2, 0.35, 3);
+    }
+    // the partner stands within COOP_REVIVE_RANGE for COOP_REVIVE_TIME
+    let near = false;
+    for (let j = 0; j < players.length; j++) {
+      const o = players[j];
+      if (o !== p && playerStanding(o) && dist(o.x, o.y, p.x, p.y) <= CFG.COOP_REVIVE_RANGE) near = true;
+    }
+    p.reviveT = near ? p.reviveT + dt : 0;
+    if (p.reviveT >= CFG.COOP_REVIVE_TIME) {
+      p.state = 'up'; p.downT = 0; p.reviveT = 0;
+      p.hp = p.maxHp * CFG.COOP_REVIVE_HP;
+      p.invincible = CFG.COOP_REVIVE_INVULN;
+      playSound('pickup', 0.6);
+    } else if (p.downT <= 0) _coopDie(p);
+  }
+}
+
+// updateWaves at each wave start: the dead respawn beside the partner at full health
+function coopOnWaveStart() {
+  if (players.length < 2) return;
+  let partner = null;
+  for (let i = 0; i < players.length; i++) if (playerStanding(players[i])) { partner = players[i]; break; }
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i];
+    if (!p || p.state !== 'dead') continue;
+    _coopRespawnAt(p, partner ? partner.x : _coop.midX, partner ? partner.y : _coop.midY);
+    p.hp = p.maxHp; p.shield = p.maxShield;
+    p.invincible = CFG.COOP_REVIVE_INVULN;
+  }
 }
 
 function resetCoop() {
