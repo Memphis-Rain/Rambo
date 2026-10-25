@@ -141,8 +141,15 @@ function updateCamera(dt) {
   cam.tx = sp.x;
   cam.ty = sp.y;
   coopUpdateZoom(dt); // K3a
-  cam.x += (cam.tx - cam.x) * CFG.CAMERA_SMOOTH * 60 * dt;
-  cam.y += (cam.ty - cam.y) * CFG.CAMERA_SMOOTH * 60 * dt;
+  const follow = coopCamFollowMult(); // M11 K3b: 1 in 1P (the original expression, bit for bit)
+  if (follow === 1) {
+    cam.x += (cam.tx - cam.x) * CFG.CAMERA_SMOOTH * 60 * dt;
+    cam.y += (cam.ty - cam.y) * CFG.CAMERA_SMOOTH * 60 * dt;
+  } else {
+    const k = Math.min(1, CFG.CAMERA_SMOOTH * 60 * dt * follow);
+    cam.x += (cam.tx - cam.x) * k;
+    cam.y += (cam.ty - cam.y) * k;
+  }
 
   if(shakeMag > 0.1) {
     shakeX = (Math.random()-0.5) * shakeMag * 2;

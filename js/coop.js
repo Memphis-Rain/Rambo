@@ -97,8 +97,8 @@ function setCamZoom(z) {
 // within the view minus COOP_LEASH_PX on each axis. Only the part of a move
 // (mover.x/y -> nx/ny) that widens the separation past the limit is cut: a
 // player knocked past it isn't yanked back, and can't walk further out
-function coopLeashClamp(mover, other, nx, ny, out) {
-  const iso = CFG.ISO_SCALE, s = RETRO.PIXEL_SCALE, z = CFG.COOP_ZOOM_MIN;
+function coopLeashClamp(mover, other, nx, ny, out, z = CFG.COOP_ZOOM_MIN) {
+  const iso = CFG.ISO_SCALE, s = RETRO.PIXEL_SCALE;
   const limX = (W - 2 * CFG.COOP_LEASH_PX * s) / z; // max |separation| in zoom-1 screen units
   const limY = (H - 2 * CFG.COOP_LEASH_PX * s) / z;
   let sx = (nx - other.x) - (ny - other.y), sy = ((nx - other.x) + (ny - other.y)) * iso;
@@ -112,17 +112,54 @@ function coopLeashClamp(mover, other, nx, ny, out) {
   return out;
 }
 
-// The leash for player p's own move this frame, from (ox, oy) to p.x/p.y (updatePlayer)
+// The leash for player p's own move this frame, from (ox, oy) to p.x/p.y
+// (updatePlayer; 2P only): (a) against the camera target, at the current
+// zoom (at COOP_ZOOM_MIN that is the K3b leash; above it the zoom-out at 3/s
+// outruns any move, so it only bites while the zoom lags behind a dodge and
+// keeps the partner inside too), (b) against the DRAWN view, which eases
+// behind the target: the mover's feet never come within COOP_LEASH_PX
+// low-res px of its edge. Knockback is not a move and stays exempt.
 function coopApplyLeash(p, ox, oy) {
-  if (players.length < 2 || cam.z > CFG.COOP_ZOOM_MIN + 1e-6 || !playerStanding(p)) return;
+  if (players.length < 2 || !playerStanding(p)) return;
+  const z = Math.max(CFG.COOP_ZOOM_MIN, cam.z);
   for (let i = 0; i < players.length; i++) {
     const o = players[i];
     if (o === p || !coopCounted(o)) continue;
     const nx = p.x, ny = p.y;
     p.x = ox; p.y = oy;
-    coopLeashClamp(p, o, nx, ny, _coopV);
+    coopLeashClamp(p, o, nx, ny, _coopV, z);
     p.x = _coopV.x; p.y = _coopV.y;
   }
+  _coopDrawnClamp(p, ox, oy);
+}
+
+// K3b (b): only the part of the move that widens the feet's distance past
+// the limit from the drawn view centre (cam.x, cam.y at cam.z) is cut
+function _coopDrawnClamp(p, ox, oy) {
+  const iso = CFG.ISO_SCALE, m = CFG.COOP_LEASH_PX * RETRO.PIXEL_SCALE, z = cam.z;
+  const hx = (W / 2 - m) / z, hy = (H / 2 - m) / z; // zoom-1 iso units from the centre
+  let sx = (p.x - p.y) - cam.x, sy = (p.x + p.y) * iso - cam.y;
+  if (Math.abs(sx) <= hx && Math.abs(sy) <= hy) return;
+  const lx = Math.max(hx, Math.abs((ox - oy) - cam.x)), ly = Math.max(hy, Math.abs((ox + oy) * iso - cam.y));
+  sx = Math.max(-lx, Math.min(lx, sx));
+  sy = Math.max(-ly, Math.min(ly, sy));
+  const X = sx + cam.x, Y = (sy + cam.y) / iso; // x - y, x + y
+  p.x = (X + Y) * 0.5; p.y = (Y - X) * 0.5;
+}
+
+// K3b: the camera follows 3x faster while a counted player's feet are within
+// COOP_ZOOM_MARGIN low-res px of the drawn edge (2P), so a partner isn't left
+// near the edge while the camera eases after a reversal; 1 otherwise (1P: always)
+function coopCamFollowMult() {
+  if (players.length < 2) return 1;
+  const iso = CFG.ISO_SCALE, m = CFG.COOP_ZOOM_MARGIN * RETRO.PIXEL_SCALE, z = cam.z;
+  const hx = (W / 2 - m) / z, hy = (H / 2 - m) / z;
+  for (let i = 0; i < players.length; i++) {
+    const p = players[i];
+    if (!coopCounted(p)) continue;
+    if (Math.abs((p.x - p.y) - cam.x) > hx || Math.abs((p.x + p.y) * iso - cam.y) > hy) return 3;
+  }
+  return 1;
 }
 
 // Spawn rings and ambient FX centre on the camera's midpoint and widen with
@@ -165,6 +202,12 @@ function coopJoin(padIndex) {
   p.angle = p.aimAngle = player.aimAngle;
   players.push(p);
   if (p.pad !== null && typeof padAttachP2 === 'function') padAttachP2(p.pad);
+  // Start aiming where P1 aims (no snap to screen-right on the first frame)
+  const a = padAimOf(1);
+  a.dirX = Math.cos(p.aimAngle); a.dirY = Math.sin(p.aimAngle);
+  a.x = p.x + a.dirX * a.dist; a.y = p.y + a.dirY * a.dist;
+  const v = worldToView(a.x, a.y, _coopV);
+  p.ctl.mouseX = v.x; p.ctl.mouseY = v.y;
   return p;
 }
 
@@ -209,7 +252,7 @@ function _coopTitleHint() {
   if (_coop.pendingPad !== null) return '';
   const n = typeof _padCount === 'function' ? _padCount() : 0;
   if (n >= 2) return '2P PRESS START';
-  if (n === 1 && !(pad.connected && pad.used)) return '2P PRESS VIEW ON PAD';
+  if (n === 1 && !padUsedByP1()) return '2P PRESS VIEW ON PAD';
   return '';
 }
 

@@ -51,6 +51,7 @@ let _padMouseOwned = false;
 let _padSprint = false;
 let _padDisconnectPaused = false;
 let _padDisconnectWho = 0;                       // M11: 1 = P1's pad, 2 = P2's
+let _padUsedIdx = -1;                            // M11 K2: the pad index P1 has given input with
 // C4: per pad slot (0 = P1, 1 = P2): last start, the effect playing now, and
 // the strongest effect blocked by the gap
 function _padRumState() { return { at: -1e9, until: -1e9, str: 0, q: null, qBuf: { weak: 0, strong: 0, ms: 0 } }; }
@@ -89,15 +90,23 @@ function _padGet() {
     const g = gps[pad.index];
     if (g && g.connected) return g;
   }
+  // M11 K2: while P2 waits for its dropped pad, a pad P1 isn't holding is
+  // P2's to re-claim (Start / A, _padPollFree), not P1's to pick up
+  if (players.length > 1 && players[1] && players[1].pad === null && !(pad.connected && pad.index >= 0)) return null;
   for (let i = 0; i < gps.length; i++) {
     const g = gps[i];
     if (i !== p2 && g && g.connected && g.mapping === 'standard') {
-      if (pad.index !== i) { pad.index = i; pad.used = false; }
+      if (pad.index !== i && inputDevice === 'pad') _padUsedIdx = i; // M10 failover: P1 is on pads, it stays P1's
+      pad.index = i;
       return g;
     }
   }
   return null;
 }
+
+// M11 K2: has P1 used the pad it holds? (kept across a reconnect at the same
+// index; a pad P1 has used never joins P2 by View)
+function padUsedByP1() { return pad.connected && pad.index >= 0 && pad.index === _padUsedIdx; }
 
 function _padKey(k, v) {
   if (v) { keys[k] = true; _padOwned[k] = true; }
@@ -150,7 +159,7 @@ function _padBodyClass(on) {
 }
 
 function _padFound(g) {
-  pad.connected = true; pad.id = g.id || ''; pad.used = false;
+  pad.connected = true; pad.id = g.id || '';
   pad.pressed.fill(0); pad.justPressed.fill(0);
   // C6 toast; on the title the legend swap shows it, the toast waits for the game
   _padToastPending = true;
@@ -160,7 +169,7 @@ function _padFound(g) {
 
 function _padLost() {
   const wasPad = inputDevice === 'pad';
-  pad.connected = false; pad.index = -1; pad.used = false;
+  pad.connected = false; pad.index = -1;
   _padToastPending = false;
   pad.pressed.fill(0); pad.justPressed.fill(0);
   pad.lx = pad.ly = pad.rx = pad.ry = pad.lmag = pad.rmag = 0;
@@ -317,8 +326,8 @@ function pollGamepad() {
   const jp = pad.justPressed;
 
   // M11 K2: View on a lone pad P1 hasn't used hands it to P2 (P1 stays on kbm)
-  if (jp[PAD_BTN.BACK] && !pad.used && _padCount() === 1 && typeof coopTryJoin === 'function' && coopTryJoin(pad.index)) return;
-  if (active && !demoActive) pad.used = true;
+  if (jp[PAD_BTN.BACK] && !padUsedByP1() && _padCount() === 1 && typeof coopTryJoin === 'function' && coopTryJoin(pad.index)) return;
+  if (active && !demoActive) _padUsedIdx = pad.index;
 
   // C5: title / attract mode
   if (typeof demoActive !== 'undefined' && demoActive) {
@@ -469,6 +478,7 @@ function padAttachP2(i) {
   const g = _pad2Get();
   if (g) { _pad2.id = g.id || ''; _padRead(g, _pad2); _pad2.justPressed.fill(0); } // the join press is not an action
   if (i === pad.index && pad.connected) _padLost(); // a lone pad leaves P1 (P1 stays on kbm)
+  if (_padUsedIdx === i) _padUsedIdx = -1;
 }
 
 // Start / A on a pad that is neither P1's nor P2's joins P2 (or re-attaches
@@ -527,7 +537,10 @@ function _padPollP2() {
     c.pulse.length = 0;
   }
   const hb = _padRead(g, _pad2);
-  if (!c || !gameStarted || demoActive) return; // joined on the title: wait for the game
+  if (!c || !gameStarted || demoActive) { // joined on the title: wait for the game
+    if (!gameStarted && (hb || _pad2.lmag > 0 || _pad2.rmag > 0) && typeof demoNoteInput === 'function') demoNoteInput(); // keeps the title (no attract mode)
+    return;
+  }
   const jp = _pad2.justPressed;
   // Pause: Start from either player pauses everything; A / B also resume (C5)
   let swallow = false;
