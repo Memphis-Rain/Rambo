@@ -547,6 +547,87 @@ test('K5: both down -> TEAM SECOND WIND: both stand at 30% HP, 2 s invulnerable,
 // ---------------------------------------------------------------------
 // K4: HUD fit
 // ---------------------------------------------------------------------
+/** F6 cycles PIXEL_SCALE (R6), as in game.spec.js. */
+async function setPixelScale(game, target) {
+  for (let i = 0; i < 4; i++) {
+    if ((await game.eval(() => retroState().scale)) === target) return;
+    await game.page.keyboard.press('F6');
+  }
+  expect(await game.eval(() => retroState().scale)).toBe(target);
+}
+
+test('K4: the low-HP vignette follows the lowest HP among STANDING players (a downed one shows its HELP ring instead)', async ({ game, page }) => {
+  test.skip(!LANDED.K4 || !LANDED.K5, 'K4 + K5 not landed');
+  await boot(game, page);
+  await twoPlayers(game, page);
+  await placeBoth(game, { x: 0, y: 0 }, { x: 200, y: 0 });
+  const vignette = async (hp1, hp2, downP2 = false) => {
+    await game.eval(([a, b, d]) => {
+      players[0].hp = players[0].maxHp * a;
+      if (d) { const p = players[1]; p.invincible = 0; p.shield = 0; damagePlayer(p.hp + 10, p); p.invincible = 1e9; } else players[1].hp = players[1].maxHp * b;
+    }, [hp1, hp2, downP2]);
+    await frames(page, 4);
+    return game.eval(() => hudElements.vignetteGraphics.visible);
+  };
+  expect(await vignette(1, 1), 'both healthy: no vignette').toBe(false);
+  expect(await vignette(1, 0.1), 'P2 standing at 10%: vignette').toBe(true);
+  expect(await vignette(0.1, 1), 'P1 at 10%: vignette').toBe(true);
+  expect(await vignette(1, 0, true), 'P2 DOWN, P1 healthy: no vignette').toBe(false);
+  expect(await game.eval(() => players[1].state)).toBe('down');
+});
+
+test('K4: P2 reads apart from P1: P2\'s light vest is clearly brighter than P1\'s dark top (x1, x3, zoom 0.6)', async ({ game, page }) => {
+  test.skip(!LANDED.K4, 'K4 not landed');
+  await boot(game, page);
+  await twoPlayers(game, page);
+  await game.eval(() => { RETRO.DITHER = false; RETRO.CRT = false; if (typeof _applyRetroToggles === 'function') _applyRetroToggles(); });
+  await placeBoth(game, { x: 0, y: 0 }, { x: 70, y: -70 });
+  // mean luma of the torso band (25-60% down the drawn sprite) of each player
+  const torso = () => game.eval(() => {
+    const out = [];
+    const { pixels, width } = app.renderer.extract.pixels({ target: app.stage, frame: new PIXI.Rectangle(0, 0, W, H) });
+    for (const gr of [_sp.playerG, _sp.p2G]) {
+      const b = gr.getBounds(), s = RETRO.PIXEL_SCALE;
+      const x0 = Math.round(b.minX * s), x1 = Math.round(b.maxX * s), y0 = Math.round((b.minY + (b.maxY - b.minY) * 0.25) * s), y1 = Math.round((b.minY + (b.maxY - b.minY) * 0.6) * s);
+      let sum = 0, n = 0;
+      for (let y = y0; y < y1; y++) for (let x = x0 + Math.round((x1 - x0) * 0.3); x < x1 - Math.round((x1 - x0) * 0.3); x++) {
+        const i = (y * width + x) * 4;
+        sum += 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2]; n++;
+      }
+      out.push(n ? sum / n : NaN);
+    }
+    return out;
+  });
+  for (const [scale, zoom] of [[1, 1], [3, 1], [3, 0.6]]) {
+    await setPixelScale(game, scale);
+    await game.eval((z) => setCamZoom(z), zoom);
+    await game.advance(0.4);
+    const [l1, l2] = await torso();
+    expect(l2 - l1, `x${scale} zoom ${zoom}: torso luma P1 ${l1.toFixed(1)} vs P2 ${l2.toFixed(1)}`).toBeGreaterThan(20);
+  }
+  await game.eval(() => setCamZoom(null));
+});
+
+test('K4: the boss bar does not overlap the stats box at 800x600 (1P and 2P)', async ({ game, page }) => {
+  test.skip(!LANDED.K4, 'K4 not landed');
+  await page.setViewportSize({ width: 800, height: 600 });
+  await boot(game, page);
+  await game.start();
+  await game.freezeWaves();
+  await game.eval(() => { spawnBoss(3); bossActive = true; });
+  await game.advance(0.5);
+  let b = await game.eval((h) => window.__h(h), H.hud);
+  expect(b.boss, `1P: boss bar box ${JSON.stringify(b.boss)}`).toBeTruthy();
+  expect(overlap(b.boss, b.stats), `1P: boss ${JSON.stringify(b.boss)} vs stats ${JSON.stringify(b.stats)}`).toBe(false);
+  await rawTap(page, 1, BTN.START);
+  await page.waitForFunction(() => players.length === 2, null, { timeout: T(5_000) });
+  await game.advance(0.3);
+  b = await game.eval((h) => window.__h(h), H.hud);
+  for (const k of ['stats', 'p1', 'p2', 'minimap']) {
+    expect(overlap(b.boss, b[k]), `2P: boss ${JSON.stringify(b.boss)} vs ${k} ${JSON.stringify(b[k])}`).toBe(false);
+  }
+});
+
 for (const [vw, vh] of [[800, 600], [1920, 1080]]) {
   test(`K4: the 2P HUD fits at ${vw}x${vh}: P1 panel, P2 panel and minimap inside the view, no overlap`, async ({ game, page }, testInfo) => {
     test.skip(!LANDED.K4, 'K4 not landed');
