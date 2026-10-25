@@ -215,7 +215,7 @@ function _padFound(g) {
   // K2.4: only the Start that claimed this pad to resolve a disconnect pause
   // is consumed (held until released); any other press at discovery counts
   // (Chrome reveals a pad on its first button press: that A starts the game)
-  if (pad.index === _padClaimIdx) { _padRead(g, pad); pad.justPressed.fill(0); }
+  if (pad.index === _padClaimIdx || (pad.index >= 0 && _padExitHeld[pad.index])) { _padRead(g, pad); pad.justPressed.fill(0); }
   else { pad.pressed.fill(0); pad.justPressed.fill(0); }
   _padClaimIdx = -1;
   // C6 toast; on the title the legend swap shows it, the toast waits for the game
@@ -386,6 +386,11 @@ function pollGamepad() {
   let n = 0;
   if (_padSnap) for (let i = 0; i < _padSnap.length; i++) if (_padSnap[i] && _padSnap[i].connected && _padSnap[i].mapping === 'standard') n++;
   _padN = n;
+  for (let i = 0; i < _padExitHeld.length; i++) { // K2.4: released (or gone) -> no longer held from the demo exit
+    if (!_padExitHeld[i]) continue;
+    const g = _padSnap ? _padSnap[i] : null;
+    if (!g || !g.connected || !_padHeldBits(g)) _padExitHeld[i] = 0;
+  }
   _pollGamepadBody();
   if (n === 0 && _padLegend) _padBodyClass(false); // K2.2: no pad left -> no pad legend (e.g. P2's pad unplugged on the title)
 }
@@ -430,7 +435,17 @@ function _padConsumeHeld() {
       b = (st && (st.pressed || st.value > 0.5) ? 1 : 0) | (a && (a.pressed || a.value > 0.5) ? 2 : 0);
     }
     _padFreeBtn[i] = b;
+    // K2.4: also pads not found / claimed yet (Chrome reveals a pad on the
+    // very press that ended the demo): found later while still held, those
+    // buttons count as held (_padFound), until released
+    if (g && g.connected && _padHeldBits(g)) _padExitHeld[i] = 1;
   }
+}
+
+const _padExitHeld = new Uint8Array(16); // K2.4: pad held a button when it ended a demo
+function _padHeldBits(g) {
+  for (let b = 0; b < PAD_NB; b++) { const x = g.buttons[b]; if (x && (x.pressed || x.value > 0.5)) return true; }
+  return false;
 }
 
 function _pollGamepadBody() {
