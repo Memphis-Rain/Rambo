@@ -512,6 +512,20 @@ describe('M11 K2.1 device edge cases', () => {
     expect(pads()).toEqual([0, 1]);
   });
 
+  test.skipIf(todo)('K2.1: the same in reverse: P1\'s disconnect pause is not cleared by P2\'s Start, only by P1 re-claiming pad 0', () => {
+    twoPads();
+    rig.disconnect(0); frame();
+    expect(g.paused).toBe(true);
+    tap(1, BTN.START);
+    expect(g.paused, 'Start on P2\'s pad does not clear P1\'s disconnect pause').toBe(true);
+    expect(pads()[1]).toBe(1);
+    rig.connect(0); frame(3);
+    expect(g.paused, 'reconnecting alone does not resume').toBe(true);
+    tap(0, BTN.START);
+    expect(g.paused, 'P1 re-claims pad 0: resumed').toBe(false);
+    expect(pads()).toEqual([0, 1]);
+  });
+
   test.skipIf(todo)('K2.1: a View press refused while paused does not burn the lone-pad join; after unpausing, View joins P2', () => {
     rig.connect(0); frame();
     g.paused = true; // paused from the keyboard (P)

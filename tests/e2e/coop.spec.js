@@ -191,14 +191,20 @@ test('K2/C4: each pad\'s rumble spy sees only its own player\'s events', async (
   expect(calls.filter((c) => c.pad === 1).length).toBe(0);
 });
 
-test('K2/C6: P2\'s pad disconnecting auto-pauses with "P2 CONTROLLER DISCONNECTED"; Start on P1\'s pad resumes', async ({ game, page }) => {
+test('K2/C6: P2\'s pad disconnecting auto-pauses with "P2 CONTROLLER DISCONNECTED"; Start on P1\'s pad does not resume (K2.1), a key does', async ({ game, page }) => {
   test.skip(!LANDED.K2, 'K2 not landed');
   await boot(game, page);
   await twoPlayers(game, page);
   await page.evaluate(() => window.__padDisconnect(1));
   await page.waitForFunction(() => paused === true, null, { timeout: T(5_000) });
   await page.waitForFunction(() => /P2 CONTROLLER DISCONNECTED/.test(window.__screenText()), null, { timeout: T(5_000) });
-  await pad1(page).tap(BTN.START);
+  if (LANDED.K2_1) {
+    // spec ruling: only P2's pad re-claiming, or a keyboard key, clears P2's disconnect pause
+    await pad1(page).tap(BTN.START);
+    await frames(page, 10);
+    expect(await game.eval(() => paused), 'Start on P1\'s pad does not clear P2\'s disconnect pause').toBe(true);
+  }
+  await page.keyboard.press('x'); // the escape hatch when P2's pad is gone for good
   await page.waitForFunction(() => paused === false, null, { timeout: T(5_000) });
   expect(await game.eval(() => players.length), 'P2 stays in the game').toBe(2);
 });
