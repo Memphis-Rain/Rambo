@@ -65,7 +65,8 @@ jobs:
   perf:
     runs-on: ubuntu-latest
     # @perf tests measure fixed GAME time; at the runner's ~4 fps one can take ~11 min.
-    # Longest perf shard so far ~8 min, so 30 min leaves ample headroom.
+    # Shards run ~10-13 min (M9PERF, the heaviest, has its own job in 'long'), so 30 min
+    # leaves ample headroom.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -81,8 +82,8 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       # Relative criteria only on CI (Q2a); absolute ms budgets are skipped or recorded.
-      - name: Perf and statistical tests (@perf)
-        run: npx playwright test --grep @perf --shard=${{ matrix.shard }}/3
+      - name: Perf and statistical tests (@perf, except M9PERF)
+        run: npx playwright test --grep @perf --grep-invert M9PERF --shard=${{ matrix.shard }}/3
       - name: "Guard: the shard actually ran tests"
         if: success()
         run: node tests/ci/assert-ran.mjs
@@ -99,13 +100,15 @@ jobs:
   long:
     runs-on: ubuntu-latest
     # The two 156-shot G13 tests (@long), one job per pixel scale so they never share a
-    # runner, plus one job for the other G13 aim tests. Worst measured on CI before the post-FX/fit-cache speedup: x1 28.3 min,
-    # so 40 min keeps >= 25% headroom even without it.
+    # runner, plus one job for the other G13 aim tests and one for the M9 perf scene (90
+    # game-s of fire + red pond; it took a perf shard from 13 to 21 min on fc8adc2).
+    # Worst measured on CI before the post-FX/fit-cache speedup: x1 28.3 min, so 40 min
+    # keeps >= 25% headroom even without it.
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        scale: [1, 3, aim]
+        scale: [1, 3, aim, m9perf]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -116,13 +119,17 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: G13 head-to-toe shots at x${{ matrix.scale }} (@long)
-        if: matrix.scale != 'aim'
+        if: matrix.scale == 1 || matrix.scale == 3
         run: npx playwright test -g "x${{ matrix.scale }}\) @long"
       # The other G13 aim tests (real-mouse shots, several minutes each on CI) run here, so
       # they don't pile into one e2e shard.
       - name: Other G13 aim tests
         if: matrix.scale == 'aim'
         run: npx playwright test -g "G13" --grep-invert "@long"
+      # The M9 sustained scene (@perf, relative ratio only on CI), alone on its runner.
+      - name: M9PERF sustained scene
+        if: matrix.scale == 'm9perf'
+        run: npx playwright test -g "M9PERF"
       - name: "Guard: the shard actually ran tests"
         if: success()
         run: node tests/ci/assert-ran.mjs
