@@ -616,7 +616,7 @@ User: "you can also add xbox joystick controller support".
 
 User: "can you add single screen multiplayer once the xbox controllers are supported?"
 
-This is the one new game mode the user asked for, so it is an explicit exception to the §0 non-goal. The setup is 90s-arcade couch co-op: two players, one shared isometric camera, no split screen and no zoom, since zoom would break the R-series pixel grid.
+This is the one new game mode the user asked for, so it is an explicit exception to the §0 non-goal. The setup is 90s-arcade couch co-op: two players, one shared isometric camera that zooms out when the players spread apart (K3a), and no split screen.
 
 - **Q4 still holds for 1P.** With one player, every existing number and behaviour stays the same, and the full existing suite (unit, e2e, perf, long) passes unchanged.
 - The 2P numbers below are new and get their own unit locks.
@@ -633,11 +633,32 @@ This is the one new game mode the user asked for, so it is an explicit exception
   - **Drop-in mid-game.** Start on an unassigned pad spawns P2 next to P1, with 100 HP, the weapon P1 has selected and default ammo and grenades. The banner reads "PLAYER 2 JOINS!". There is no drop-out key.
   - A pad's input (M10 C1–C3) goes only to its own player. Aim assist (C3) is per pad.
   - **Rumble (C4)** goes only to the pad of the player the event concerns: their shots, damage taken, and blasts measured from that player.
-- **K3. Shared camera and leash.**
-  - The camera follows the midpoint of the alive players, with the same smoothing as now.
-  - **Leash:** a player cannot move to where the two players' screen-space separation would push either one within 48 low-res px of the view edge (that player's movement is clamped). Knockback and explosions may push a player past the leash. The camera then follows the midpoint, and the next move is clamped back.
-  - A downed player (K5) does not pull the camera.
-  - Shake (J5a) stays global, at its current cap.
+- **K3. Shared camera, zoom and leash.** *(The zoom was added by a user request on 2026-10-25: "use zoom camera when players are too far away from each other".)*
+  - The camera follows the midpoint of the standing and downed players, with the same smoothing as now. Dead players don't count.
+  - **K3a. Zoom.**
+    - **Target zoom:** the largest zoom ≤ 1.0 that keeps every counted player at least 64 low-res px inside the view edges, clamped to `CFG.COOP_ZOOM_MIN` = 0.6 (a view 1.67× wider).
+    - In 1P, and in 2P when the players are close, the zoom is exactly 1.0, so the 1P picture is identical (Q4).
+    - **Smoothing:**
+      - Zooming out follows the target at rate 3/s, so a player running away never reaches the edge.
+      - Zooming in starts only once the target is ≥ 5% above the current zoom (a deadband), then runs at rate 1/s. This stops the camera "breathing".
+    - **How the zoom is applied, to keep the pixel look:**
+      - It is a scale on the world container *inside* the low-res RT.
+      - The screen size of a low-res pixel, the dither and the CRT stay exactly as they are. The world just gets smaller in pixels, the way a 90s arcade scaler worked.
+      - Camera pixel snapping (R2) still applies in the zoomed space, and a still camera at a still zoom must not shimmer.
+    - **Not zoomed:** the HUD, notifications, reticle, the 1P/2P tags and the toasts all stay screen-space, at their normal size.
+    - **Everything that depends on the view must use the zoomed view:**
+      - mouse aim (Q5/T5);
+      - G13 head-to-toe picking and the C3 reticle;
+      - culling;
+      - chunk streaming and envphys distance thresholds that are screen-relative;
+      - decal and particle visibility;
+      - water/W5 and the post-FX.
+    - The world never shows unloaded or blank areas at 0.6.
+  - **K3b. Leash at maximum zoom-out.**
+    - Once the zoom is at `COOP_ZOOM_MIN`, a player cannot move to where the separation would push either player within 48 low-res px of the view edge. That player's movement is clamped.
+    - Knockback and explosions may push a player past the leash. The camera then follows the midpoint, and the next move is clamped back.
+    - A downed player can't move, so the leash keeps them on screen for the revive.
+  - Shake (J5a) stays global at its current cap, in screen px, unaffected by the zoom.
 - **K4. Look and HUD.**
   - P2 uses a distinct palette swap, red bandana and darker vest, readable at x1 and x3. Each player has a small pixel "1P" / "2P" tag above the head, in the H-series font.
   - **HUD:** the P1 panel (HP, weapon, ammo, grenades, score) stays where it is. The P2 panel mirrors it on the right. The minimap moves if it would overlap.
@@ -663,7 +684,8 @@ This is the one new game mode the user asked for, so it is an explicit exception
   - Two mocked standard-mapping pads (the M10 mock extended to indices 0 and 1), plus keyboard+mouse.
   - **Unit:**
     - Device assignment for every combination (kbd+pad, pad+pad, a late second pad).
-    - Leash clamp math.
+    - Leash clamp math at COOP_ZOOM_MIN.
+    - Zoom target math: fit, the 0.6 clamp, the 5% zoom-in deadband, and exactly 1.0 in 1P and when players are close.
     - Targeting hysteresis: no switch at 20% closer, switch at 30%.
     - The scaling numbers.
     - Team-total unlocks.
@@ -673,7 +695,9 @@ This is the one new game mode the user asked for, so it is an explicit exception
   - **E2e:**
     - P2 joins from the title and mid-game.
     - Both players move, aim and kill independently.
-    - Neither player can leave the screen.
+    - Players far apart → zoom < 1 and both on screen; back together → zoom returns to exactly 1.0.
+    - At zoom 0.7: mouse aim within 1 low-res px (T5), a headshot pick works (G13), no blank/unloaded world at the edges.
+    - Neither player can leave the screen at the minimum zoom.
     - An enemy chases the nearer player.
     - P2 goes down and P1 revives them.
     - Both down → game over.
@@ -681,7 +705,7 @@ This is the one new game mode the user asked for, so it is an explicit exception
     - P2 disconnect → auto-pause.
     - The HUD fits at 800×600 (screenshot + boxes).
     - No console errors (Q1).
-  - **Perf:** a 2P run with 40 enemies + gore meets the same Q2 bars as 1P.
+  - **Perf:** a 2P run with 40 enemies + gore at zoom 0.6, the worst case since the most world is visible, meets the same Q2 bars as 1P.
   - **Manual:** the user tests with real pads.
 - **Order:** K1 first, as its own release point. Then K2+K3, which together make it playable, then K5+K6, K4 polish, and K7 last. Josh may parallelise K4 HUD art with K5/K6 logic through subagents, but he integrates `main.js` and `combat.js` himself.
 
