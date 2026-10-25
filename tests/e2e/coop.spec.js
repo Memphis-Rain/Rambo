@@ -307,6 +307,40 @@ test('K3a: at zoom 0.6 the world reaches every view edge (no blank or unloaded a
   await game.eval((h) => window.__h(h)(null), H.setZoom);
 });
 
+test('K3a: world-anchored texts (score pop, damage number) keep their zoom-1 pixel size at zoom 0.6', async ({ game, page }) => {
+  test.skip(!LANDED.K3, 'K3 not landed');
+  await boot(game, page);
+  await game.start();
+  await game.freezeWaves();
+  await game.toLand();
+  // P2 via coopJoin on the plugged-in pad 1 (no join press needed for the camera)
+  await game.eval(() => { coopJoin(1); for (const p of players) p.invincible = 1e9; });
+  // All world text goes into one Graphics (_sp.textG, pixi-sprites.js _spRenderTexts), so with
+  // exactly one text alive its bounds are that text's drawn rect (x PIXEL_SCALE = CSS px).
+  const textRect = async (kind, z) => {
+    await game.eval(([k, zz]) => {
+      setCamZoom(zz);
+      dmgNumbers.length = 0; floatingTexts.length = 0; enemies.length = 0;
+      const p = players[0];
+      if (k === 'pop') floatingTexts.push({ x: p.x + 40, y: p.y - 40, text: '+81', life: 30, maxLife: 30, color: '#ff0', size: 14 });
+      else dmgNumbers.push({ owner: null, x: p.x + 40, y: p.y - 40, z: 20, vx: 0, vy: 0, vz: 0, value: 81, kind: DMG_NORMAL, life: 30, maxLife: 30, age: 1 });
+    }, [kind, z]);
+    await frames(page, 3);
+    return game.eval(() => {
+      const b = _sp.textG.getBounds(), s = RETRO.PIXEL_SCALE;
+      return { w: (b.maxX - b.minX) * s, h: (b.maxY - b.minY) * s, s };
+    });
+  };
+  for (const kind of ['pop', 'dmg']) {
+    const one = await textRect(kind, 1);
+    const far = await textRect(kind, 0.6);
+    expect(one.w, `${kind}: drawn at zoom 1`).toBeGreaterThan(0);
+    expect(Math.abs(far.w - one.w), `${kind}: width at 0.6 ${far.w} vs 1 ${one.w}`).toBeLessThanOrEqual(one.s);
+    expect(Math.abs(far.h - one.h), `${kind}: height at 0.6 ${far.h} vs 1 ${one.h}`).toBeLessThanOrEqual(one.s);
+  }
+  await game.eval(() => { setCamZoom(null); dmgNumbers.length = 0; floatingTexts.length = 0; });
+});
+
 test('K3a: the HUD is not zoomed: HUD panel boxes are identical at zoom 1 and 0.7', async ({ game, page }) => {
   test.skip(!LANDED.K3 || !LANDED.K4, 'K3 + K4 not landed');
   await boot(game, page);
