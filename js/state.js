@@ -67,6 +67,15 @@ let floatingTexts = [];
 
 // Entity pools
 let player = null;
+// M11 K1: 1-2 players. players[0] is a live alias of `player` (both ways), so
+// `player = createPlayer()` keeps working; P2 is players[1]. Never shrink
+// below length 1 (index 0 is fixed). An entry may be null (no round yet).
+const players = [];
+Object.defineProperty(players, 0, {
+  get() { return player; },
+  set(v) { player = v; },
+  enumerable: true,
+});
 const enemies = [];
 const bullets = [];
 const particles = [];

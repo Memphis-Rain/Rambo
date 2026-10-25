@@ -474,9 +474,10 @@ function _envLand(r) {
       envNoCredit = false;
     }
   }
-  if (player) {
-    const pr = rr + 10;
-    if (envSegDist2(player.x, player.y, r) < pr * pr) damagePlayer(CFG.ENV_FALL_PLAYER_DMG);
+  const pr = rr + 10;
+  for (let i = 0; i < players.length; i++) { // M11: every standing player under it
+    const p = players[i];
+    if (playerStanding(p) && envSegDist2(p.x, p.y, r) < pr * pr) damagePlayer(CFG.ENV_FALL_PLAYER_DMG, p);
   }
 }
 

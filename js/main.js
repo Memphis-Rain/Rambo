@@ -283,10 +283,13 @@ function update(dt) {
   }
 
   // Walking dust
-  if(player && player.walking && Math.random()<0.3){
-    spawnParticle(player.x+randRange(-5,5), player.y+randRange(-3,3),
-      randRange(-10,10), randRange(-5,5), 0.3, randRange(2,4),
-      'rgba(150,130,100,', 'smoke', {gravity:-10,friction:0.95,grow:true,growRate:5,fadeStart:0.3});
+  for(let pi=0; pi<players.length; pi++){
+    const p = players[pi];
+    if(p && p.walking && Math.random()<0.3){
+      spawnParticle(p.x+randRange(-5,5), p.y+randRange(-3,3),
+        randRange(-10,10), randRange(-5,5), 0.3, randRange(2,4),
+        'rgba(150,130,100,', 'smoke', {gravity:-10,friction:0.95,grow:true,growRate:5,fadeStart:0.3});
+    }
   }
 
   // Ambient smoke from old bodies
