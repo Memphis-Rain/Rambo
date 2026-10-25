@@ -23,9 +23,9 @@ export const LANDED = {
   N1: true, // grenades on F
   E13: true, // sustained fire cuts trees down (trunk HP)
   W2: true, // wading: submerged sprites, visible-only aim
-  W3: false, // blood in water: clouds, no decals; footprints washed by wading
-  W4: false, // corpses sink and dissolve in water
-  W5: false, // water reddens with blood (waterBloodAt)
+  W3: true, // blood in water: clouds, no decals; footprints washed by wading
+  W4: true, // corpses sink and dissolve in water
+  W5: true, // water reddens with blood (waterBloodAt)
   F1: false, // flamethrower replaces Tesla
   F2: false, // burning enemies panic
   F3: false, // burning trees
