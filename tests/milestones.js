@@ -35,4 +35,12 @@ export const LANDED = {
   M10: true, // Xbox controller (spec a53b301): gamepad polling, aim, assist, rumble, hot-plug
   CACHEBUST: true, // spec B1: ?v=<BUILD> on every local asset in game.html (npm run stamp)
   FU1: true, // follow-ups after the first build (spec 1c81384): R4a DITHER_STRENGTH, D4 wave 10, D5 overlay visible
+  // M11 local 2-player co-op (spec b2e84d0 + K3a 8de96ab, K5 85840e7, K2 4e5c87b): one flag per step.
+  K1: true, // players[] refactor, player === players[0] (gate passed with zero test or loader edits)
+  K2: false, // join and devices: coopState(), padOf(i), padAimOf(i), coopJoin(), View/Back one-pad join
+  K3: false, // shared camera, K3a zoom (camZoom(), setCamZoom()), K3b leash at COOP_ZOOM_MIN
+  K4: false, // P2 look, 1P/2P tags, mirrored HUD panel (hudBoxes())
+  K5: false, // down, revive, TEAM SECOND WIND (p.state, p.downT, p.reviveT)
+  K6: false, // targeting hysteresis, x1.5 scaling, no friendly fire, per-player score, team unlocks
+  K7: false, // 2P attract mode
 };

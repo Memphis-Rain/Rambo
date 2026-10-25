@@ -2,7 +2,12 @@
 // tests/perf/m9.mjs (npm run perf:m9, real GPU). Both functions run in the page via
 // page.evaluate(); hook names come in as `h` (window[h.name]).
 
-/** In-page: a spot with dry land within 240u and a 3x3 pond 280-480u away that is on screen. */
+/**
+ * In-page: a spot with dry land within 240u and a 3x3 pond 280-480u away that is on screen,
+ * or null. The world is random per load (utils.js shuffles the noise with Math.random): out
+ * to r = 8000 a quarter of worlds had none; out to 32000 none of 300 vm-loaded worlds missed
+ * (worst search 0.45 s). Callers still re-roll the world on null (M9_SITE_TRIES).
+ */
 export const FIND_M9_SPOT = () => {
   const ts = CFG.TILE_SIZE;
   const wetAt = (x, y) => getTerrainTypeAt(Math.floor(x / ts) * ts, Math.floor(y / ts) * ts) === 'water';
@@ -23,7 +28,7 @@ export const FIND_M9_SPOT = () => {
     }
     return null;
   };
-  for (let r = 0; r <= 8000; r += 160) {
+  for (let r = 0; r <= 32000; r += 160) {
     for (let a = 0; a < 16; a++) {
       const x = player.x + Math.cos((a / 16) * Math.PI * 2) * r, y = player.y + Math.sin((a / 16) * Math.PI * 2) * r;
       if (!dryDisc(x, y, 240)) continue;
@@ -33,6 +38,9 @@ export const FIND_M9_SPOT = () => {
   }
   return null;
 };
+
+/** Worlds to try (a page reload each) before a run fails for want of an M9 site. */
+export const M9_SITE_TRIES = 4;
 
 /**
  * In-page steady M9 load. The scene is about load, not aim:
