@@ -836,10 +836,14 @@ function drawWeaponSlotIcon(g, cx, cy, weapIdx, selected) {
       g.rect(cx - 4, cy - 3, 6, 6).fill({ color: selected ? 0x00ffff : 0x005566, alpha: 0.9 }); // energy cell
       break;
     }
-    case 7: { // Tesla – body + lightning bolt
-      fr(cx - 10, cy - 3, 20, 6);     // main body
-      g.moveTo(cx - 3, cy - 7).lineTo(cx + 1, cy - 1).lineTo(cx - 2, cy + 1).lineTo(cx + 5, cy + 7)
-        .stroke({ width: 2, color: selected ? 0xaaaaff : 0x334488 });
+    case 7: { // Flamethrower – fuel tank under a long barrel, flared nozzle, pilot flame
+      fr(cx - 14, cy + 1, 9, 7);      // fuel tank
+      fr(cx - 12, cy - 1, 5, 2);      // tank neck / valve
+      fr(cx - 10, cy - 4, 20, 4);     // body + barrel
+      fr(cx + 10, cy - 6, 3, 8);      // nozzle flare
+      fr(cx - 3, cy, 3, 6);           // grip
+      g.rect(cx + 14, cy - 4, 3, 4).rect(cx + 15, cy - 6, 2, 2)
+        .fill({ color: selected ? 0xff8a20 : 0x553311, alpha: 0.9 }); // pilot flame
       break;
     }
     case 8: { // Railgun – very long barrel with rail marks

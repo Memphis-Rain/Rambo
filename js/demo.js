@@ -24,7 +24,7 @@ const DEMO_GRENADE_MIN = 4;       // N1: enemies within GRENADE_RADIUS of the ta
 const DEMO_GRENADE_EVAL = 0.25;   // the cluster search runs at most this often (game s)
 const DEMO_PREF_DIST = {
   Pistol: 240, Uzi: 210, Shotgun: 130, M16: 260, Minigun: 230, RPG: 330,
-  Plasma: 270, Tesla: 210, Railgun: 360, BFG: 380, Disintegrator: 250,
+  Plasma: 270, Flamethrower: 180, Railgun: 360, BFG: 380, Disintegrator: 250,
 };
 
 const _demo = {
