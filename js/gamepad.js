@@ -169,7 +169,7 @@ function padNoteMouseMove(x, y) {
 function padNoteKey() {
   _padSetDevice('kbm');
   if (!_padDisconnectPaused) return false;
-  padResumeFromDisconnect(); // a key always resumes (K2.1)
+  padResumeFromDisconnect(true); // a key always resumes, every chained pause too (K2.1, K2.2)
   return true;
 }
 
@@ -190,6 +190,7 @@ function _padBodyClass(on) {
 
 function _padFound(g) {
   pad.connected = true; pad.id = g.id || '';
+  _padP1Missing = false; // K2.2
   pad.pressed.fill(0); pad.justPressed.fill(0);
   // C6 toast; on the title the legend swap shows it, the toast waits for the game
   _padToastPending = true;
@@ -203,6 +204,7 @@ function _padLost() {
     _padOwner[pad.index] = 1; // K2.1
     _padNoteLoss(pad.id, 1);
   }
+  if (wasPad && gameStarted && !demoActive) _padP1Missing = true; // K2.2: P1 lost the pad it was playing with
   pad.connected = false; pad.index = -1;
   _padToastPending = false;
   pad.pressed.fill(0); pad.justPressed.fill(0);
@@ -225,8 +227,19 @@ function _padPauseOverlay() {
   if (typeof renderPauseOverlay === 'function' && typeof uiContainer !== 'undefined' && uiContainer) renderPauseOverlay();
 }
 
-function padResumeFromDisconnect() {
+// K2.2 (double drop): when the pause owner re-claims a pad and the other
+// active player's pad is still missing, the pause passes straight to that
+// player; a keyboard key (fromKey) clears every pause (the keyboard escape)
+let _padP1Missing = false;                       // P1's pad in use dropped and P1 hasn't re-claimed one
+function _padP2Missing() { return players.length > 1 && !!players[1] && players[1].pad === null && players[1].state !== 'dead'; }
+
+function padResumeFromDisconnect(fromKey) {
   if (!_padDisconnectPaused) return;
+  if (fromKey) _padP1Missing = false;
+  else {
+    const next = _padDisconnectWho !== 2 && _padP2Missing() ? 2 : _padDisconnectWho !== 1 && _padP1Missing ? 1 : 0;
+    if (next) { _padDisconnectWho = next; _padPauseOverlay(); return; }
+  }
   _padDisconnectPaused = false;
   _padDisconnectWho = 0;
   paused = false;
@@ -568,7 +581,7 @@ function _padPollFree() {
     const jp = b & ~_padFreeBtn[i];
     _padFreeBtn[i] = b;
     if (jp && _padDisconnectPaused && _padDisconnectWho === 1 && (jp & 1) && _padOwnerOf(i, g) === 0) { // K2.2
-      _padOwner[i] = 0; pad.index = i; padResumeFromDisconnect(); // P1's pause: P1 takes it (picked up next poll)
+      _padOwner[i] = 0; pad.index = i; _padP1Missing = false; padResumeFromDisconnect(); // P1's pause: P1 takes it (picked up next poll)
       continue;
     }
     if (jp && coopTryJoin(i) && _padDisconnectPaused && _padDisconnectWho === 2) padResumeFromDisconnect();
