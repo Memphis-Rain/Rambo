@@ -91,6 +91,35 @@ class GameDriver {
     });
   }
 
+  /**
+   * Move the player (and camera) onto a spot whose surrounding 3x3 rendered tiles are dry
+   * land. The world seed changes per load and the spawn is often water, where blood becomes
+   * a cloud (W3) and gibs sink (W4) instead of leaving decals.
+   */
+  async toLand() {
+    const at = await this.page.evaluate(() => {
+      const ts = CFG.TILE_SIZE;
+      const dry = (x, y) => getTerrainTypeAt(Math.floor(x / ts) * ts, Math.floor(y / ts) * ts) !== 'water';
+      for (let r = 0; r < 20000; r += ts) {
+        for (let k = 0; k < 16; k++) {
+          const a = (k / 16) * Math.PI * 2, x = Math.round(Math.cos(a) * r), y = Math.round(Math.sin(a) * r);
+          let ok = true;
+          for (let dx = -2; dx <= 2 && ok; dx++) for (let dy = -2; dy <= 2 && ok; dy++) ok = dry(x + dx * ts, y + dy * ts);
+          if (ok) {
+            player.x = x; player.y = y; player.vx = 0; player.vy = 0;
+            const s = toScreen(x, y);
+            cam.x = cam.tx = s.x; cam.y = cam.ty = s.y;
+            return { x, y };
+          }
+        }
+      }
+      return null;
+    });
+    if (!at) throw new Error('toLand: no dry area found');
+    await this.advance(0.2);
+    return at;
+  }
+
   /** Wait for game time to advance by `seconds` (game time, not wall time). */
   async advance(seconds) {
     const t0 = await this.page.evaluate(() => gameTime);

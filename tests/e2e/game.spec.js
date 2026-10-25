@@ -81,6 +81,7 @@ test.describe('T4 gore', () => {
     await game.boot();
     await game.start();
     await game.freezeWaves();
+    await game.toLand(); // blood/gibs on water don't leave decals (W3/W4)
     const after = await game.eval(() => {
       const before = { pools: bloodPools.length, bodies: bodies.length };
       for (let i = 0; i < 6; i++) {
@@ -108,6 +109,7 @@ test.describe('T4 gore', () => {
     await game.boot();
     await game.start();
     await game.freezeWaves();
+    await game.toLand(); // blood/gibs on water don't leave decals (W3/W4)
     const burst = await game.eval(() => {
       const e = spawnEnemy(0, player.x + 80, player.y);
       const before = gibs.length;

@@ -367,8 +367,8 @@ const TILE_COLOURS = ({ K, C }) => {
   const res = width / W;
   const sample = (p) => {
     let r = 0, g = 0, b = 0, n = 0;
-    for (let dx = -24; dx <= 24; dx += 6) {
-      for (let dy = -24; dy <= 24; dy += 6) {
+    for (let dx = -32; dx <= 32; dx += 4) {
+      for (let dy = -32; dy <= 32; dy += 4) {
         const s = toScreen(p.x + dx, p.y + dy);
         const x = Math.round((s.x + worldOffsetX) * res), y = Math.round((s.y + worldOffsetY) * res);
         if (x < 0 || y < 0 || x >= width || y >= height) continue;
@@ -393,7 +393,7 @@ const KILL_AT = ({ K, n }) => {
 test.describe('W5 water reddens', () => {
   test.skip(!LANDED.W5, 'W5 not landed (tests/milestones.js)');
 
-  test('W5: 20 kills in a pond take its tiles to band >= 2, visibly redder than clean water in one screenshot', async ({ game }, testInfo) => {
+  test('W5: 20 kills in a pond take its tiles to band >= 2, visibly redder than clean water (hue ratio R >= 1.4/1.8 x G and B, dither+CRT on)', async ({ game }, testInfo) => {
     test.setTimeout(T(180_000));
     await startCalm(game);
     const s = await game.eval(FIND_POND_PAIR);
@@ -405,12 +405,17 @@ test.describe('W5 water reddens', () => {
     const r = await game.eval(({ h, K, C }) => {
       const ts = CFG.TILE_SIZE, bands = [];
       for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) bands.push(window[h.waterBlood](K.x + a * ts, K.y + b * ts).band);
-      return { bands, clean: window[h.waterBlood](C.x, C.y) };
+      return { bands, centre: window[h.waterBlood](K.x, K.y).band, clean: window[h.waterBlood](C.x, C.y) };
     }, { h: HOOKS, ...s });
     testInfo.annotations.push({ type: 'W5 bands', description: `kill tile + neighbours: ${r.bands.join(' ')}; reference ${JSON.stringify(r.clean)}` });
     expect(Math.min(...r.bands), `bands around the kills: ${r.bands.join(' ')}`).toBeGreaterThanOrEqual(2);
     expect(r.clean.band, 'the reference tile is clean water (band 0)').toBe(0);
-    // Ralph's ruling: one coarse pixel check in a single screenshot.
+    // Spec b0cdc51: measured as drawn, with dither and CRT ON (the look players see).
+    await game.eval(() => {
+      RETRO.DITHER = true; RETRO.CRT = true;
+      if (typeof _applyRetroToggles === 'function') _applyRetroToggles();
+    });
+    await game.advance(0.3);
     const px = await game.eval(TILE_COLOURS, s);
     await game.snap(testInfo, 'w5-red-pond.png');
     const red = (q) => q.r - (q.g + q.b) / 2;
@@ -421,6 +426,11 @@ test.describe('W5 water reddens', () => {
     expect(px.C.n, 'samples on screen').toBeGreaterThan(40);
     expect(px.C.b, `clean water reads blue (${summary})`).toBeGreaterThan(px.C.r);
     expect(red(px.K) - red(px.C), `band >= 2 water is visibly redder (${summary})`).toBeGreaterThanOrEqual(20);
+    // Spec b0cdc51 hue bar on the averaged tile colour: band 2 -> R >= 1.4 x G and >= 1.4 x B;
+    // band 3+ -> >= 1.8x (rgb(77,77,46) "olive" fails both).
+    const k = r.centre >= 3 ? 1.8 : 1.4;
+    expect(px.K.r, `band ${r.centre}: R >= ${k} x G (${summary})`).toBeGreaterThanOrEqual(k * px.K.g);
+    expect(px.K.r, `band ${r.centre}: R >= ${k} x B (${summary})`).toBeGreaterThanOrEqual(k * px.K.b);
   });
 
   test('W5: the water camo is not rebaked during a fight (camera still), and the blood state updates at <= 4 Hz', async ({ game }, testInfo) => {
