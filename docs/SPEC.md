@@ -646,7 +646,7 @@ This is the one new game mode the user asked for, so it is an explicit exception
     - **Smoothing:**
       - Zooming out follows the target at rate 3/s, so a player running away never reaches the edge.
       - Zooming in starts only once the target is ≥ 5% above the current zoom (a deadband), then runs at rate 1/s. This stops the camera "breathing".
-      - The rates are linear, in zoom units per second (ruling 2026-10-25). Once a zoom-in starts, it follows a rising target and finishes at exactly 1.0.
+      - The rates are linear, in zoom units per second (ruling 2026-10-25). Once a zoom-in starts, it follows a rising target and finishes at exactly 1.0. A target of exactly 1.0 skips the deadband, so the camera always settles at 1.0.
     - **How the zoom is applied, to keep the pixel look:**
       - It is a scale on the world container *inside* the low-res RT.
       - The screen size of a low-res pixel, the dither and the CRT stay exactly as they are. The world just gets smaller in pixels, the way a 90s arcade scaler worked.
@@ -662,7 +662,7 @@ This is the one new game mode the user asked for, so it is an explicit exception
       - water/W5 and the post-FX.
     - The world never shows unloaded or blank areas at 0.6.
   - **K3b. Leash at maximum zoom-out.**
-    - Once the zoom is at `COOP_ZOOM_MIN`, a player cannot move to where the separation would push either player within 48 low-res px of the view edge. That player's movement is clamped.
+    - A player cannot move to where the separation would push either player within 48 low-res px of the view edge. That player's movement is clamped. The clamp runs at every zoom, but in practice it only bites at `COOP_ZOOM_MIN`, because the 3/s zoom-out outruns any move above that (accepted as built, 2026-10-25).
     - Knockback and explosions may push a player past the leash. The camera then follows the midpoint, and the next move is clamped back.
     - **The 48 px holds against both the camera target and the drawn view** (ruling 2026-10-25, revised on Josh's proposal; it supersedes the target-only wording). The pure midpoint clamp (`coopLeashClamp`) checks the mover against the target, and a second check runs against the eased, drawn camera at the current zoom. A player's own move therefore never takes their feet within 48 low-res px of the **drawn** edge. The partner's drawn margin only converges monotonically toward the target value, because the ease doesn't overshoot. Knockback is still exempt.
     - A downed player can't move, so the leash keeps them on screen for the revive.
