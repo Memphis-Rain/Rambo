@@ -38,9 +38,15 @@ export const LANDED = {
   // M11 local 2-player co-op (spec b2e84d0 + K3a 8de96ab, K5 85840e7, K2 4e5c87b): one flag per step.
   K1: true, // players[] refactor, player === players[0] (gate passed with zero test or loader edits)
   K2: true, // join and devices: coopState(), padOf(i), padAimOf(i), coopJoin(), View/Back one-pad join
-  K3: true, // shared camera, K3a zoom (camZoom(), setCamZoom()), K3b leash at COOP_ZOOM_MIN
-  K4: false, // P2 look, 1P/2P tags, mirrored HUD panel (hudBoxes())
-  K5: false, // down, revive, TEAM SECOND WIND (p.state, p.downT, p.reviveT)
-  K6: false, // targeting hysteresis, x1.5 scaling, no friendly fire, per-player score, team unlocks
-  K7: false, // 2P attract mode
+  K3: true, // shared camera, K3a zoom (camZoom(), setCamZoom()), K3b leash (at every zoom, spec 750049d)
+  K2_1: true, // K2.1 device edge cases (Ralph's review): pad re-claim, refused join, legend, one getGamepads per frame, P2 muzzle flash
+  K4: true, // P2 look, 1P/2P tags, mirrored HUD panel (hudBoxes())
+  K5: true, // down, revive, TEAM SECOND WIND (p.state, p.downT, p.reviveT)
+  K5LOOK: true, // K5 visuals: HELP! blink, ring timer, revive progress ring (pixi-hud/pixi-sprites)
+  K6: true, // targeting hysteresis, x1.5 scaling, no friendly fire, per-player score, team unlocks
+  K2_2: true, // K2.2 review fixes: env credit (tree falls/fires), paused View hold, downed B, foot rings, legend, pad ids, chained pauses
+  K2_3: true, // K2.3 review fixes: identical pad ids, demo exit from a reserved pad, stale P1 pause, held Start, latest heater lights the tree
+  K2_4: true, // K2.4: 1P regressions from d120401 (N1 D6 pad demo exit, N2 revealing A starts, N3 re-claim at another slot)
+  K7: true, // 2P attract mode: every 2nd idle cycle, startDemo({ coop }), D6
+  K7REVIVE: true, // K7 bot revive (spec 0b04d96)
 };

@@ -17,6 +17,7 @@ export function padMock({ rumble }) {
   const pads = [null, null, null, null];
   window.__pads = pads;
   window.__rumbleCalls = [];
+  window.__gpCalls = 0; // navigator.getGamepads() calls (K2.1: once per frame)
   window.__h = (name) => (0, eval)(name);
 
   const actuator = (kind, index) => ({
@@ -38,7 +39,7 @@ export function padMock({ rumble }) {
   };
   Object.defineProperty(navigator, 'getGamepads', {
     configurable: true,
-    value: () => pads.map((p) => (p ? snapshot(p) : null)),
+    value: () => { window.__gpCalls++; return pads.map((p) => (p ? snapshot(p) : null)); },
   });
   const bump = (p) => { p.timestamp = Math.max(p.timestamp + 0.001, performance.now()); };
   const fire = (type, gamepad) => {

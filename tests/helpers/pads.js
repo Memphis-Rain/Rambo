@@ -19,6 +19,7 @@ export function createPadRig() {
     clock: { ms: 1000 },
     effects: [],
     listeners: {},
+    getGamepadsCalls: 0, // navigator.getGamepads() calls (K2.1: once per frame)
   };
   const { pads, clock, effects, listeners } = rig;
 
@@ -54,7 +55,7 @@ export function createPadRig() {
   };
   /** Globals for newRound({ stubs }): getGamepads, the fake clock and window listeners. */
   rig.stubs = () => ({
-    navigator: { getGamepads: () => pads.map((p) => (p ? rig.snapshot(p) : null)), userAgent: 'vitest' },
+    navigator: { getGamepads: () => { rig.getGamepadsCalls++; return pads.map((p) => (p ? rig.snapshot(p) : null)); }, userAgent: 'vitest' },
     performance: { now: () => clock.ms },
     addEventListener: (type, fn) => { (listeners[type] ||= []).push(fn); },
   });

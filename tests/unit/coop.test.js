@@ -477,6 +477,334 @@ describe('M11 K2 join and devices', () => {
 });
 
 // =====================================================================
+// K2.1 device edge cases (Ralph's K2+K3 review, Josh's K2.1 fixes)
+// =====================================================================
+describe('M11 K2.1 device edge cases', () => {
+  beforeEach(setup);
+  const todo = !LANDED.K2 || !LANDED.K2_1;
+  const pads = () => H.state().devices.map((d) => d.pad);
+
+  test.skipIf(todo)('K2.1: both pads drop, pad 0 returns first and P1 presses Start: pad 0 is P1\'s again, P2 re-claims pad 1, no swap', () => {
+    twoPads();
+    rig.disconnect(0); frame(); rig.disconnect(1); frame();
+    expect(g.paused).toBe(true);
+    rig.connect(0); frame(3);
+    expect(g.paused, 'a pad coming back alone does not resume').toBe(true);
+    tap(0, BTN.START);
+    expect(pads()[0], 'pad 0 is P1\'s again').toBe(0);
+    expect(pads()[1], 'P2 did not take pad 0').not.toBe(0);
+    rig.connect(1); frame(3);
+    tap(1, BTN.START);
+    expect(pads(), 'no swap').toEqual([0, 1]);
+  });
+
+  test.skipIf(todo)('K2.1: the disconnect pause clears only when the dropped pad\'s owner re-claims it', () => {
+    twoPads();
+    rig.disconnect(1); frame();
+    expect(g.paused).toBe(true);
+    tap(0, BTN.START);
+    expect(g.paused, 'Start on P1\'s pad does not clear P2\'s disconnect pause').toBe(true);
+    expect(pads()[0]).toBe(0);
+    rig.connect(1); frame(3);
+    expect(g.paused, 'reconnecting alone does not resume').toBe(true);
+    tap(1, BTN.START);
+    expect(g.paused, 'P2 re-claims its pad: resumed').toBe(false);
+    expect(pads()).toEqual([0, 1]);
+  });
+
+  test.skipIf(todo)('K2.1: the same in reverse: P1\'s disconnect pause is not cleared by P2\'s Start, only by P1 re-claiming pad 0', () => {
+    twoPads();
+    rig.disconnect(0); frame();
+    expect(g.paused).toBe(true);
+    tap(1, BTN.START);
+    expect(g.paused, 'Start on P2\'s pad does not clear P1\'s disconnect pause').toBe(true);
+    expect(pads()[1]).toBe(1);
+    rig.connect(0); frame(3);
+    expect(g.paused, 'reconnecting alone does not resume').toBe(true);
+    tap(0, BTN.START);
+    expect(g.paused, 'P1 re-claims pad 0: resumed').toBe(false);
+    expect(pads()).toEqual([0, 1]);
+  });
+
+  test.skipIf(todo)('K2.1: a View press refused while paused does not burn the lone-pad join; after unpausing, View joins P2', () => {
+    rig.connect(0); frame();
+    g.paused = true; // paused from the keyboard (P)
+    tap(0, BTN.BACK);
+    expect(H.players().length, 'no join while paused').toBe(1);
+    g.paused = false; frame();
+    tap(0, BTN.BACK);
+    expect(H.players().length, 'View joins P2 after unpausing').toBe(2);
+    expect(H.state().devices[1].pad).toBe(0);
+  });
+
+  test.skipIf(todo)('K2.1: navigator.getGamepads() is called once per frame (1P, 2P, paused)', () => {
+    rig.connect(0); frame();
+    let c0 = rig.getGamepadsCalls;
+    frame(10);
+    expect(rig.getGamepadsCalls - c0, '1P').toBe(10);
+    setup();
+    twoPads();
+    c0 = rig.getGamepadsCalls;
+    frame(10);
+    expect(rig.getGamepadsCalls - c0, '2P').toBe(10);
+    g.paused = true;
+    c0 = rig.getGamepadsCalls;
+    frame(10);
+    expect(rig.getGamepadsCalls - c0, 'paused').toBe(10);
+  });
+});
+
+// =====================================================================
+// K2.2 (Ralph's review of 36c8ebd): more device edge cases, down-state input
+// =====================================================================
+describe('M11 K2.2 review fixes', () => {
+  beforeEach(setup);
+  const todo = !LANDED.K2_2;
+  const pads = () => H.state().devices.map((d) => d.pad);
+
+  test.skipIf(todo)('K2.2: pause, hold View 4+ frames, unpause, tap View: P2 joins (a held View while paused does not mark the pad as P1\'s)', () => {
+    rig.connect(0); frame();
+    g.paused = true;
+    rig.btn(0, BTN.BACK, true); frame(6);
+    rig.btn(0, BTN.BACK, false); frame();
+    expect(H.players().length, 'no join while paused').toBe(1);
+    g.paused = false; frame();
+    expect(g.padUsedByP1(), 'the paused View hold did not claim the pad for P1').toBe(false);
+    tap(0, BTN.BACK);
+    expect(H.players().length, 'View joins P2').toBe(2);
+  });
+
+  test.skipIf(todo)('K2.2: a downed P1 pressing B and then revived throws no grenade', () => {
+    const [p1, p2] = twoPads();
+    place(p1, 0, 0); place(p2, 300, 0);
+    p1.invincible = 0; p1.shield = 0; p1.dodging = false;
+    H.damage(p1.hp + 50, p1);
+    expect(p1.state).toBe('down');
+    const g0 = p1.grenades;
+    g.grenades.length = 0;
+    tap(0, BTN.B); tap(0, BTN.B);
+    frame(10);
+    place(p2, 30, 0); // partner within revive range
+    seconds(1.7);
+    expect(p1.state, 'revived').toBe('up');
+    frame(30);
+    expect(g.grenades.length, 'no grenade in flight after the revive').toBe(0);
+    expect(p1.grenades, 'none spent').toBe(g0);
+  });
+
+  test.skipIf(todo)('K2.2: chained disconnect pauses: both pads drop, P1 re-claims while P2\'s pad is missing, and P2\'s pause shows at once', () => {
+    twoPads();
+    rig.disconnect(0); frame(); rig.disconnect(1); frame();
+    expect(g.paused).toBe(true);
+    rig.connect(0); frame(3);
+    tap(0, BTN.START); // P1 re-claims pad 0
+    frame(2);
+    expect(pads()[0]).toBe(0);
+    expect(g.paused, 'still paused').toBe(true);
+    expect(g.padState(), 'now for P2').toMatchObject({ disconnectPaused: true, disconnectWho: 2 });
+    rig.connect(1); frame(3);
+    tap(1, BTN.START); // P2 re-claims pad 1
+    expect(g.padState().disconnectPaused, 'no pause left').toBe(false);
+    expect(g.paused).toBe(false);
+    expect(pads()).toEqual([0, 1]);
+  });
+
+  test.skipIf(todo)('K2.2: both pads drop, P2\'s returns first (slot 0), then P1\'s (slot 1): each player re-claims their own pad by id', () => {
+    rig.connect(0, { id: 'Mock Pad A (P1)' }); rig.connect(1, { id: 'Mock Pad B (P2)' });
+    frame();
+    rig.axes(0, 0.6, 0); frame(3); rig.axes(0, 0, 0); frame(); // P1 uses pad A
+    tap(1, BTN.START);
+    expect(pads()).toEqual([0, 1]);
+    rig.disconnect(0); frame(); rig.disconnect(1); frame();
+    expect(g.paused).toBe(true);
+    // the browser hands out the lowest free slot: P2's pad B comes back as slot 0, P1's A as slot 1
+    rig.connect(0, { id: 'Mock Pad B (P2)' }); frame(3);
+    rig.connect(1, { id: 'Mock Pad A (P1)' }); frame(3);
+    tap(0, BTN.START); // P2 on pad B
+    tap(1, BTN.START); // P1 on pad A
+    const ids = pads().map((i) => (i === null ? null : rig.pads[i].id));
+    expect(ids, 'each player is back on their own pad').toEqual(['Mock Pad A (P1)', 'Mock Pad B (P2)']);
+    // the pause clears when its owner re-claims (spec); a later Start may then toggle a normal pause
+    expect(g.padState().disconnectPaused, 'no disconnect pause left once both re-claimed').toBe(false);
+  });
+});
+
+// =====================================================================
+// K2.3 (Ralph's review of c7c13c6): identical pad ids, demo exit from a pad, stale pauses
+// =====================================================================
+describe('M11 K2.3 review fixes', () => {
+  beforeEach(setup);
+  const todo = !LANDED.K2_3;
+  const pads = () => H.state().devices.map((d) => d.pad);
+  // the rig's pads all share the default Xbox id unless one is given: identical ids throughout
+
+  test.skipIf(todo)('K2.3: identical ids: P1\'s pad drops and P1 re-claims it; a second pad with the same id then joins P2 on Start', () => {
+    rig.connect(0); frame();
+    rig.axes(0, 0.6, 0); frame(3); rig.axes(0, 0, 0); frame();
+    expect(g.inputDevice).toBe('pad');
+    rig.disconnect(0); frame();
+    expect(g.padState().disconnectPaused).toBe(true);
+    rig.connect(0); frame(2);
+    tap(0, BTN.START);
+    expect(g.paused, 'P1 re-claimed').toBe(false);
+    rig.connect(1); frame();
+    tap(1, BTN.START);
+    expect(H.players().length, 'P2 joins on the same-id pad').toBe(2);
+    expect(pads()).toEqual([0, 1]);
+  });
+
+  test.skipIf(todo)('K2.3: identical ids: a stale owner id never hands P2\'s returning pad to P1', () => {
+    twoPads();
+    rig.disconnect(0); frame(); rig.connect(0); frame(2); tap(0, BTN.START); // P1's loss resolved
+    expect(pads()).toEqual([0, 1]);
+    rig.disconnect(1); frame();
+    expect(g.padState()).toMatchObject({ disconnectPaused: true, disconnectWho: 2 });
+    rig.connect(1); frame(3);
+    expect(pads()[0], 'P1 keeps pad 0; it did not take the returning pad').toBe(0);
+    tap(1, BTN.START);
+    expect(pads(), 'P2 re-claims it').toEqual([0, 1]);
+    expect(g.paused).toBe(false);
+  });
+
+  test.skipIf(todo)('K2.3/D6: a title pad that reserved P2 with View can end a 2P demo with A or a stick', () => {
+    game.run('if (typeof _demoShowOverlay === "function") _demoShowOverlay = function () {}; if (typeof _demoSetStartScreen === "function") _demoSetStartScreen = function () {};');
+    for (const input of ['A', 'stick']) {
+      g.gameStarted = false;
+      if (!rig.pads[0]) rig.connect(0);
+      titleFrame(2);
+      tap(0, BTN.BACK, titleFrame);
+      expect(H.state().titleCount, `${input}: P2 reserved on the title`).toBe(2);
+      expect(g.startDemo({ coop: true })).toBe(true);
+      const step = () => { rig.clock.ms += DT * 1000; g.pollGamepad(); if (g.demoState().active) { g.updateDemo(DT); update(DT); } };
+      for (let i = 0; i < 30; i++) step();
+      expect(g.demoState().active).toBe(true);
+      if (input === 'A') rig.btn(0, BTN.A, true); else rig.axes(0, 0, 0.7);
+      step(); step();
+      expect(g.demoState().active, `${input} on the reserving pad ends the demo`).toBe(false);
+      expect(g.gameStarted, `${input}: back on the title, no game started (D6)`).toBe(false);
+      rig.release(0); titleFrame(3);
+    }
+  });
+
+  test.skipIf(todo)('K2.3: P1 paused with Start, P1\'s pad drops, P1 resumes from the keyboard; a later P2 drop and re-claim leaves no P1 pause behind', () => {
+    twoPads();
+    tap(0, BTN.START);
+    expect(g.paused).toBe(true);
+    rig.disconnect(0); frame();
+    g.padNoteKey(); g.paused = false; // P on the keyboard: P1 plays on kbm from here
+    frame(5);
+    rig.disconnect(1); frame();
+    expect(g.padState().disconnectWho).toBe(2);
+    rig.connect(1); frame();
+    tap(1, BTN.START); frame(3);
+    expect({ paused: g.paused, dc: g.padState().disconnectPaused, who: g.padState().disconnectWho },
+      'no "P1 CONTROLLER DISCONNECTED" chained after P2 re-claims').toEqual({ paused: false, dc: false, who: 0 });
+  });
+
+  test.skipIf(todo)('K2.3: in P1\'s disconnect pause with P2 dead and padless, a Start held on an unknown pad resumes once and does not pause again while held', () => {
+    const [, p2] = twoPads();
+    rig.disconnect(0); frame();
+    expect(g.padState().disconnectWho).toBe(1);
+    rig.disconnect(1); frame();
+    p2.state = 'dead';
+    rig.connect(0); frame(2);
+    rig.btn(0, BTN.START, true);
+    const seen = [];
+    for (let i = 0; i < 12; i++) { frame(); seen.push(g.paused); }
+    expect(seen.slice(2), 'resumed, and no manual pause while Start is still held').toEqual(seen.slice(2).map(() => false));
+    rig.btn(0, BTN.START, false); frame(3);
+    expect(g.paused, 'still running after the release').toBe(false);
+    tap(0, BTN.START);
+    expect(g.paused, 'a fresh Start press afterwards does pause').toBe(true);
+  });
+});
+
+// =====================================================================
+// K2.4 (Ralph's verification of d120401): 1P regressions N1-N3
+// =====================================================================
+describe('M11 K2.4 1P regressions', () => {
+  beforeEach(setup);
+  const todo = !LANDED.K2_4;
+  const pads = () => H.state().devices.map((d) => d.pad);
+  const quietDemo = () => game.run('if (typeof _demoShowOverlay === "function") _demoShowOverlay = function () {}; if (typeof _demoSetStartScreen === "function") _demoSetStartScreen = function () {};');
+  const demoStep = (n = 1) => { for (let i = 0; i < n; i++) { rig.clock.ms += DT * 1000; g.pollGamepad(); if (g.demoState().active) g.updateDemo(DT); } };
+
+  for (const b of ['A', 'START']) {
+    test.skipIf(todo)(`K2.4 N1 (D6): ${b} on P1's pad during a 1P demo returns to the title without starting a game`, () => {
+      quietDemo();
+      g.gameStarted = false;
+      rig.connect(0); titleFrame(3);
+      expect(g.startDemo()).toBe(true);
+      demoStep(5);
+      rig.btn(0, BTN[b], true); demoStep(2);
+      expect(g.demoState().active, 'the demo ended').toBe(false);
+      expect({ started, gameStarted: g.gameStarted }, 'no game started (D6)').toEqual({ started: 0, gameStarted: false });
+      rig.btn(0, BTN[b], false); titleFrame(3);
+      expect(started, 'the release does not start one either').toBe(0);
+    });
+  }
+
+  test.skipIf(todo)('K2.4 N1 (D6): Start on a free second pad during a demo ends it; no P2 is reserved, nothing starts', () => {
+    quietDemo();
+    g.gameStarted = false;
+    rig.connect(0); rig.connect(1); titleFrame(3);
+    expect(g.startDemo()).toBe(true);
+    demoStep(5);
+    rig.btn(1, BTN.START, true); demoStep(2);
+    expect(g.demoState().active).toBe(false);
+    expect(H.state().pendingPad, 'no P2 reserved by the demo-exit press').toBe(null);
+    expect(started).toBe(0);
+    rig.btn(1, BTN.START, false); titleFrame(3);
+    expect(started).toBe(0);
+  });
+
+  for (const b of ['A', 'START']) {
+    test.skipIf(todo)(`K2.4 N1 (D6): during a demo, a brand-new pad revealed by a held ${b} ends the demo; title, no game, nothing reserved`, () => {
+      quietDemo();
+      g.gameStarted = false;
+      titleFrame(3);
+      expect(g.startDemo()).toBe(true);
+      demoStep(5);
+      // Chrome reveals a pad on its first press: it appears with the button already down
+      rig.connect(0); rig.btn(0, BTN[b], true);
+      demoStep(6); // held for several frames
+      rig.btn(0, BTN[b], false);
+      demoStep(2); titleFrame(4);
+      expect(g.demoState().active, 'the demo ended').toBe(false);
+      expect({ started, gameStarted: g.gameStarted }, 'back on the title, no game started').toEqual({ started: 0, gameStarted: false });
+      expect(H.state().pendingPad, 'nothing reserved').toBe(null);
+      expect(H.state().titleCount || 1, 'the title still counts 1P').toBe(1);
+    });
+  }
+
+  test.skipIf(todo)('K2.4 N2 (M10): on the title, a brand-new pad whose very first press is A starts the game on that press', () => {
+    g.gameStarted = false;
+    titleFrame(2);
+    // Chrome only reveals a pad on its first press: it appears with A already down
+    rig.connect(0); rig.btn(0, BTN.A, true);
+    titleFrame(1);
+    expect(started, 'the revealing A press starts the game').toBe(1);
+    rig.btn(0, BTN.A, false); titleFrame(2);
+    expect(started, 'once').toBe(1);
+  });
+
+  test.skipIf(todo)('K2.4 N3: P1\'s pad drops from slot 0 and is re-claimed at slot 2; a new pad on slot 0 then joins P2 with Start', () => {
+    rig.connect(0); frame();
+    rig.axes(0, 0.6, 0); frame(3); rig.axes(0, 0, 0); frame();
+    rig.disconnect(0); frame();
+    expect(g.padState().disconnectPaused).toBe(true);
+    rig.connect(2); frame(2);
+    tap(2, BTN.START);
+    expect(g.paused, 'P1 re-claimed on slot 2').toBe(false);
+    expect(pads()[0]).toBe(2);
+    rig.connect(0); frame();
+    tap(0, BTN.START);
+    expect(H.players().length, 'P2 joins on slot 0').toBe(2);
+    expect(pads()).toEqual([2, 0]);
+  });
+});
+
+// =====================================================================
 // K3 shared camera, K3a zoom, K3b leash
 // =====================================================================
 describe('M11 K3 camera, zoom and leash', () => {
@@ -638,7 +966,7 @@ describe('M11 K3 camera, zoom and leash', () => {
     const s1 = g.toScreen(p1.x, p1.y);
     expect([g.cam.tx, g.cam.ty]).toEqual([s1.x, s1.y]);
     expect(H.zoom().target).toBe(1);
-    p2.state = 'down'; frame();
+    p2.state = 'down'; p2.hp = 0; p2.downT = C().COOP_DOWN_TIME ?? 8; frame(); // a real DOWN (K5 bleeds out a player with no downT)
     expect(H.zoom().target).toBeLessThan(1);
   });
 
@@ -696,7 +1024,7 @@ describe('M11 K3 camera, zoom and leash', () => {
     expect(g.toScreen(out.x - mover.x, out.y - mover.y).y, 'screen-down part kept').toBeCloseTo(20, 0);
   });
 
-  test.skipIf(todo || !LANDED.K2)('K3b: below max zoom-out there is no leash: moving apart runs at full speed', () => {
+  test.skipIf(todo || !LANDED.K2)('K3b: away from the limit the leash does not cut: moving apart runs at full speed', () => {
     rig.connect(0); frame(); tap(0, BTN.BACK);
     const [p1, p2] = H.players();
     p1.invincible = p2.invincible = 1e9;
@@ -705,7 +1033,7 @@ describe('M11 K3 camera, zoom and leash', () => {
     expect(H.zoom().zoom).toBeGreaterThan(C().COOP_ZOOM_MIN + 0.1);
     const at = { x: p2.x, y: p2.y };
     rig.axes(0, 1, 0); frame(12); rig.axes(0, 0, 0); // P2 (on pad 0 here) runs screen-right for 0.2 s
-    expect(Math.hypot(p2.x - at.x, p2.y - at.y), 'not clamped while zoom > min').toBeGreaterThan(0.8 * C().PLAYER_SPEED * 0.2);
+    expect(Math.hypot(p2.x - at.x, p2.y - at.y), 'not clamped away from the limit').toBeGreaterThan(0.8 * C().PLAYER_SPEED * 0.2);
   });
 
   test.skipIf(todo || !LANDED.K2)('K3b: at COOP_ZOOM_MIN a runner is held at 48 low-res px inside the view, against the camera target and the drawn view (run, sprint, dodge)', () => {
@@ -824,7 +1152,7 @@ describe('M11 K5 down, revive and team second wind', () => {
     expect(p2.reviveT).toBeGreaterThan(1.3);
     seconds(0.15);
     expect(p2.state).toBe('up');
-    expect(p2.hp).toBeCloseTo(p2.maxHp * 0.5, 6);
+    expect(p2.hp, '50% of maxHp (plus a frame of regen)').toBeCloseTo(p2.maxHp * 0.5, 0);
     expect(p2.invincible).toBeGreaterThan(0.9);
     expect(p2.invincible).toBeLessThanOrEqual(1);
   });
@@ -1088,8 +1416,8 @@ describe('M11 K6 rules in 2P', () => {
     p1.hp = 50; p2.hp = 50;
     g.pickups.push({ x: p2.x, y: p2.y, type: 'health', amount: 25, life: 30 });
     frame(2);
-    expect(p2.hp).toBe(75);
-    expect(p1.hp).toBe(50);
+    expect(p2.hp, 'P2 got the +25 (plus a frame of regen)').toBeCloseTo(75, 0);
+    expect(p1.hp, 'P1 did not').toBeCloseTo(50, 0);
   });
 
   test.skipIf(todo)('K6: enemy rounds hit whichever player they reach', () => {
