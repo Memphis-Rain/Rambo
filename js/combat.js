@@ -44,7 +44,7 @@ function addHitStop(sec) {
 function resetHitStop() { hitStopTimer = 0; _hitStopReadyAt = 0; }
 
 // Damage sources (decide death style: corpse, gibs, disintegration)
-const SRC_BULLET = 0, SRC_EXPLOSIVE = 1, SRC_BFG = 2, SRC_RAIL = 3, SRC_DISINT = 4, SRC_SHOCK = 5;
+const SRC_BULLET = 0, SRC_EXPLOSIVE = 1, SRC_BFG = 2, SRC_RAIL = 3, SRC_DISINT = 4, SRC_SHOCK = 5, SRC_FIRE = 6;
 
 // Render-only animation timers shared by player and enemies
 function _tickAnimTimers(o, dt) {
@@ -307,7 +307,9 @@ function updatePlayer(dt) {
           const bAngle = (wep.count > 1)
             ? aim + (i/(wep.count-1) - 0.5) * wep.spread * 2 + randRange(-wep.spread*0.3, wep.spread*0.3)
             : aim + randRange(-wep.spread, wep.spread);
-          if (bullets.length < CFG.MAX_BULLETS) {
+          if (wep.flame) {
+            spawnFlame(muzzleX, muzzleY, bAngle, wep); // F1: flame particles, not bullets
+          } else if (bullets.length < CFG.MAX_BULLETS) {
             bullets.push({
               x: muzzleX, y: muzzleY,
               vx: Math.cos(bAngle)*wep.speed, vy: Math.sin(bAngle)*wep.speed,
@@ -315,7 +317,7 @@ function updatePlayer(dt) {
               color: wep.color, size: wep.count>1?2:2.5,
               trail: wep.trail, pierce: wep.pierce,
               explosive: wep.explosive, radius: wep.radius||0,
-              glow: wep.glow, chain: wep.chain||0, chainRange: wep.chainRange||0,
+              glow: wep.glow,
               beam: wep.beam, disintegrate: wep.disintegrate,
               bfg: wep.name === 'BFG', fresh: true,
             });
@@ -330,7 +332,7 @@ function updatePlayer(dt) {
         padRumble(Math.min(1, 0.15 + wep.kickback / 25), 0, Math.min(60, 25 + wep.kickback * 2)); // M10 C4
         if (wep.shellSize > 0) spawnShellCasing(p.x, p.y, aim, wep.shellSize);
 
-        const soundMap = {0:'pistol',1:'smg',2:'shotgun',3:'rifle',4:'minigun',5:'rocket',6:'plasma',7:'tesla',8:'railgun',9:'bfg',10:'disintegrator'};
+        const soundMap = {0:'pistol',1:'smg',2:'shotgun',3:'rifle',4:'minigun',5:'rocket',6:'plasma',7:'flamethrower',8:'railgun',9:'bfg',10:'disintegrator'};
         playSound(soundMap[p.weapon] || 'pistol', 0.8);
 
         p.x -= Math.cos(aim) * wep.kickback * 0.3;
@@ -417,8 +419,11 @@ function updateEnemies(dt) {
     e.angle = Math.atan2(dy, dx);
     e.distToPlayer = d; // render telegraphs (bomber blink, sniper laser)
 
+    // === F2: a burning (non-boss) enemy panics: no attacks, erratic run ===
+    if (e.burnT > 0 && !e.isBoss) {
+      firePanicMove(e, dt);
     // === MEDIC behavior ===
-    if (t.healer) {
+    } else if (t.healer) {
       // Try to heal nearby wounded enemies
       e.fireTimer -= dt;
       if (e.fireTimer <= 0) {
@@ -781,7 +786,9 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
   }
 
   // === Death style (G5): disintegrate, gib, or fall and leave a corpse ===
-  const gib = src === SRC_EXPLOSIVE || src === SRC_BFG || src === SRC_RAIL || overkill || t.explodeOnDeath;
+  // F2: a burn death leaves a charred corpse with little blood
+  const burnt = src === SRC_FIRE;
+  const gib = t.explodeOnDeath || (!burnt && (src === SRC_EXPLOSIVE || src === SRC_BFG || src === SRC_RAIL || overkill));
   const torsoZ = 12 * e.size;
   if (src === SRC_DISINT) {
     spawnDisintegration(e.x, e.y);
@@ -792,8 +799,16 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
     bloodDecal(DECAL_POOL, e.x, e.y, 4, BLOOD_COLORS[3], 0, randRange(16, 26) * e.size);
     addShake(4);
   } else {
-    spawnBloodSpray(e.x, e.y, bulletAngle, 2.0, torsoZ);
-    spawnBloodSpray(e.x, e.y, Math.random()*Math.PI*2, 1.0, torsoZ);
+    if (burnt) {
+      spawnBloodSpray(e.x, e.y, bulletAngle, 0.4, torsoZ);
+      for (let k = 0; k < 6; k++) { // ash puff
+        spawnParticle(e.x + randRange(-8, 8), e.y + randRange(-6, 6), randRange(-15, 15), randRange(-15, 15),
+          randRange(0.8, 1.4), randRange(3, 6), k & 1 ? 0x3a3634 : 0x5a5450, 'smoke', OPT_SMOKE, randRange(8, 24), randRange(20, 50));
+      }
+    } else {
+      spawnBloodSpray(e.x, e.y, bulletAngle, 2.0, torsoZ);
+      spawnBloodSpray(e.x, e.y, Math.random()*Math.PI*2, 1.0, torsoZ);
+    }
 
     // Corpse: knocked back along the shot, hops, falls over, then bleeds out
     if (bodies.length >= CFG.MAX_BODIES) bodies.shift();
@@ -811,7 +826,8 @@ function killEnemy(e, bulletAngle, src=SRC_BULLET, overkill=false, lastDmg=0) {
       flip: (ac - as) >= 0 ? 1 : -1,
       spin: (shock || lastDmg > 120) ? randRange(9, 15) * ((kc - ks) >= 0 ? 1 : -1) : 0,
       spinAngle: 0, settled: false, smear: 0,
-      spurts: 3 + randInt(0, 2), spurtT: 0.15,
+      spurts: burnt ? 0 : 3 + randInt(0, 2), spurtT: 0.15,
+      charred: burnt, // F2: black, smoking corpse
     });
   }
 
@@ -1240,34 +1256,11 @@ function segCircleT(x0, y0, dx, dy, len2, cx, cy, r) {
   return t <= 1 ? t : -1;
 }
 
-// Apply one player bullet hit (chain lightning, damage, explosion);
+// Apply one player bullet hit (damage, explosion);
 // mult > 1 for a piercing pass through a big target (G12a)
 function bulletHitEnemy(b, e, mult = 1) {
   const bAngle = Math.atan2(b.vy, b.vx);
   const src = b.disintegrate ? SRC_DISINT : b.explosive ? (b.bfg ? SRC_BFG : SRC_EXPLOSIVE) : b.beam ? SRC_RAIL : SRC_BULLET;
-
-  // === CHAIN LIGHTNING (Tesla) ===
-  if(b.chain > 0) {
-    damageEnemy(e, b.dmg, bAngle);
-    let chainFrom = {x: e.x, y: e.y};
-    let chainedSet = new Set([enemies.indexOf(e)]);
-    for(let c=0; c<b.chain; c++){
-      let closest = null, closestDist = b.chainRange;
-      for(let k=0;k<enemies.length;k++){
-        if(chainedSet.has(k)) continue;
-        const d2 = dist(chainFrom.x, chainFrom.y, enemies[k].x, enemies[k].y);
-        if(d2 < closestDist){ closest = k; closestDist = d2; }
-      }
-      if(closest !== null){
-        chainedSet.add(closest);
-        const ct = enemies[closest];
-        spawnLightning(chainFrom.x, chainFrom.y, ct.x, ct.y);
-        damageEnemy(ct, b.dmg * 0.5, Math.atan2(ct.y-chainFrom.y, ct.x-chainFrom.x));
-        chainFrom = {x: ct.x, y: ct.y};
-      }
-    }
-    return;
-  }
 
   // Disintegrator kills are handled in killEnemy (SRC_DISINT)
   damageEnemy(e, b.dmg * mult, bAngle, src);

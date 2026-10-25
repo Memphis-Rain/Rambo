@@ -228,6 +228,8 @@ function _envRecord(o) {
     // E13: trunk HP, dominant recent shot direction (dmg-weighted, decaying)
     trunkHp: _envTrunkMax(o.type), trunkMax: _envTrunkMax(o.type),
     shotX: 0, shotY: 0, shotT: 0, notch: false, notchDirX: 0, notchDirY: 0,
+    // F3: heat under the stream (0..1), fire seconds left, burnt out
+    heat: 0, heatSeen: -1, heating: false, fire: 0, spreadT: 0, charred: false,
   };
   _envStore.set(r.id, r);
   o._env = r;
@@ -248,7 +250,7 @@ function _envActivate(r) {
 // A record that only sways (no lasting change): safe to evict / forget
 function _envSwayOnly(r) {
   return r.state === 'standing' && r.scorch === 0 && !r.cracked && r.hp >= r.maxHp && !r.queued && !r.remain &&
-    r.trunkHp >= r.trunkMax;
+    r.trunkHp >= r.trunkMax && !(r.heat > 0) && !(r.fire > 0) && !r.charred && !r.heating;
 }
 
 // Remove r from the active set (index i) and put it to sleep; a sway-only
@@ -593,6 +595,102 @@ function _envTrunkDamage(r, dmg, ux, uy, byPlayer) {
 }
 
 // ---------------------------------------------------------------------
+// F3: burning trees. The flame stream heats a trunk/canopy (heat 0 -> 1 over
+// CFG.TREE_IGNITE_S of stream); at 1 the tree burns CFG.TREE_BURN_S, spreads
+// to trees within CFG.TREE_SPREAD_R at CFG.TREE_SPREAD_P per second each
+// (cap CFG.TREE_BURN_MAX), burns enemies under its canopy, then stands
+// charred (a dead tree: E13 trunk HP 300). Persistent like any record (E7).
+// ---------------------------------------------------------------------
+const _envHeating = [];
+const _envBurning = [];
+let envFireVersion = 0;   // bumps when a tree ignites or burns out (renderer)
+
+function envFlameHeat(o) {
+  const kind = _envKind(o.type);
+  if (kind !== ENVK_TREE && kind !== ENVK_DEAD) return;
+  const r = _envRecord(o);
+  if ((r.state !== 'standing' && r.state !== 'scorched') || r.charred || r.fire > 0) return;
+  r.heatSeen = gameTime;
+  if (!r.heating) { r.heating = true; _envHeating.push(r); }
+}
+
+function _envIgniteTree(r) {
+  if (_envBurning.length >= CFG.TREE_BURN_MAX) return false;
+  r.fire = CFG.TREE_BURN_S * randRange(0.9, 1.1);
+  r.heat = 1; r.spreadT = 0;
+  _envBurning.push(r);
+  envFireVersion++;
+  if (typeof playSound === 'function') playSound('fire', 0.4);
+  return true;
+}
+
+function _envBurnOut(r) {
+  r.fire = 0; r.charred = true; r.heat = 0;
+  if (r.scorch < 3) r.scorch = 3;
+  if (r.state === 'standing') r.state = 'scorched';
+  r.kind = ENVK_DEAD; // a charred bare tree
+  r.trunkMax = CFG.ENV_TRUNK_HP_DEAD;
+  r.trunkHp = Math.min(r.trunkHp, r.trunkMax);
+  r.notch = r.trunkHp <= r.trunkMax * CFG.ENV_TRUNK_NOTCH;
+  envFireVersion++;
+}
+
+function _updateEnvFire(dt) {
+  for (let i = _envHeating.length - 1; i >= 0; i--) {
+    const r = _envHeating[i];
+    let done = r.fire > 0 || r.charred || (r.state !== 'standing' && r.state !== 'scorched');
+    if (!done) {
+      if (gameTime - r.heatSeen <= 0.1) r.heat = Math.min(1, r.heat + dt / CFG.TREE_IGNITE_S);
+      else r.heat = Math.max(0, r.heat - dt * 0.5);
+      if (r.heat >= 1 - 1e-9) { if (_envIgniteTree(r)) done = true; else r.heat = 1; }
+      else if (r.heat <= 0) done = true;
+    }
+    if (done) { r.heating = false; _envHeating[i] = _envHeating[_envHeating.length - 1]; _envHeating.pop(); }
+  }
+  const pStep = 1 - Math.pow(1 - CFG.TREE_SPREAD_P, 0.1);
+  const R = CFG.TREE_SPREAD_R;
+  for (let i = _envBurning.length - 1; i >= 0; i--) {
+    const r = _envBurning[i];
+    if (r.state === 'falling' || r.state === 'fallen' || r.state === 'destroyed') {
+      _envBurnOut(r);
+    } else {
+      r.fire -= dt;
+      // spread, checked at 10 Hz
+      r.spreadT += dt;
+      while (r.spreadT >= 0.1) {
+        r.spreadT -= 0.1;
+        if (Math.random() < 0.08 && typeof playSound === 'function') playSound('fire', 0.25); // crackle (audio rate-limits it)
+        for (let j = 0; j < envObjects.length; j++) {
+          const o = envObjects[j];
+          const dx = o.x - r.x, dy = o.y - r.y;
+          if (dx > R || dx < -R || dy > R || dy < -R || dx * dx + dy * dy > R * R) continue;
+          const k = _envKind(o.type);
+          if (k !== ENVK_TREE && k !== ENVK_DEAD) continue;
+          const q = o._envAt === _envEpoch ? o._env : envObjState(o);
+          if (q === r || (q && (q.fire > 0 || q.charred || (q.state !== 'standing' && q.state !== 'scorched')))) continue;
+          if (Math.random() < pStep) _envIgniteTree(_envRecord(o));
+        }
+      }
+      // enemies under the canopy burn
+      const cr = Math.max(20, r.radius || 30);
+      for (let j = enemies.length - 1; j >= 0; j--) {
+        const e = enemies[j];
+        if (e.dead) continue;
+        const dx = e.x - r.x, dy = e.y - r.y;
+        if (dx * dx + dy * dy > cr * cr) continue;
+        igniteEnemy(e);
+        e.hp -= CFG.CANOPY_FIRE_DPS * dt;
+        if (e.hp <= 0) killEnemy(e, Math.atan2(dy, dx), SRC_FIRE);
+      }
+      if (r.fire > 0) continue;
+      _envBurnOut(r);
+    }
+    _envBurning[i] = _envBurning[_envBurning.length - 1];
+    _envBurning.pop();
+  }
+}
+
+// ---------------------------------------------------------------------
 // Bullets (E3/E4): combat.js calls this when a bullet path hits an env
 // blocker (trunk, stump, crate, sandbag). (hx, hy) = impact point.
 // ---------------------------------------------------------------------
@@ -838,6 +936,7 @@ function updateEnv(dt) {
   _envInLoop = false;
   _envToppleFrameN = 0; // after the loop: counts topples from bullets (before updateEnv) too
 
+  _updateEnvFire(dt);   // F3
   updateEnvDebris(dt);
 }
 
@@ -905,6 +1004,9 @@ function resetEnvState() {
   for (const r of _envActive) r.active = false;
   _envActive.length = 0;
   _envQueue.length = 0;
+  _envHeating.length = 0;
+  _envBurning.length = 0;
+  envFireVersion++;
   envLogs.length = 0;
   _envLogGrid.clear();
   _envInLoop = false;
@@ -926,7 +1028,8 @@ function envState(id) {
     const sl = Math.sqrt(r.shotX * r.shotX + r.shotY * r.shotY) || 1;
     return { state: r.state, hp: r.hp, sway: r.sway, scorch: r.scorch, cracked: r.cracked, fall: r.fall,
       trunkHp: r.trunkHp, trunkMax: r.trunkMax, notch: r.notch, notchDirX: r.notchDirX, notchDirY: r.notchDirY,
-      shotDirX: r.shotX / sl, shotDirY: r.shotY / sl, fallDirX: r.fallDirX, fallDirY: r.fallDirY };
+      shotDirX: r.shotX / sl, shotDirY: r.shotY / sl, fallDirX: r.fallDirX, fallDirY: r.fallDirY,
+      heat: r.heat, fire: r.fire, charred: r.charred };
   }
   let hp = CFG.ENV_TREE_HP, trunk = 0;
   for (let i = 0; i < envObjects.length; i++) {
@@ -934,7 +1037,7 @@ function envState(id) {
   }
   return { state: 'standing', hp, sway: 0, scorch: 0, cracked: false, fall: 0,
     trunkHp: trunk, trunkMax: trunk, notch: false, notchDirX: 0, notchDirY: 0,
-    shotDirX: 0, shotDirY: 0, fallDirX: 1, fallDirY: 0 };
+    shotDirX: 0, shotDirY: 0, fallDirX: 1, fallDirY: 0, heat: 0, fire: 0, charred: false };
 }
 
 // E9: { active, debris, felled } (+ queued, logs, stored)
@@ -946,5 +1049,6 @@ function envStats() {
     queued: _envQueue.length,
     logs: envLogs.length,
     stored: _envStore.size,
+    burningTrees: _envBurning.length, // F3
   };
 }

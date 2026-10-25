@@ -264,6 +264,7 @@ function update(dt) {
   updateEnemies(dt);
   updateBullets(dt);
   updateGrenades(dt);    // M9 N1
+  updateFire(dt);        // M9 F1-F2: flames, ground fires, burning enemies
   updateWading(dt);      // M9 W2
   updateWater(dt);       // M9 W3-W5: blood clouds, blood concentration (4 Hz)
   updateEnv(dt);         // M8: env reactions, falling trees, debris
@@ -438,6 +439,7 @@ function resetRound() {
   shells.length = 0;
   pickups.length = 0;
   resetGrenades();
+  resetFire();
   resetWater();
   for (const sprite of chunkCache.values()) {
     terrainContainer.removeChild(sprite);

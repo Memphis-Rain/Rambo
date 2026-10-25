@@ -44,6 +44,26 @@ const CFG = {
   PAD_ASSIST_RANGE: 420,
   PAD_RUMBLE: true,
   PAD_RUMBLE_GAP_MS: 50,       // at most one new effect per 50 ms
+  // M9 F1-F3: flamethrower, burning enemies, burning trees
+  FLAME_RANGE: 260,            // F1: a flame slows to a stop at about this distance
+  FLAME_LIFE: 0.45,            // s (+-10%)
+  MAX_FLAMES: 120,
+  GROUND_FIRE_MAX: 40,
+  BURN_TIME: 4,                // F2: s of burn, refreshed by further flame hits
+  BURN_TICK: 0.25,             // s per DoT tick
+  BURN_DPS: 25,
+  BURN_MAX: 30,                // at most this many enemies burn at once
+  PANIC_MIN: 0.3,              // s between panic direction changes
+  PANIC_MAX: 0.7,
+  PANIC_SPEED: 1.25,           // x the enemy's speed while running in panic
+  CONTACT_IGNITE_T: 0.3,       // s of touching a burning enemy per ignition roll
+  CONTACT_IGNITE_P: 0.5,
+  TREE_IGNITE_S: 0.8,          // F3: s of stream until a tree ignites (heat 0 -> 1)
+  TREE_BURN_S: 6,              // s a tree burns (+-10%)
+  TREE_SPREAD_R: 90,           // fire spreads to trees within this
+  TREE_SPREAD_P: 0.35,         // per second, per neighbour
+  TREE_BURN_MAX: 24,
+  CANOPY_FIRE_DPS: 10,         // to enemies under a burning canopy (and they ignite)
   // M9 W2: wading
   WADE_RAMP: 0.25,             // s for the waterline to rise/fall fully
   // M9 W3-W5: blood in water
@@ -144,7 +164,8 @@ const WEAPONS = [
   { name:'RPG', rate:0.9, dmg:250, spread:0.02, count:1, speed:450, color:'#f80', auto:false, ammo:Infinity, mag:1, reload:2.0, unlock:9000, kickback:12, trail:true, explosive:true, radius:130, shellSize:0 },
   { name:'Plasma', rate:0.12, dmg:55, spread:0.04, count:1, speed:1100, color:'#0ff', auto:true, ammo:Infinity, mag:40, reload:1.8, unlock:16000, kickback:4, trail:true, pierce:true, shellSize:0, glow:true },
   // === NEW WEAPONS - Sick badass killing machines ===
-  { name:'Tesla', rate:0.14, dmg:45, spread:0.08, count:1, speed:1200, color:'#88f', auto:true, ammo:Infinity, mag:50, reload:2.0, unlock:25000, kickback:3, trail:true, pierce:false, shellSize:0, glow:true, chain:3, chainRange:150 },
+  // F1: the Flamethrower replaces Tesla (slot 7, same unlock); speed = initial flame speed (js/fire.js)
+  { name:'Flamethrower', rate:0.05, dmg:10, spread:0.12, count:1, speed:1156, color:'#f80', auto:true, ammo:Infinity, mag:100, reload:2.0, unlock:25000, kickback:1, trail:false, pierce:false, shellSize:0, glow:true, flame:true },
   { name:'Railgun', rate:1.4, dmg:600, spread:0, count:1, speed:4000, color:'#f0f', auto:false, ammo:Infinity, mag:3, reload:2.5, unlock:40000, kickback:18, trail:true, pierce:true, shellSize:0, glow:true, beam:true },
   { name:'BFG', rate:2.0, dmg:800, spread:0.02, count:1, speed:350, color:'#0f0', auto:false, ammo:Infinity, mag:1, reload:3.0, unlock:60000, kickback:22, trail:true, explosive:true, radius:280, shellSize:0, glow:true },
   { name:'Disintegrator', rate:0.04, dmg:38, spread:0.03, count:2, speed:1600, color:'#f4f', auto:true, ammo:Infinity, mag:120, reload:2.5, unlock:85000, kickback:1, trail:true, pierce:true, shellSize:0, glow:true, disintegrate:true },

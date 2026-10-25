@@ -33,6 +33,9 @@ function initAudio() {
   // N1 grenades: throw whoosh (swells then fades) and the geyser's water splash
   _buildNoisePool('whoosh', 0.16, (i, len) => (Math.random()*2-1) * Math.sin(Math.PI*i/len) * 0.7);
   _buildNoisePool('splash', 0.6, (i, len) => { const u = i/len; return (Math.random()*2-1) * Math.min(1, u*12) * Math.pow(1-u, 1.5); });
+  // F1/F3: flamethrower roar bed (looped, so plain white noise: no seam click) and fire crackle
+  _buildNoisePool('flame', 1.0, () => Math.random()*2-1);
+  _buildNoisePool('crackle', 0.4, (i, len) => { const u = i/len; return (Math.random() < 0.004 ? (Math.random()*2-1) * 3 : (Math.random()*2-1) * 0.08) * (1-u); });
   _buildNoisePool('shockwave', 0.8, (i, len) => Math.sin(i/audioCtx.sampleRate*2*Math.PI*30*(1-i/len)) * Math.pow(1-i/len, 0.3));
 }
 
@@ -56,6 +59,156 @@ function _getNoise(type) {
   return buf;
 }
 
+// ---------------------------------------------------------------------
+// F1: flamethrower roar. The weapon retriggers every 50 ms while held, so
+// there is ONE live voice: each call extends it (and jitters its tone for
+// the roll-and-lick flicker) instead of stacking 20 voices a second. It
+// sustains _FLAME_HOLD s past the last call, then ramps linearly to 0 (no
+// click) and its whole subgraph is stopped and disconnected.
+// ---------------------------------------------------------------------
+const _FLAME_ATK = 0.05;  // s ignition swell
+const _FLAME_HOLD = 0.09; // s sustain past the last trigger (> the 50 ms refire)
+const _FLAME_REL = 0.14;  // s release ramp
+let _flame = null;        // the live roar voice, or null
+// F3 'fire' crackle limits (enforced in playSound)
+const _FIRE_GAP_MS = 90, _FIRE_MAX = 3;
+let _fireLast = 0, _fireActive = 0;
+// F2 scream limits: at most one start per 0.4 s, at most 2 sounding at once
+const _SCREAM_GAP_MS = 400, _SCREAM_MAX = 2;
+let _screamLast = 0, _screamActive = 0;
+// Counters for tests and debugging (read-only to the game)
+const _audioStats = { flameVoices: 0, flameExtends: 0, screamCalls: 0, screamStarted: 0 };
+
+// Gain the roar envelope has at ctx time t, from the schedule we last wrote
+function _flameEnvAt(v, t) {
+  if (t < v.atkEnd) return v.atkFrom + (v.level - v.atkFrom) * Math.max(0, (t - v.atkStart) / (v.atkEnd - v.atkStart));
+  if (t < v.holdEnd) return v.level;
+  if (t < v.relEnd) return v.level * (v.relEnd - t) / _FLAME_REL;
+  return 0;
+}
+
+function _flameSchedule(v, t, level) {
+  const g = v.vg.gain;
+  const from = _flameEnvAt(v, t);
+  g.cancelScheduledValues(t);
+  g.setValueAtTime(from, t);
+  v.atkFrom = from; v.atkStart = t; v.level = level;
+  v.atkEnd = t + (from < level * 0.5 ? _FLAME_ATK : 0.025);
+  v.holdEnd = Math.max(v.atkEnd, t + _FLAME_HOLD);
+  v.relEnd = v.holdEnd + _FLAME_REL;
+  g.linearRampToValueAtTime(level, v.atkEnd);
+  g.setValueAtTime(level, v.holdEnd);
+  g.linearRampToValueAtTime(0, v.relEnd);
+  // Flicker: the burner's band and body wander a little on every retrigger
+  v.bp.frequency.setTargetAtTime(620 + Math.random() * 700, t, 0.035);
+  v.roar.gain.setTargetAtTime(1.3 + Math.random() * 0.8, t, 0.03);
+  v.lastWall = performance.now();
+}
+
+// Free the voice once it has been silent past its release (wall-clock based, so a
+// suspended context can't keep it alive forever)
+function _flameReap(v) {
+  const left = v.lastWall + (_FLAME_HOLD + _FLAME_REL) * 1000 + 40 - performance.now();
+  if (left > 0) { setTimeout(() => _flameReap(v), left); return; }
+  try { v.src.stop(); } catch(e){}
+  try { v.bus.disconnect(); } catch(e){}
+  _activeSounds = Math.max(0, _activeSounds - 1);
+  if (_flame === v) _flame = null;
+}
+
+function _playFlame(volume) {
+  const t = audioCtx.currentTime;
+  const level = volume * 0.3;
+  const v = _flame;
+  if (v && t < v.relEnd - 0.01) { _audioStats.flameExtends++; _flameSchedule(v, t, level); return; }
+  if (v) _flame = null; // a fading voice: let its own reaper free it
+  if (_activeSounds >= _MAX_CONCURRENT_SOUNDS) return;
+  _activeSounds++;
+  _audioStats.flameVoices++;
+  const bus = audioCtx.createGain(); bus.connect(masterGain);
+  const vg = audioCtx.createGain(); vg.gain.value = 0; vg.connect(bus);
+  // One looped noise bed feeds three bands: burner roar, low rumble, gas hiss
+  const src = audioCtx.createBufferSource();
+  src.buffer = _getNoise('flame'); src.loop = true;
+  src.playbackRate.value = 0.9 + Math.random() * 0.2;
+  const bp = audioCtx.createBiquadFilter();
+  bp.type = 'bandpass'; bp.Q.value = 0.9;
+  bp.frequency.setValueAtTime(320, t); // ignition: the band sweeps up into the roar
+  const roar = audioCtx.createGain(); roar.gain.value = 1.6;
+  src.connect(bp); bp.connect(roar); roar.connect(vg);
+  const lp = audioCtx.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = 170; lp.Q.value = 0.8;
+  const rumble = audioCtx.createGain(); rumble.gain.value = 2.6;
+  src.connect(lp); lp.connect(rumble); rumble.connect(vg);
+  const hp = audioCtx.createBiquadFilter();
+  hp.type = 'highpass'; hp.frequency.value = 3600;
+  const hiss = audioCtx.createGain(); hiss.gain.value = 0.12;
+  src.connect(hp); hp.connect(hiss); hiss.connect(vg);
+  src.start(t, Math.random() * 0.9);
+  const nv = { bus, vg, src, bp, roar, atkFrom: 0, atkStart: t, atkEnd: t, holdEnd: t, relEnd: t, level: 0, lastWall: 0 };
+  _flameSchedule(nv, t, level);
+  _flame = nv;
+  setTimeout(() => _flameReap(nv), (_FLAME_HOLD + _FLAME_REL) * 1000 + 40);
+}
+
+// ---------------------------------------------------------------------
+// F2: burning-enemy scream. Saw + square through three vowel formants, with
+// vibrato and a falling pitch; pitch, length, vowel and vibrato vary per call.
+// Hard limits: one start per _SCREAM_GAP_MS, at most _SCREAM_MAX at once.
+// ---------------------------------------------------------------------
+function _playScream(volume, now) {
+  _audioStats.screamCalls++;
+  if (now - _screamLast < _SCREAM_GAP_MS || _screamActive >= _SCREAM_MAX) return;
+  if (_activeSounds >= _MAX_CONCURRENT_SOUNDS) return;
+  _screamLast = now; _screamActive++; _activeSounds++;
+  _audioStats.screamStarted++;
+  const t = audioCtx.currentTime;
+  const dur = 0.4 + Math.random() * 0.2;
+  const f0 = 340 + Math.random() * 280;
+  const end = t + dur;
+  const bus = audioCtx.createGain(); bus.connect(masterGain);
+  const vg = audioCtx.createGain(); vg.connect(bus);
+  const peak = volume * 0.55;
+  vg.gain.setValueAtTime(0, t);
+  vg.gain.linearRampToValueAtTime(peak, t + 0.03);
+  vg.gain.setValueAtTime(peak, t + dur * 0.45);
+  vg.gain.linearRampToValueAtTime(0, end);
+  const mix = audioCtx.createGain();
+  const lfo = audioCtx.createOscillator();
+  lfo.type = 'sine'; lfo.frequency.value = 6 + Math.random() * 4;
+  const lfoG = audioCtx.createGain(); lfoG.gain.value = f0 * 0.04;
+  lfo.connect(lfoG);
+  const oscs = [];
+  for (const [type, detune, amp] of [['sawtooth', 0, 1], ['square', 14, 0.3]]) {
+    const o = audioCtx.createOscillator();
+    o.type = type; o.detune.value = detune;
+    o.frequency.setValueAtTime(f0 * 0.88, t);
+    o.frequency.exponentialRampToValueAtTime(f0 * 1.12, t + 0.07);
+    o.frequency.exponentialRampToValueAtTime(f0 * 0.5, end);
+    lfoG.connect(o.frequency);
+    const og = audioCtx.createGain(); og.gain.value = amp;
+    o.connect(og); og.connect(mix);
+    oscs.push(o);
+  }
+  // Vowel: an open "aah" that closes toward "aw" as the breath runs out
+  const fv = 0.9 + Math.random() * 0.2;
+  for (const [f, q, amp] of [[820, 5, 2.0], [1250, 6, 1.4], [2700, 8, 0.6]]) {
+    const bp = audioCtx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.Q.value = q;
+    bp.frequency.setValueAtTime(f * fv, t);
+    bp.frequency.linearRampToValueAtTime(f * fv * 0.82, end);
+    const fg = audioCtx.createGain(); fg.gain.value = amp;
+    mix.connect(bp); bp.connect(fg); fg.connect(vg);
+  }
+  for (const o of oscs) { o.start(t); o.stop(end + 0.02); }
+  lfo.start(t); lfo.stop(end + 0.02);
+  setTimeout(() => {
+    _screamActive = Math.max(0, _screamActive - 1);
+    _activeSounds = Math.max(0, _activeSounds - 1);
+    try { bus.disconnect(); } catch(e){}
+  }, dur * 1000 + 80);
+}
+
 function playSound(type, volume=1) {
   if (!audioCtx) return;
   if (audioCtx.state === 'suspended') { try { audioCtx.resume(); } catch(e){} }
@@ -64,6 +217,10 @@ function playSound(type, volume=1) {
   const now = performance.now();
   if (_soundThrottle[type] && now - _soundThrottle[type] < _THROTTLE_MS) return;
   _soundThrottle[type] = now;
+  // F1/F2/F3: voices with their own limits and lifetimes (see above)
+  if (type === 'flamethrower') { _playFlame(volume); return; }
+  if (type === 'scream') { _playScream(volume, now); return; }
+  if (type === 'fire' && (_fireLast && now - _fireLast < _FIRE_GAP_MS || _fireActive >= _FIRE_MAX)) return;
 
   // Limit concurrent sounds to prevent audio context overload
   if (_activeSounds >= _MAX_CONCURRENT_SOUNDS) return;
@@ -134,18 +291,6 @@ function playSound(type, volume=1) {
     osc2.type='sine'; osc2.frequency.setValueAtTime(1200,t);
     osc2.frequency.exponentialRampToValueAtTime(400,t+0.1);
     const g2 = audioCtx.createGain(); g2.gain.value = volume*0.1; g2.connect(bus);
-    osc2.connect(g2); osc2.start(t); osc2.stop(t+0.1);
-  } else if (type === 'tesla') {
-    soundDur = 0.15;
-    const osc = audioCtx.createOscillator();
-    osc.type='sawtooth'; osc.frequency.setValueAtTime(2000,t);
-    osc.frequency.exponentialRampToValueAtTime(80,t+0.12);
-    osc.connect(g); g.gain.value = volume*0.15; osc.start(t); osc.stop(t+0.12);
-    const osc2 = audioCtx.createOscillator();
-    osc2.type='square'; osc2.frequency.setValueAtTime(150,t);
-    osc2.frequency.setValueAtTime(300,t+0.04);
-    osc2.frequency.setValueAtTime(100,t+0.08);
-    const g2 = audioCtx.createGain(); g2.gain.value = volume*0.08; g2.connect(bus);
     osc2.connect(g2); osc2.start(t); osc2.stop(t+0.1);
   } else if (type === 'railgun') {
     soundDur = 0.4;
@@ -264,6 +409,21 @@ function playSound(type, volume=1) {
     osc.connect(g); osc.start(t); osc.stop(t+0.045);
     g.gain.setValueAtTime(volume*0.25,t);
     g.gain.exponentialRampToValueAtTime(0.001,t+0.045);
+  } else if (type === 'fire') {
+    // F3: burning-tree crackle - sparse pops over a soft low flutter
+    soundDur = 0.42; _fireActive++; _fireLast = now;
+    const ns = audioCtx.createBufferSource(); ns.buffer = _getNoise('crackle');
+    ns.playbackRate.value = 0.8 + Math.random()*0.5;
+    const hp = audioCtx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1400;
+    ns.connect(hp); hp.connect(g); ns.start(t); ns.stop(t+0.4);
+    g.gain.setValueAtTime(volume*0.5,t);
+    const rs = audioCtx.createBufferSource(); rs.buffer = _getNoise('flame');
+    const lp = audioCtx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 260;
+    const rg = audioCtx.createGain(); rg.connect(bus);
+    rg.gain.setValueAtTime(0,t); rg.gain.linearRampToValueAtTime(volume*0.25,t+0.08);
+    rg.gain.linearRampToValueAtTime(0,t+0.4);
+    rs.connect(lp); lp.connect(rg); rs.start(t, Math.random()*0.5); rs.stop(t+0.4);
+    setTimeout(() => { _fireActive = Math.max(0, _fireActive - 1); }, 450);
   } else if (type === 'hit') {
     soundDur = 0.06;
     const ns = audioCtx.createBufferSource(); ns.buffer = _getNoise('hit');

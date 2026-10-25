@@ -67,6 +67,8 @@ const _sp = {
   // textures (created once, survive re-init)
   texWhite: null, texCircle: null, texMuzzle: [],
   texGrenade: [], texGrenadeSink: [], texGrenadePk: null, // N1
+  texTongue: [], texBlob: [], // M9 F1-F3 fire
+  fireTrees: [],              // F3: burning / heating / charred tree sprites seen this frame (reused)
   // pooled sprites (cursor reset every frame)
   sprites: [], spriteN: 0, spritePrev: 0,
   // pooled per-frame Graphics
@@ -121,7 +123,7 @@ const _spWeaponVis = [
   [8, 2, 0x3a3a40, 0],        // Minigun
   [9, 2, 0x4a5a2e, 0x9a8a50], // RPG
   [7, 2, 0x2a4050, 0x00ffff], // Plasma
-  [7, 2, 0x34345a, 0x8888ff], // Tesla
+  [7, 2, 0x4a4a3e, 0],        // Flamethrower (F1: tank, nozzle, pilot flame in _spGun)
   [10, 2, 0x4a2a4a, 0xff00ff],// Railgun
   [8, 3, 0x24442a, 0x00ff00], // BFG
   [8, 2, 0x4a2a4a, 0xff44ff], // Disintegrator
@@ -180,6 +182,7 @@ function _spInitTextures() {
   for (const rows of _spGrenadeShapes) _sp.texGrenade.push(_spShapeTex(rows, _spGrenadePal));
   _sp.texGrenade.push(_spShapeTex(_spGrenadeShapes[1].map((r) => r.split('').reverse().join('')), _spGrenadePal));
   _sp.texGrenadePk = _spShapeTex(_spGrenadePickup, _spGrenadePal);
+  _spInitFireTextures();
   // Sinking (water): the upright frame cropped to its top rows
   const up = _sp.texGrenade[0];
   for (const rows of [4, 2]) {
@@ -262,6 +265,111 @@ const _spGrenadePickup = [
   '.OGGGGDO.',
   '..OOOOO..',
 ];
+
+// M9 F1-F3 fire art (J1 palette). Tongues: baked 4-tone pixel flames, 3
+// flicker frames x 2 sizes x 3 heat palettes (hot / mid / dying), drawn
+// with the bottom centre on the fire's base. W core, Y, O, R rim.
+const _spTongueShapes = [
+  [['..R..',
+    '.RR..',
+    '.ROR.',
+    'ROYOR',
+    'ROYYR',
+    'RYWYR',
+    'OYWYO',
+    '.RYR.'],
+   ['...R.',
+    '..RR.',
+    '.ROR.',
+    '.RYOR',
+    'ROYYR',
+    'RYWYR',
+    'OYWYO',
+    '.RYR.'],
+   ['.R...',
+    '.R.R.',
+    '.ROR.',
+    'ROYR.',
+    'RYYOR',
+    'RYWYR',
+    'OYWYO',
+    '.RYR.']],
+  [['...R...',
+    '...R...',
+    '..ROR..',
+    '..RYR.R',
+    '.ROYOR.',
+    '.RYYYOR',
+    'ROYWYOR',
+    'RYWWWYR',
+    'RYWWWYR',
+    'ORYWYRO',
+    '.RRYRR.'],
+   ['....R..',
+    '...RR..',
+    '.R.ROR.',
+    '..ROYR.',
+    '.ROYYOR',
+    '.RYYWOR',
+    'ROYWWYR',
+    'RYWWWYR',
+    'RYWWWYR',
+    'ORYWYRO',
+    '.RRYRR.'],
+   ['..R....',
+    '..RR...',
+    '..ROR..',
+    '.RYOR..',
+    '.ROYYR.',
+    'ROYWYOR',
+    'RYYWWOR',
+    'RYWWWYR',
+    'RYWWWYR',
+    'ORYWYRO',
+    '.RRYRR.']],
+];
+const _spTonguePal = [
+  { W: '#fff8d8', Y: '#ffe040', O: '#ff8a10', R: '#d02810' },  // hot
+  { W: '#ffe040', Y: '#ff8a10', O: '#d02810', R: '#7a1408' },  // mid
+  { W: '#ff8a10', Y: '#d02810', O: '#7a1408', R: '#3a0c06' },  // dying
+];
+// J1 bands for the stream (outer / core tint of the mask blobs), by t / life
+const SP_FL_BAND_T = [0.1, 0.28, 0.48, 0.68];
+const SP_FL_OUT = [0xffe040, 0xff8a10, 0xd02810, 0x7a1408, 0x363434];
+const SP_FL_CORE = [0xffffff, 0xffe040, 0xff8a10, 0xd02810, 0];
+const SP_BLOB_MAX = 9;
+
+function _spInitFireTextures() {
+  _sp.texTongue = [];
+  for (let h = 0; h < 3; h++) {
+    const bySize = [];
+    for (let z = 0; z < 2; z++) {
+      const fr = [];
+      for (let f = 0; f < 3; f++) fr.push(_spShapeTex(_spTongueShapes[z][f], _spTonguePal[h]));
+      bySize.push(fr);
+    }
+    _sp.texTongue.push(bySize);
+  }
+  // Blobs: white masks n x n art px (n = 1..SP_BLOB_MAX), 2 ragged variants
+  _sp.texBlob = [];
+  for (let n = 1; n <= SP_BLOB_MAX; n++) {
+    const vv = [];
+    for (let v = 0; v < 2; v++) {
+      vv.push(_spCanvasTex(n, n, (c) => {
+        c.fillStyle = '#fff';
+        const r = n / 2, r2 = (r + 0.15) * (r + 0.15);
+        for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+          const dx = x + 0.5 - r, dy = y + 0.5 - r, d2 = dx * dx + dy * dy;
+          if (d2 > r2) continue;
+          // ragged rim: knock out some edge pixels (seeded per variant)
+          if (n >= 4 && d2 > (r - 1) * (r - 1) && (_spHash(n * 7 + v, x * 13 + y) & 3) === 0) continue;
+          c.fillRect(x, y, 1, 1);
+        }
+      }));
+    }
+    _sp.texBlob.push(vv);
+  }
+}
 
 // ---------------------------------------------------------------------
 // Init / reset (called on every startGame / resetRound)
@@ -576,7 +684,14 @@ function _pcut(x0, y0, x1, y1) {
   return x1 > x0 && y1 > y0;
 }
 
-// Flush buffer into Graphics g (local coords). mode: 0 normal, 1 white flash, 2 mono
+// F2 charred corpse: every colour to one of 4 charcoal steps by luminance
+function _spCharC(c) {
+  const l = ((c >> 16) & 0xff) * 3 + ((c >> 8) & 0xff) * 6 + (c & 0xff);
+  // charcoal greys with a little blue: the world grade lifts dark R/G (reads olive otherwise)
+  return l > 1500 ? 0x48465c : l > 900 ? 0x302e42 : l > 500 ? 0x1e1c2e : 0x10101c;
+}
+
+// Flush buffer into Graphics g (local coords). mode: 0 normal, 1 white flash, 2 mono, 3 charred
 function _pflush(g, olColor, mode, skipOutline, monoColor) {
   const A = ART, n = _pbN;
   let bx0 = 32767, by0 = 32767, bx1 = -32767, by1 = -32767;
@@ -598,7 +713,7 @@ function _pflush(g, olColor, mode, skipOutline, monoColor) {
     let cur = -1;
     for (let i = 0; i < n; i++) {
       if (!_pcut(_pbX[i], _pbY[i], _pbX[i] + _pbW[i], _pbY[i] + _pbH[i])) continue;
-      const c = mode === 1 ? 0xffffff : _pbC[i];
+      const c = mode === 1 ? 0xffffff : mode === 3 ? _spCharC(_pbC[i]) : _pbC[i];
       if (c !== cur) { if (cur !== -1) g.fill(cur); cur = c; }
       g.rect(_pcX0 * A, _pcY0 * A, (_pcX1 - _pcX0) * A, (_pcY1 - _pcY0) * A);
       if (_pcX0 < bx0) bx0 = _pcX0;
@@ -655,6 +770,7 @@ const _P = {
   dead: false, curl: false, weapon: 0, spin: -1,
   gunOverride: false, gunAng: 0,
   blink: 0, visor: 0, tail: 0, glowTip: 0,
+  flail: -1,                           // F2 panic: 0..3 arms-up flail frame, -1 off (no gun)
 };
 // Outputs (art px, local, post-flip)
 const _PO = { muzX: 0, muzY: 0, hasMuz: false, scopeX: 0, scopeY: 0, top: -15 };
@@ -671,6 +787,10 @@ function _spLeg(x, top, w, lift, bootH, c, bc) {
   if (h > 0) _pr(x, top, w, h, c, 1);
   _pr(x, bottom - bootH, w + 1, bootH, bc, 1);
 }
+
+// F2 flail: hand offsets (unscaled art px from the shoulder) per frame
+const _spFlailB = [-3, -5, -1, -6, -4, -3, -2, -6];
+const _spFlailF = [2, -6, 4, -3, 1, -6, 3, -5];
 
 function _spBuildPuppet() {
   const P = _P, k = P.kind, s = P.s;
@@ -717,7 +837,8 @@ function _spBuildPuppet() {
     else if (k === SP_K_SHIELDED) { gl = 6; gc = 0x26262a; }
     else if (k === SP_K_JUGG) { gl = 8; gt = 2; gc = 0x3a3a40; }
   }
-  const armed = gl > 0 && !curl;
+  const flail = (!dead && !curl) ? P.flail : -1;
+  const armed = gl > 0 && !curl && flail < 0;
   const at = Math.max(1, Math.round(1.5 * s));     // arm thickness
 
   // ---- gun geometry (scaled art px) ----
@@ -746,6 +867,8 @@ function _spBuildPuppet() {
   // 2. back arm
   if (armed) {
     _pline(Math.round((-hw + 1) * s), shY, Hx + Math.round(gdx * 2 * s), Hy + Math.round(gdy * 2 * s), at, sleeveS, 1);
+  } else if (flail >= 0) {
+    _spFlailArm(Math.round((-hw + 1) * s), shY, _spFlailB, flail, s, at, sleeveS, SP_SKIN_S, bigFists);
   } else if (!curl) {
     const amp = (k === SP_K_RUNNER || k === SP_K_BERSERKER) ? 2 : 1;
     const asw = dead ? 0 : (swing / as) * amp * as;
@@ -765,6 +888,10 @@ function _spBuildPuppet() {
     _pr(hx - 1, hy + (f ? 0 : 1), 1, 1, 0xd02020, 1);
     _pr(hx - 2, hy + (f ? 1 : 0), 1, 1, 0xb01818, 1);
   }
+
+  // F1 flamethrower: twin fuel tanks on the back (behind the torso)
+  const tanks = isPlayer && !curl && !dead && P.weapon === 7;
+  if (tanks && !away) _spFuelTanks(Math.round(-hw * s) - 2, Math.round(-11 * s) + bob);
 
   // 3. legs
   const legW = Math.max(1, Math.round(2 * s));
@@ -796,6 +923,7 @@ function _spBuildPuppet() {
   if (!curl) _pr(tX0, tY1, tX1 - tX0, bY1 - tY1, isPlayer ? 0x2a2010 : SP_BOOT, 1); // belt
   if (bare) _pr(Math.round(-2 * s) + hox, tY0, Math.round(4 * s), px1, SP_SKIN_S, 0); // chin shadow
   _spTorsoDetails(k, s, bob, hw, tY0, tY1, front, away);
+  if (tanks && away) { _spFuelTanks(-2, tY0); _spFuelTanks(0, tY0); }
 
   // 5. head
   const hX0 = Math.round(-2 * s) + hox, hX1 = Math.round(2 * s) + hox;
@@ -803,6 +931,9 @@ function _spBuildPuppet() {
   _pr(hX0, hY0, hX1 - hX0, hY1 - hY0, SP_SKIN, 1);
   _pr(hX0, hY0, px1, hY1 - hY0, SP_SKIN_S, 0);
   _spHead(k, s, hox, hb, front, away, dead);
+  if (flail >= 0 && !away) { // screaming mouth
+    _pr(Math.round((front ? 0 : 1) * s) + hox, Math.round(-12 * s) + hb, px1, px1, 0x3a0808, 0);
+  }
 
   // 6. front arm + gun, or bare front arm
   if (armed && !away) {
@@ -812,6 +943,8 @@ function _spBuildPuppet() {
     _pr(Hx, Hy, at, at, isPlayer ? 0x1a1a1a : SP_SKIN, 0);
   } else if (armed && away) {
     // gun arm already drawn behind
+  } else if (flail >= 0) {
+    _spFlailArm(Math.round((hw - 1) * s), shY, _spFlailF, flail, s, at, sleeve, SP_SKIN, bigFists);
   } else if (curl) {
     _pr(Math.round((hw - 2) * s), Math.round(-8 * s), Math.round(3 * s), at, sleeve, 1);
   } else {
@@ -845,6 +978,21 @@ function _spBuildPuppet() {
   _PO.top = hY0 - Math.round(2 * s);
 }
 
+// F2 flail: an arm thrown up from the shoulder (sx, sy) to frame f's hand
+function _spFlailArm(sx, sy, tab, f, s, at, c, skin, bigFists) {
+  const hx = sx + Math.round(tab[f * 2] * s), hy = sy + Math.round(tab[f * 2 + 1] * s);
+  _pline(sx, sy, hx, hy, at, c, 1);
+  const fs = bigFists ? Math.max(2, Math.round(2 * s)) : at;
+  _pr(hx - (fs >> 1), hy - fs + 1, fs, fs, skin, 1);
+}
+
+// F1: a 2 px wide red fuel tank, top-left (x, y) in scaled art px
+function _spFuelTanks(x, y) {
+  _pr(x, y, 2, 6, 0x8a2a18, 1);
+  _pr(x, y + 1, 1, 4, 0xc04a2a, 0);   // lit side
+  _pr(x, y, 2, 1, 0x8a8a90, 0);       // steel cap
+}
+
 function _spGun(Hx, Hy, Ex, Ey, T, gc, tip, gdx, gdy, k) {
   _pline(Hx, Hy, Ex, Ey, T, gc, 1);
   const o = (T - 1) >> 1;
@@ -854,6 +1002,16 @@ function _spGun(Hx, Hy, Ex, Ey, T, gc, tip, gdx, gdy, k) {
   const P = _P;
   // magazine pixel (SMGs)
   if ((k === SP_K_PLAYER && P.weapon === 1) || k === SP_K_COMMANDO) _pr(Hx + Math.round(gdx * 2), Hy + 1, 1, 2, gc, 1);
+  // F1 flamethrower: fuel canister under the grip, steel nozzle, pilot flame
+  if (k === SP_K_PLAYER && P.weapon === 7) {
+    const cx = Hx + Math.round(gdx * 2) - 1, cy = Hy + Math.round(gdy * 2) + o + 1;
+    _pr(cx, cy, 3, 2, 0x8a2a18, 1);
+    _pr(cx, cy, 2, 1, 0xc04a2a, 0);
+    _pr(Ex - o, Ey - o, T, T, 0x9a9aa0, 0);
+    const fx = Ex + Math.round(gdx * 1.5), fy = Ey + Math.round(gdy * 1.5) - 1;
+    _pr(fx, fy, 1, 1, P.glowTip ? 0xffe040 : 0xff8a10, 0);
+    if (P.glowTip) _pr(fx, fy - 1, 1, 1, 0xd02810, 0);
+  }
   // shotgun pump (wood)
   if (k === SP_K_PLAYER && P.weapon === 2) _pr(Hx + Math.round(gdx * 3), Hy + Math.round(gdy * 3), 2, 1, 0x6a4020, 0);
   // militia rifle: metal barrel end
@@ -1055,6 +1213,7 @@ function renderPixiSprites() {
   _spRenderGrenades();
   const t4 = performance.now();
   _spRenderParticles();
+  _spRenderFire();       // M9 F1: stream + ground fires
   _spRenderShells();
   _spRenderGibs();
   _spRenderDebris();
@@ -1193,7 +1352,7 @@ function _spRenderPlayer() {
   P.kind = SP_K_PLAYER; P.s = 1; P.aim = p.angle; P.flip = 0;
   P.dead = false; P.curl = false; P.attack = 0; P.blink = 0; P.visor = 0;
   P.weapon = p.weapon | 0;
-  P.headBob = 0; P.recoil = 0; P.gunOverride = false; P.spin = -1;
+  P.headBob = 0; P.recoil = 0; P.gunOverride = false; P.spin = -1; P.flail = -1;
   P.tail = ((gameTime * (p.walking ? 9 : 4)) | 0) & 1;
   P.glowTip = ((gameTime * 8) | 0) & 1;
   const wep = WEAPONS[P.weapon] || WEAPONS[0];
@@ -1321,8 +1480,15 @@ function _spRenderEnemies() {
     const spin = k === SP_K_JUGG ? (((gameTime * (e.fireTimer < 0.6 ? 20 : 4)) | 0) & 1) : 0;
     const visor = k === SP_K_JUGG ? (((gameTime * 4) | 0) & 1) : 0;
     const tail = (k === SP_K_BERSERKER) ? (((gameTime * 8) | 0) & 1) : 0;
+    // F2: a panicking (burning, non-boss) enemy flails, facing where it runs
+    let flail = -1, fdir = 0;
+    if (e.burnT > 0 && !e.isBoss && e.panicT > 0) {
+      if (e._spFl === undefined) e._spFl = (_sp.wadeSeq++ * 5) & 3;
+      flail = (((gameTime * 10) | 0) + e._spFl) & 3;
+      fdir = ((e.vx || 0) - (e.vy || 0)) < 0 ? 1 : 0;
+    }
     const key = (walkF + 1) + 5 * (bob + 2 * (aq + 16 * (flash + 2 * (recoil + 2 * (attack + 3 * (blink + 3 * (glow + 2 * (shield + 3 * (spin + 2 * (visor + 2 * tail)))))))))) +
-      276480 * cut;
+      276480 * (cut + 128 * (flail + 1 + 5 * fdir));
 
     if (g._key !== key) {
       g._key = key;
@@ -1333,6 +1499,8 @@ function _spRenderEnemies() {
       P.recoil = recoil; P.attack = attack; P.dead = false; P.curl = false;
       P.gunOverride = false; P.spin = k === SP_K_JUGG ? spin : -1;
       P.blink = blink; P.visor = visor; P.tail = tail; P.glowTip = 0;
+      P.flail = flail;
+      if (flail >= 0) P.flip = fdir ? -1 : 1;
       _spBuildPuppet();
       // shadow inside the cached graphics (hidden while wading)
       if (!cut) {
@@ -1355,6 +1523,7 @@ function _spRenderEnemies() {
     g.zIndex = depthKey(e.x, e.y);
     g._waterY = Y - (cut - 1) * ART;
     if (cut) _spWade(e, X, g._waterY, cut, s, _spTW[k] >> 1);
+    if (e.burnT > 0 && !e.dead) _spBurnFx(e, X + jit, Y, s, g._top, g.zIndex);
   }
 }
 
@@ -1426,8 +1595,47 @@ function _spRenderBodies() {
       g._key = fading;
       g.clear();
       _spBodyPuppet(b);
-      _pflush(g, b.isBoss ? SP_OUTLINE_BOSS : SP_OUTLINE, 0, fading === 1, 0);
+      _pflush(g, b.isBoss ? SP_OUTLINE_BOSS : SP_OUTLINE, b.charred ? 3 : 0, fading === 1, 0);
+      if (b.charred === true) _spCharCracks(g);
     }
+    if (b.charred === true && age < SP_CHAR_SMOKE_S) _spCharSmoke(b, g, m, age);
+  }
+}
+
+// F2: a few dull glowing cracks in the charcoal (static, cached with the corpse)
+function _spCharCracks(g) {
+  const A = ART;
+  let any = false;
+  for (let k = 0; k < 3 && _pbN > 0; k++) {
+    const i = _spHash(_pbN * 31 + _pbX[0], k) % _pbN;
+    if (_pbW[i] < 1 || _pbH[i] < 1) continue;
+    const x = _pbX[i] + (_pbW[i] >> 1), y = _pbY[i] + (_pbH[i] >> 1);
+    g.rect(x * A, y * A, A, A);
+    any = true;
+  }
+  if (any) g.fill(SP_CHAR_CRACK);
+}
+const SP_CHAR_CRACK = 0x7a2410;
+
+// F2: smoke pixels rising off a charred corpse in stepped hops (and a
+// blinking ember early on); the corpse lies along screen x (m 2: head +x)
+const SP_CHAR_SMOKE_S = 9;
+function _spCharSmoke(b, g, m, age) {
+  const A = ART, s = b.size || 1;
+  const z = g.zIndex + 0.5;
+  const dir = m === 6 ? -1 : 1;
+  const n = age < 4 ? 3 : 2;
+  for (let k = 0; k < n; k++) {
+    const ph = age * 1.6 + k * 0.37, cyc = ph | 0, r = ph - cyc;
+    const h = _spHash(cyc * 3 + k, (b.x | 0) & 1023);
+    const bx = g.x + dir * Math.round((2 + (h % 10)) * s) * A;
+    const by = g.y - A - ((r * 6) | 0) * A;
+    const c = r < 0.4 ? 0x666666 : r < 0.75 ? 0x4a4a4a : 0x333333;
+    _spRectSprite(_spSnap(bx), _spSnap(by), A, A, c, z);
+  }
+  if (age < 4 && (((age * 5) | 0) & 1)) {
+    const h = _spHash((b.x | 0) & 1023, 7);
+    _spRectSprite(_spSnap(g.x + dir * Math.round((3 + (h % 8)) * s) * A), _spSnap(g.y - A), A, A, 0xd04010, z);
   }
 }
 
@@ -1438,7 +1646,7 @@ function _spBodyPuppet(b) {
   P.flip = (b.flip || 1) < 0 ? -1 : 1;
   P.walkF = -1; P.bob = 0; P.headBob = 0; P.recoil = 0; P.attack = 0;
   P.dead = true; P.curl = false; P.gunOverride = false; P.spin = -1;
-  P.blink = 0; P.visor = 0; P.tail = 0; P.glowTip = 0;
+  P.blink = 0; P.visor = 0; P.tail = 0; P.glowTip = 0; P.flail = -1;
   _spBuildPuppet();
 }
 
@@ -1478,7 +1686,7 @@ function _spBodyInWater(b, g, m) {
     g.clear();
     _spBodyPuppet(b);
     if (hidden > 0) { _spClip(1, !down, cut); _pflushPat(g, _spPat(SP_SUB_DENS[dstep], SP_SUB_COL)); }
-    if (hidden < rows) { _spClip(1, down, cut); _pflush(g, b.isBoss ? SP_OUTLINE_BOSS : SP_OUTLINE, 0, false, 0); }
+    if (hidden < rows) { _spClip(1, down, cut); _pflush(g, b.isBoss ? SP_OUTLINE_BOSS : SP_OUTLINE, b.charred ? 3 : 0, false, 0); }
   }
   // ripple ring where the body cuts the surface (ground layer, under it)
   if (hidden < rows && dstep === 0) {
@@ -1754,6 +1962,315 @@ function _spRenderParticles() {
       }
     }
   }
+}
+
+// =====================================================================
+// FIRE (M9 F1-F3): flame stream, ground fires, burning enemies / trees.
+// Pooled sprites only (baked tongue textures + white blob masks tinted in
+// J1 bands), frame-stepped colour / size / position, no filters or masks.
+// =====================================================================
+const SP_FL_GAP = 0.05;       // s between flames (flamethrower rate): each flame fills the gap back to its predecessor
+const SP_SMOKE_A = [1, 0.85, 0.7, 0.55, 0.4];
+
+// Tongue: bottom centre at (x, y) screen, heat 0 hot / 1 mid / 2 dying, size 0 (5x8) / 1 (7x11)
+function _spTongue(x, y, heat, size, frame, flip, z) {
+  const A = ART;
+  const tex = _sp.texTongue[heat][size][frame];
+  const w = size ? 7 : 5, h = size ? 11 : 8;
+  const s = _spSprite(tex, flip ? x + (w - (w >> 1)) * A : x - (w >> 1) * A, y - h * A, z);
+  s.anchor.set(0, 0);
+  s.scale.set(flip ? -A : A, A);
+  s.tint = 0xffffff;
+  return s;
+}
+
+// Blob mask of n x n art px centred on (cx, cy) screen, tinted
+function _spBlob(cx, cy, n, v, color, alpha, z) {
+  const A = ART;
+  if (n < 1) n = 1; else if (n > SP_BLOB_MAX) n = SP_BLOB_MAX;
+  const s = _spSprite(_sp.texBlob[n - 1][v & 1], _spSnap(cx) - (n >> 1) * A, _spSnap(cy) - (n >> 1) * A, z);
+  s.anchor.set(0, 0);
+  s.scale.set(A, A);
+  s.tint = color;
+  s.alpha = alpha;
+  return s;
+}
+
+function _spFlSize(r) { return r < 0.05 ? 2 : Math.min(SP_BLOB_MAX, 3 + Math.round(r * 8)); }
+
+function _spFlBand(r) {
+  return r < SP_FL_BAND_T[0] ? 0 : r < SP_FL_BAND_T[1] ? 1 : r < SP_FL_BAND_T[2] ? 2 : r < SP_FL_BAND_T[3] ? 3 : 4;
+}
+
+// F1 stream: each flame is drawn as a short run of blobs back along its
+// path to where the previous flame was (no dotted stream at 20 flames/s);
+// blobs grow as they slow, lick sideways / up in stepped jumps, rise as
+// they cool, and step through the J1 bands white-yellow -> orange -> red ->
+// smoke by t / life.
+function _spRenderFlames() {
+  if (typeof flames === 'undefined' || flames.length === 0) return;
+  const iso = CFG.ISO_SCALE, A = ART;
+  const step = (gameTime * 15) | 0;
+  for (let i = 0; i < flames.length; i++) {
+    const f = flames[i];
+    const L = f.life > 0 ? f.life : 0.45, t = f.t;
+    const v0 = f.v0 > 0 ? f.v0 : 2 * CFG.FLAME_RANGE / L;
+    const t0 = t > SP_FL_GAP ? t - SP_FL_GAP : 0;
+    const span = v0 * ((t - t0) - (t * t - t0 * t0) / (2 * L));
+    // blobs ~0.75 of their size apart on screen (a continuous jet at the nozzle)
+    const n = Math.min(10, Math.max(1, Math.round(span * 1.41 / (Math.max(2, _spFlSize(t / L) * 0.6) * A))));
+    const hx = f.x - f.y, hy = (f.x + f.y) * iso;
+    if (!_spInView(hx, hy)) continue;
+    const dx = f.dirX, dy = f.dirY;
+    const nk = t > SP_FL_GAP ? n : n + 1; // the first flame runs back to the nozzle
+    for (let k = 0; k < nk; k++) {
+      const back = span * k / n;
+      const tk = t - (t - t0) * k / n;
+      const r = tk / L;
+      const h = _spHash(f.seed + k * 7919, step + k);
+      // lick: stepped sideways jitter that widens down the stream
+      const j = ((h % 3) - 1) * (1.5 + r * 8);
+      const wx = f.x - dx * back - dy * j, wy = f.y - dy * back + dx * j;
+      const zz = (f.z || 12) + r * r * 26 + (r > 0.3 && ((h >> 3) & 1) ? A : 0);
+      const sx = wx - wy, sy = (wx + wy) * iso - zz;
+      const b = _spFlBand(r);
+      const z = depthKey(wx, wy);
+      const v = (h >> 4) & 1;
+      if (b === 4) {
+        _spBlob(sx, sy, Math.min(SP_BLOB_MAX, 6 + Math.round((r - 0.68) * 10)), v, SP_FL_OUT[4], r < 0.84 ? 0.9 : 0.6, z);
+        continue;
+      }
+      const bs = _spFlSize(r);
+      _spBlob(sx, sy, bs, v, SP_FL_OUT[b], 1, z);
+      const cs = bs - (b < 2 ? 2 : 3);
+      if (cs >= 1) _spBlob(sx, sy, cs, v ^ 1, SP_FL_CORE[b], 1, z + 0.001);
+      // ragged licking edge: a darker side tongue flicking out of the cone
+      if (r > 0.25 && ((h >> 6) & 1)) {
+        const lj = ((h >> 7) & 1 ? 1 : -1) * (3 + r * 12);
+        const lx = wx - dy * lj, ly = wy + dx * lj;
+        _spBlob(lx - ly, (lx + ly) * iso - zz - A, bs - 2, v ^ 1, SP_FL_OUT[b + 1], b + 1 === 4 ? 0.9 : 1, z - 0.001);
+      }
+    }
+  }
+}
+
+// F1 ground fires: 1-3 flickering tongues (3 frames), dying down in steps
+function _spRenderGroundFires() {
+  if (typeof groundFires === 'undefined' || groundFires.length === 0) return;
+  const iso = CFG.ISO_SCALE, A = ART;
+  const fr = (gameTime * 12) | 0;
+  for (let i = 0; i < groundFires.length; i++) {
+    const gf = groundFires[i];
+    const sx = gf.x - gf.y, sy = (gf.x + gf.y) * iso;
+    if (!_spInView(sx, sy)) continue;
+    const p = gf.life > 0 ? gf.t / gf.life : 1;
+    const stage = p < 0.5 ? 0 : p < 0.8 ? 1 : 2;
+    const X = _spSnap(sx), Y = _spSnap(sy), z = depthKey(gf.x, gf.y);
+    const nT = 3 - stage;
+    for (let k = 0; k < nT; k++) {
+      const h = _spHash(gf.seed, k);
+      const ox = ((h & 7) - 3) * A, oy = (((h >> 3) % 3) - 1) * A;
+      _spTongue(X + ox, Y + oy, stage, stage === 0 && k === 0 ? 1 : 0, (fr + k + (gf.seed & 3)) % 3, (h >> 5) & 1, z + oy * 0.001);
+    }
+  }
+}
+
+// F2 burning enemy: flame tongues licking around the body (jumping every
+// 0.1 s; more of them early in the burn), ember sparks, and a smoke trail
+// of stepped puffs rising off the head and lagging behind the run.
+// (X, Y) = drawn feet, top = puppet top (art px, local), z = body zIndex.
+function _spBurnFx(e, X, Y, s, top, z) {
+  const A = ART, iso = CFG.ISO_SCALE, bt = e.burnT;
+  if (e._spBs === undefined) e._spBs = (_sp.wadeSeq++ * 2654435761) >>> 0;
+  const seed = e._spBs;
+  const big = s >= 1.6;
+  const n = (bt > 3 ? 4 : bt > 1.5 ? 3 : 2) + (big ? 1 : 0);
+  const heat = bt > 2 ? 0 : 1;
+  const hw = (_spTW[_spTypeKind[e.type] | 0] >> 1) + 1;
+  const step = (gameTime * 10) | 0;
+  const body = Math.max(6, -(top | 0) - 3);
+  for (let k = 0; k < n; k++) {
+    const h = _spHash(seed + k * 977, step + k * 3);
+    const ox = Math.round((((h & 15) / 15) * 2 - 1) * hw * s) * A;
+    const oy = -Math.round((3 + ((h >> 4) % 100) / 100 * (body - 4))) * A;
+    const size = (big || (k === 0 && bt > 3)) ? 1 : 0;
+    _spTongue(X + ox, Y + oy, heat, size, (h >> 8) % 3, (h >> 10) & 1, (k & 1) ? z - 0.3 : z + 0.3);
+  }
+  const headY = Y + (top | 0) * A;
+  // embers
+  for (let k = 0; k < 2; k++) {
+    const ph = gameTime * 3 + k * 0.5 + (seed & 7) * 0.13, cyc = ph | 0, r = ph - cyc;
+    const hh = _spHash(seed + cyc, k);
+    const ex = X + ((hh % (2 * hw + 1)) - hw) * A;
+    _spRectSprite(ex, _spSnap(headY - r * 10 * A), A, A, r < 0.5 ? 0xffe040 : 0xff8a10, z + 0.35);
+  }
+  // smoke trail
+  const vx = e.vx || 0, vy = e.vy || 0;
+  for (let k = 0; k < 3; k++) {
+    const ph = gameTime * 2.5 + k / 3, q = ((ph - (ph | 0)) * 4) | 0;
+    const back = (q + 1) * 0.07;
+    const wx = e.x - vx * back, wy = e.y - vy * back;
+    const sx = wx - wy, sy = (wx + wy) * iso + (top | 0) * A - (2 + q * 3) * A;
+    _spBlob(sx, sy, Math.round((2 + q) * (big ? 1.5 : 1)), k, q < 2 ? 0x2c2c2c : 0x4a4a4a, SP_SMOKE_A[q], z + 0.4);
+  }
+}
+
+// F3: a burning tree's stage: 0 catching, 1 full blaze, 2 dying down
+function _spTreeFireStage(rec) {
+  const ff = rec.fire / (CFG.TREE_BURN_S || 6);
+  return ff > 0.85 ? 0 : ff > 0.3 ? 1 : 2;
+}
+
+// F3 burning / heating tree overlay (canopy flames, embers, smoke; a smoke
+// wisp while the stream heats it). g = the tree sprite, (X, Y) its base.
+function _spTreeFireFx(g, obj, rec) {
+  const A = ART;
+  const X = g.x, Y = g.y, top = g._top || 60;
+  if (!_spInView(X, Y - top * 0.5)) return;
+  const z = g.zIndex;
+  const seed = ((obj.x * 73856093) ^ (obj.y * 19349663)) >>> 0;
+  if (!(rec.fire > 0)) {
+    // heating (no fire yet): a grey wisp off the trunk, a smoulder near the end
+    if (!(rec.heat > 0.2) || rec.charred) return;
+    const n = rec.heat > 0.6 ? 2 : 1;
+    for (let k = 0; k < n; k++) {
+      const ph = gameTime * 2 + k * 0.5, cyc = ph | 0, r = ph - cyc;
+      const ox = ((_spHash(seed + cyc, k) % 3) - 1) * A;
+      _spRectSprite(_spSnap(X + ox), _spSnap(Y - top * 0.3 - r * 8 * A), A, A, r < 0.5 ? 0x8a8480 : 0x5a5654, z + 0.03);
+    }
+    if (rec.heat > 0.7) _spTongue(_spSnap(X), _spSnap(Y - top * 0.3), 1, 0, ((gameTime * 12) | 0) % 3, 0, z + 0.02);
+    return;
+  }
+  const stage = _spTreeFireStage(rec);
+  const w = g.texture.width;
+  const pine = obj.type === 'pine';
+  const rx = w * (pine ? 0.24 : 0.32), cy = Y - top * 0.62, ry = top * (pine ? 0.3 : 0.25);
+  const step = (gameTime * 8) | 0;
+  const nBig = stage === 1 ? 5 : stage === 0 ? 1 : 0;
+  const nT = nBig + 3;
+  for (let k = 0; k < nT; k++) {
+    const h = _spHash(seed + k * 131, step + k * 5);
+    const v = ((h >> 8) & 255) / 127.5 - 1;
+    const u = ((h & 255) / 127.5 - 1) * Math.sqrt(1 - v * v * 0.8) * (pine ? 1 - 0.5 * (-v * 0.5 + 0.5) : 1);
+    const tx = _spSnap(X + u * rx), ty = _spSnap(cy + v * ry + (k < nBig ? 11 * A * 0.5 : 0));
+    const heat = stage === 2 ? 1 + (k & 1) : k < nBig ? 0 : 1;
+    _spTongue(tx, ty, heat, k < nBig ? 1 : 0, (h >> 16) % 3, (h >> 18) & 1, z + 0.02 + k * 0.0001);
+  }
+  if (stage !== 2) _spTongue(_spSnap(X), _spSnap(Y - top * 0.88), 0, stage, (step + 1) % 3, step & 1, z + 0.021);
+  // embers rising above the canopy (stepped, blink out at the top)
+  const nE = stage === 1 ? 5 : 3;
+  const ra = Math.max(2, Math.round(rx / A));
+  for (let k = 0; k < nE; k++) {
+    const ph = gameTime * 1.1 + k * 0.21 + (seed & 15) * 0.05, cyc = ph | 0, r = ph - cyc;
+    if (r > 0.85 && (((gameTime * 14) | 0) & 1)) continue;
+    const hh = _spHash(seed + cyc, k + 40);
+    const ex = X + ((hh % (2 * ra + 1)) - ra) * A + ((r * 4) | 0) * A * (hh & 1 ? 1 : -1);
+    const ey = Y - top * 0.75 - ((r * 14) | 0) * 2 * A;
+    _spRectSprite(_spSnap(ex), _spSnap(ey), A, A, r < 0.3 ? 0xfff0a0 : r < 0.6 ? 0xffb030 : 0xd04010, z + 0.03);
+  }
+  // smoke column: stepped puffs growing and greying as they rise
+  for (let k = 0; k < 3; k++) {
+    const ph = gameTime * 0.8 + k / 3, q = ((ph - (ph | 0)) * 5) | 0;
+    const sx = X + (q * 4 - 4) * A * 0.5 + ((_spHash(seed, k) & 3) - 1) * A;
+    const sy = Y - top - (2 + q * 5) * A;
+    _spBlob(sx, sy, (stage === 2 ? 3 : 5) + q, k, q < 2 ? 0x282828 : q < 4 ? 0x3c3c3c : 0x545454, SP_SMOKE_A[q], z + 0.04);
+  }
+}
+
+// F3 charred bare tree: a dead-tree silhouette in charcoal (no canopy),
+// trunk as wide as the living tree's, baked once per shape bucket
+function _spCharTpl(obj) {
+  const type = obj.type;
+  const key = 'char_' + (typeof bucketKey === 'function' ? bucketKey(type, obj.radius, obj.height) : type + obj.radius + '_' + obj.height);
+  let tpl = _sp.treeCtx.get(key);
+  if (tpl !== undefined) return tpl;
+  const A = ART;
+  let rB, H, hf;
+  if (type === 'deadtree') { H = Math.round((obj.height || 0) / 15) * 15 || 40; rB = 2.5; hf = 1; }
+  else {
+    const R = Math.round((obj.radius || 0) / 15) * 15 || (type === 'pine' ? 30 : 40);
+    H = Math.round((obj.height || 0) / 15) * 15 || 80;
+    rB = type === 'pine' ? Math.max(3, R * 0.12) : Math.max(4, R * 0.15);
+    hf = type === 'pine' ? 0.8 : 0.7;
+  }
+  const k = Math.max(1, Math.round(rB * 1.35 / A));
+  const hT = Math.max(6, Math.round(H * hf / A));
+  const seed = _spHash(H * 31 + k, type.length);
+  const tg = new PIXI.Graphics();
+  // shadow
+  _spEllRows(tg, A, 0, k + 3, 1, 0, false);
+  tg.fill({ color: 0, alpha: 0.3 });
+  // branches: [row, side, len, rise] x n (art px)
+  const br = [];
+  const nb = type === 'pine' ? 6 : type === 'deadtree' ? 2 : 4;
+  for (let i = 0; i < nb; i++) {
+    const h = _spHash(seed, i);
+    const fy = type === 'pine' ? 0.3 + i * 0.11 : 0.45 + i * (0.42 / nb);
+    const side = (i & 1) ? 1 : -1;
+    const len = type === 'pine' ? 2 + (h & 1) : 3 + (h % 3) + (type === 'tree' && i === 1 ? 2 : 0);
+    const rise = type === 'pine' ? (h & 2 ? 0 : -1) : Math.round(len * 0.8);
+    br.push(-Math.round(hT * fy), side, len, rise);
+  }
+  const half = (y) => Math.max(1, Math.round(k * (1 - 0.7 * (-y / hT))));
+  const drawShape = (grow) => {
+    for (let y = 0; y > -hT; y--) {
+      const w = y < -hT + 2 ? 1 : half(y);
+      const top = y === -hT + 1 ? grow : 0, bot = y === 0 ? grow : 0;
+      tg.rect((-w - grow) * A, (y - 1 - top) * A, (2 * w + 2 * grow) * A, (1 + top + bot) * A);
+    }
+    for (let i = 0; i < br.length; i += 4) {
+      const y = br[i], side = br[i + 1], len = br[i + 2], rise = br[i + 3];
+      const x0 = side > 0 ? half(y) - 1 : -half(y);
+      const x1 = x0 + side * len, y1 = y - rise;
+      _spGLine(tg, x0, y - 1, x1, y1 - 1, 1, grow);
+      if (rise > 1) _spGLine(tg, x1, y1 - 1, x1 + side, y1 - 3, 1, grow); // twig
+    }
+  };
+  // charcoal greys with a little blue (the world grade lifts dark R/G: they would read olive)
+  drawShape(1);
+  tg.fill(0x08081a);
+  drawShape(0);
+  tg.fill(0x242238);
+  // lit left edge, ash speckles, a dull ember crack
+  for (let y = -1; y > -hT + 2; y--) tg.rect(-half(y) * A, (y - 1) * A, A, A);
+  tg.fill(0x3c3a50);
+  for (let i = 0; i < 4; i++) {
+    const h = _spHash(seed, i + 20);
+    const y = -1 - (h % Math.max(1, hT - 3)), w = half(y);
+    tg.rect(((h >> 8) % (2 * w) - w) * A, (y - 1) * A, A, A);
+  }
+  tg.fill(0x58566a);
+  const cyk = -Math.round(hT * 0.3);
+  tg.rect(((seed >> 4) & 1 ? 0 : -1) * A, (cyk - 1) * A, A, 2 * A);
+  tg.fill(0x6a1c0c);
+  const b = tg.getLocalBounds();
+  const tex = renderer.generateTexture({ target: tg, resolution: 1, antialias: false });
+  tex.source.scaleMode = 'nearest';
+  tpl = { tex, ax: -b.x / b.width, ay: -b.y / b.height, top: Math.max(1, -b.y) };
+  tg.destroy();
+  _sp.treeCtx.set(key, tpl);
+  return tpl;
+}
+
+// Swap a tree sprite to / from its charred bare-tree texture (E7: the burnt
+// state persists in the record, so a rebuilt sprite swaps on first sight)
+function _spCharSwap(g, obj, on) {
+  if (on) {
+    if (g._tex0 === undefined) { g._tex0 = g.texture; g._ax0 = g.anchor.x; g._ay0 = g.anchor.y; g._top0 = g._top; g._tree0 = g._tree; }
+    const tpl = _spCharTpl(obj);
+    g.texture = tpl.tex; g.anchor.set(tpl.ax, tpl.ay); g._top = tpl.top;
+    g._tree = false; g._char = true;
+    g.alpha = 1; g._fade = 0; g.skew.x = 0;
+  } else if (g._tex0 !== undefined) {
+    g.texture = g._tex0; g.anchor.set(g._ax0, g._ay0); g._top = g._top0; g._tree = g._tree0;
+    g._char = false;
+  }
+  g._tl = -1;
+}
+
+function _spRenderFire() {
+  _spRenderFlames();
+  _spRenderGroundFires();
 }
 
 // =====================================================================
@@ -2622,9 +3139,12 @@ function _spRenderEnv() {
     g.visible = true;
     vis.push(g);
     if (g._spr) {
+      // F3: a burnt-out tree stands as a charred bare tree (baked texture)
+      if ((rec !== null && rec.charred === true) !== (g._char === true)) _spCharSwap(g, obj, rec !== null && rec.charred === true);
       _spTreeXf(g, obj, rec);
       if (g._tree) _spCanopyFade(g, obj, rec, sx, sy, f);
       if (rec !== null && rec.notch === true) _spTrunkNotch(g, obj, rec, vis);
+      if (rec !== null && (rec.fire > 0 || rec.heat > 0) && (rec.state === 'standing' || rec.state === 'scorched')) _spTreeFireFx(g, obj, rec);
     }
   }
   // periodic sweep of graphics whose env object was unloaded
@@ -2634,7 +3154,9 @@ function _spRenderEnv() {
 }
 
 // M8 E2: scorch tint per level (darker, slightly warm) - tints keep batching
-const _spScorchTint = [0xffffff, 0xc4b6a4, 0x938476, 0x695e56];
+// F3: 4..9 = burning (stage x 2 flicker tints: firelit, then darkening), 10 = charred (own colours)
+const _spScorchTint = [0xffffff, 0xc4b6a4, 0x938476, 0x695e56,
+  0xffd8b0, 0xffc8a0, 0xe8a878, 0xd89868, 0x907060, 0x806050, 0xffffff];
 const SP_SWAY_Q = 0.04;      // record sway quantum (rad): ~1 art px at the top of a tree
 const SP_FALL_STEPS = 6;     // topple drawn in 6 steps of 15 deg
 
@@ -2642,7 +3164,9 @@ const SP_FALL_STEPS = 6;     // topple drawn in 6 steps of 15 deg
 // tint, and the topple (rotation about the base, foreshortened in iso).
 // Transform-only: never rebuilds geometry.
 function _spTreeXf(g, obj, rec) {
-  const lv = rec !== null ? Math.min(3, rec.scorch | 0) : 0;
+  let lv = rec !== null ? Math.min(3, rec.scorch | 0) : 0;
+  if (rec !== null && rec.fire > 0) lv = 4 + _spTreeFireStage(rec) * 2 + (((gameTime * 10) | 0) & 1);
+  else if (g._char === true) lv = 10;
   if (g._tl !== lv) { g._tl = lv; g.tint = _spScorchTint[lv]; }
   if (rec !== null && (rec.state === 'falling' || rec.state === 'fallen')) {
     const iso = CFG.ISO_SCALE;
@@ -2656,7 +3180,7 @@ function _spTreeXf(g, obj, rec) {
     // Y axis (image of local +y, base -> down): the top swings from straight
     // up to the projected fall direction, scaled so the canopy lands where
     // the baked crown will lie (log end + crown push + crown radius; E10)
-    const cr = obj.type === 'deadtree' ? 0 : (obj.radius || 0) * (CFG.ENV_CROWN_R || 0.75);
+    const cr = obj.type === 'deadtree' || g._char === true ? 0 : (obj.radius || 0) * (CFG.ENV_CROWN_R || 0.75);
     const reach = (rec.logLen > 0 ? rec.logLen : 40) + cr * (1 + (CFG.ENV_CROWN_PUSH || 0.35));
     const kL = reach / g._top;
     let Yx = -sn * Px * kL, Yy = c - sn * Py * kL;
