@@ -664,7 +664,7 @@ This is the one new game mode the user asked for, so it is an explicit exception
   - **K3b. Leash at maximum zoom-out.**
     - Once the zoom is at `COOP_ZOOM_MIN`, a player cannot move to where the separation would push either player within 48 low-res px of the view edge. That player's movement is clamped.
     - Knockback and explosions may push a player past the leash. The camera then follows the midpoint, and the next move is clamped back.
-    - **The 48 px is measured against the camera target** (ruling 2026-10-25, on Anna's question). That is the midpoint at the target zoom, not the eased, drawn camera, so the clamp is deterministic. While the drawn camera catches up, a player may get closer to the drawn edge. The visible guarantee is that the player's feet stay **≥ 32 low-res px** inside the drawn view edge at all times, sprint and dodge included.
+    - **The 48 px holds against both the camera target and the drawn view** (ruling 2026-10-25, revised on Josh's proposal; it supersedes the target-only wording). The pure midpoint clamp (`coopLeashClamp`) checks the mover against the target, and a second check runs against the eased, drawn camera at the current zoom. A player's own move therefore never takes their feet within 48 low-res px of the **drawn** edge. The partner's drawn margin only converges monotonically toward the target value, because the ease doesn't overshoot. Knockback is still exempt.
     - A downed player can't move, so the leash keeps them on screen for the revive.
   - Shake (J5a) stays global at its current cap, in screen px, unaffected by the zoom.
 - **K4. Look and HUD.**
@@ -688,6 +688,7 @@ This is the one new game mode the user asked for, so it is an explicit exception
   - **Enemy targeting:** each enemy targets the **nearest standing** player. It re-picks at most every 1 s, and switches only if the other player is ≥ 25% closer (hysteresis, so enemies don't jitter).
   - **Scaling:** wave enemy count ×1.5 (rounded up), boss HP ×1.5. Everything else is unchanged. Values are `CFG.COOP_ENEMY_MULT` and `CFG.COOP_BOSS_HP_MULT`.
   - **Friendly fire:** off by default (`CFG.COOP_FRIENDLY_FIRE = false`). Bullets pass through the partner, and the partner takes no damage or knockback from your explosions. The flamethrower still never ignites players (F-series).
+  - **Shockwave charge** (LT / right click) is per player, filled by that player's own kills (`b.by`).
   - **Score:** each player has their own score and kills shown on their own panel. Weapon unlocks use the **team total** against the existing thresholds, and both players get the unlocks.
   - Combo is per player.
   - **Pickups:** whoever touches one first gets it. Ammo/grenade drop rates are unchanged.
