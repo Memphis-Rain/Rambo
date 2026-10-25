@@ -335,8 +335,8 @@ test.describe('W2 wading', () => {
 // W5 water reddens with blood
 // =====================================================================
 /** In-page: K = a water tile with 3x3 water around it nearest the player; C = another water tile
- *  5-7 tiles away (beyond the 3-tile kill radius) as clean reference; M = their midpoint, so both
- *  are on screen with the player centred between them. */
+ *  5-7 tiles away (beyond the 3-tile kill radius); M = their midpoint (the camo test parks there).
+ *  Pixel tests view K with viewTile(). */
 const FIND_POND_PAIR = () => {
   const ts = CFG.TILE_SIZE;
   const wet = (i, j) => getTerrainTypeAt(i * ts, j * ts) === 'water';
@@ -362,6 +362,24 @@ const FIND_POND_PAIR = () => {
   }
   return null;
 };
+
+/**
+ * Park so tile K shows 160 px left of screen centre at the player's height (toScreen: x - y,
+ * (x + y) * ISO): clear of the player sprite and of every HUD panel (score top-right, minimap
+ * bottom-right, weapon panel bottom-left). Parking at the K/C midpoint could put K under the
+ * minimap in some worlds (CI fc8adc2: the "tint" read was the minimap's navy).
+ */
+async function viewTile(game, K) {
+  await parkAt(game, { x: K.x + 80, y: K.y - 80 });
+  const at = await game.eval((K) => {
+    const s = toScreen(K.x, K.y);
+    return { x: (s.x + worldOffsetX) / W, y: (s.y + worldOffsetY) / H };
+  }, K);
+  expect(at.x, `tile K on screen at ${JSON.stringify(at)} (fraction of W, H), clear of the HUD`).toBeGreaterThan(0.2);
+  expect(at.x).toBeLessThan(0.65);
+  expect(at.y).toBeGreaterThan(0.15);
+  expect(at.y).toBeLessThan(0.6);
+}
 
 /** In-page: mean colour of a 9x9 grid of points within +-20u of a tile centre (the inner half of
  *  an 80u tile: band edges are feathered into neighbours, so the hue bar reads the tile's own
@@ -450,7 +468,7 @@ test.describe('W5 water reddens', () => {
     await startCalm(game);
     const s = await game.eval(FIND_POND_PAIR);
     expect(s, 'a 3x3 pond tile with other water 5-7 tiles away').toBeTruthy();
-    await parkAt(game, s.M);
+    await viewTile(game, s.K);
     // Spec b0cdc51: measured as drawn, with dither and CRT ON (the look players see).
     await game.eval(() => {
       RETRO.DITHER = true; RETRO.CRT = true;
@@ -496,7 +514,7 @@ test.describe('W5 water reddens', () => {
     await startCalm(game);
     const s = await game.eval(FIND_POND_PAIR);
     expect(s, 'a 3x3 pond tile').toBeTruthy();
-    await parkAt(game, s.M);
+    await viewTile(game, s.K);
     await game.eval(() => {
       RETRO.DITHER = true; RETRO.CRT = true;
       if (typeof _applyRetroToggles === 'function') _applyRetroToggles();
@@ -563,7 +581,7 @@ test.describe('W5 water reddens', () => {
     await startCalm(game);
     const s = await game.eval(FIND_POND_PAIR);
     expect(s, 'a 3x3 pond tile').toBeTruthy();
-    await parkAt(game, s.M);
+    await viewTile(game, s.K);
     // A lone band-4 tile K with clean water east of it (N). Diffusion off, so N stays band 0.
     const bands = await game.eval(({ h, K }) => {
       RETRO.DITHER = true; RETRO.CRT = true;
