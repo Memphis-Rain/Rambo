@@ -1,7 +1,7 @@
 import { test, expect, T } from './fixtures.js';
 import { LANDED } from '../milestones.js';
 import { pinRenderersToCcd0 } from '../perf/pin.mjs';
-import { FIND_M9_SPOT, M9_LOAD } from '../perf/m9-load.mjs';
+import { FIND_M9_SPOT, M9_LOAD, M9_SITE_TRIES } from '../perf/m9-load.mjs';
 
 // M9 water and fire, e2e half (docs/SPEC.md W2, W5 and the M9 perf line). Each test is gated
 // on its own flag in tests/milestones.js. Unit halves: tests/unit/water.test.js, fire.test.js.
@@ -718,10 +718,17 @@ test.describe('M9 perf', () => {
     test.skip(!LANDED.M9PERF, 'M9PERF not landed (tests/milestones.js)');
     test.setTimeout(T(240_000));
     await startCalm(game);
+    // The world is random per load: re-roll it (reload) until it has a site, then fail loudly.
+    let site = null;
+    for (let t = 1; t <= M9_SITE_TRIES && !site; t++) {
+      if (t > 1) await startCalm(game);
+      site = await game.eval(FIND_M9_SPOT);
+      if (site) testInfo.annotations.push({ type: 'm9 site', description: `world ${t} of ${M9_SITE_TRIES}` });
+    }
+    expect(site, `a dry spot beside an on-screen pond in ${M9_SITE_TRIES} random worlds`).toBeTruthy();
+    // Pin after any reloads, so the pinned renderer is the one that runs the scene.
     const pinning = process.env.E2E_NO_PIN ? { pinned: false, reason: 'E2E_NO_PIN' } : pinRenderersToCcd0();
     testInfo.annotations.push({ type: 'pinning', description: JSON.stringify(pinning) });
-    const site = await game.eval(FIND_M9_SPOT);
-    expect(site, 'a dry spot beside an on-screen pond').toBeTruthy();
     await parkAt(game, site.spot, 450);
     // Steady decal load in both windows (as P1): start with the store at its cap.
     await game.eval((p) => {

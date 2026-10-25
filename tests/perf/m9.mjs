@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 import { pinArg, pinRenderersToCcd0 } from './pin.mjs';
-import { FIND_M9_SPOT, M9_LOAD } from './m9-load.mjs';
+import { FIND_M9_SPOT, M9_LOAD, M9_SITE_TRIES } from './m9-load.mjs';
 import { LANDED } from '../milestones.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -51,13 +51,20 @@ try {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/favicon/.test(m.text())) errors.push(m.text()); });
-  await page.goto(url);
+  // The world is random per load: re-roll it (reload) until FIND_M9_SPOT finds a site.
+  let site = null;
+  for (let t = 1; t <= M9_SITE_TRIES && !site; t++) {
+    await page.goto(url);
+    await page.waitForFunction(() => !document.getElementById('start-btn').disabled, null, { timeout: 30_000 });
+    await page.evaluate(() => { CFG.DEMO_IDLE_SECONDS = 1e9; });
+    await page.click('#start-btn');
+    await page.waitForFunction(() => gameStarted && gameTime > 0.2);
+    site = await page.evaluate(FIND_M9_SPOT);
+    console.log(`world ${t}: ${site ? 'M9 site found' : 'no M9 site'}`);
+  }
+  if (!site) throw new Error(`no dry spot beside an on-screen pond in ${M9_SITE_TRIES} random worlds`);
   const pinning = pin ? pinRenderersToCcd0() : { pinned: false, reason: '--no-pin' };
   console.log(`renderer pinning: ${JSON.stringify(pinning)}`);
-  await page.waitForFunction(() => !document.getElementById('start-btn').disabled, null, { timeout: 30_000 });
-  await page.evaluate(() => { CFG.DEMO_IDLE_SECONDS = 1e9; });
-  await page.click('#start-btn');
-  await page.waitForFunction(() => gameStarted && gameTime > 0.2);
   const gpuName = await page.evaluate(() => {
     const gl = document.createElement('canvas').getContext('webgl');
     const info = gl && gl.getExtension('WEBGL_debug_renderer_info');
@@ -68,8 +75,6 @@ try {
   if (missing.length) throw new Error(`M9 hooks missing: ${missing.join(', ')}`);
 
   await page.evaluate(() => { waveActive = false; waveTimer = 1e9; enemies.length = 0; player.invincible = 1e9; unlockedWeapons = WEAPONS.length; });
-  const site = await page.evaluate(FIND_M9_SPOT);
-  if (!site) throw new Error('no dry spot beside an on-screen pond');
   const park = (p) => {
     player.x = p.x; player.y = p.y; player.vx = 0; player.vy = 0;
     const s = toScreen(p.x, p.y);

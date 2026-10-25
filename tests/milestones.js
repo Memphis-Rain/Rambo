@@ -36,7 +36,7 @@ export const LANDED = {
   CACHEBUST: true, // spec B1: ?v=<BUILD> on every local asset in game.html (npm run stamp)
   FU1: true, // follow-ups after the first build (spec 1c81384): R4a DITHER_STRENGTH, D4 wave 10, D5 overlay visible
   // M11 local 2-player co-op (spec b2e84d0 + K3a 8de96ab, K5 85840e7, K2 4e5c87b): one flag per step.
-  K1: false, // players[] refactor, player === players[0] (zero test edits apart from the loader globals)
+  K1: true, // players[] refactor, player === players[0] (gate passed with zero test or loader edits)
   K2: false, // join and devices: coopState(), padOf(i), padAimOf(i), coopJoin(), View/Back one-pad join
   K3: false, // shared camera, K3a zoom (camZoom(), setCamZoom()), K3b leash at COOP_ZOOM_MIN
   K4: false, // P2 look, 1P/2P tags, mirrored HUD panel (hudBoxes())
