@@ -46,7 +46,7 @@ const _demo = {
   overlay: null, styleInjected: false,
   terrain: new Map(),
   lastGrenadeT: -Infinity, grenadesThrown: 0, grenadeEvalT: 0, // N1
-  cycle: 0,                        // K7: attract cycles since load (every 2nd runs 2P)
+  cycle: 0,                        // K7: idle-started attract cycles since load (every 2nd runs 2P)
 };
 
 // ---------------------------------------------------------------------
@@ -98,7 +98,9 @@ function demoState() {
   };
 }
 
-function startDemo() {
+// opts.coop: force a 2P cycle (tests); otherwise every 2nd IDLE-started cycle
+// is 2P (K7) and a direct startDemo() call is 1P
+function startDemo(opts) {
   if (demoActive || gameStarted) return false; // only from the title
   _demoClearInputs();
   resetRound();
@@ -117,9 +119,11 @@ function startDemo() {
   _demo.weaponIndex = player ? player.weapon : 0;
   _demo.terrain.clear();
   // K7: every 2nd attract cycle runs two CPU players (the 2P HUD sells the mode)
-  _demo.cycle++;
+  const fromIdle = !!(opts && opts.fromIdle);
+  if (fromIdle) _demo.cycle++;
   _demo2 = null;
-  if (_demo.cycle % 2 === 0 && player && typeof coopJoin === 'function') {
+  const coop = opts && opts.coop !== undefined ? !!opts.coop : fromIdle && _demo.cycle % 2 === 0;
+  if (coop && player && typeof coopJoin === 'function') {
     const p2 = coopJoin(null);
     if (p2) {
       p2.ctl.device = 'kbm'; // the bot aims with the virtual mouse, like P1's
@@ -151,7 +155,7 @@ function _demoInitBot(b, p) {
   b.originY = p ? p.y : 0;
   b.patrolA = Math.random() * Math.PI * 2;
   b.lastGrenadeT = -Infinity; b.grenadesThrown = 0; b.grenadeEvalT = 0;
-  if (b !== _demo) { b.wantWeapon = -1; b.nextId = 1; b.chasingFar = false; b.weaponTimer = 0; }
+  if (b !== _demo) { b.wantWeapon = -1; b.chasingFar = false; b.weaponTimer = 0; }
 }
 
 function stopDemo() {
@@ -176,7 +180,7 @@ function updateDemoIdle(dt) {
   if (demoActive || gameStarted || paused) { _demo.idleTimer = 0; return; }
   if (!(dt > 0)) return;
   _demo.idleTimer += dt;
-  if (_demo.idleTimer >= CFG.DEMO_IDLE_SECONDS) startDemo();
+  if (_demo.idleTimer >= CFG.DEMO_IDLE_SECONDS) startDemo({ fromIdle: true });
 }
 
 // Real keydown / mousedown / wheel
@@ -473,7 +477,7 @@ function _demoBot(dt) {
   if (best !== _dB.target) {
     _dB.target = best;
     if (best) {
-      if (!best._demoId) best._demoId = _dB.nextId++;
+      if (!best._demoId) best._demoId = _demo.nextId++; // one id space for both bots
       _dB.targetId = best._demoId;
     } else _dB.targetId = -1;
   }
