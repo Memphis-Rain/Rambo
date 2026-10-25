@@ -26,7 +26,7 @@ export const LANDED = {
   W3: true, // blood in water: clouds, no decals; footprints washed by wading
   W4: true, // corpses sink and dissolve in water
   W5: true, // water reddens with blood (waterBloodAt)
-  W5LOOK: false, // W5 look follow-up (spec 3db5629): feathered band edges, highlights kept at bands 1-3
+  W5LOOK: true, // W5 look follow-up (spec 3db5629): feathered band edges, highlights kept at bands 1-3
   F1: false, // flamethrower replaces Tesla
   F2: false, // burning enemies panic
   F3: false, // burning trees
