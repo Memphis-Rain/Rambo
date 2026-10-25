@@ -306,7 +306,8 @@ for (const scale of [1, 3]) {
 
 test('G13: aiming one body-width beside the drawn sprite misses', async ({ game }, testInfo) => {
   test.setTimeout(T(240_000));
-  await setupArena(game, 1);
+  // x3: the spec ties x1/x3 only to the head/torso/legs check; at x1 this cost 8 min on CI.
+  await setupArena(game, 3);
   let shots = 0, missed = 0;
   const stray = [];
   // Screen-up and screen-down of the player, cursor 1 body width right / left of

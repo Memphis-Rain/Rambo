@@ -48,7 +48,7 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: E2E tests (T4-T11), shard ${{ matrix.shard }}/4
-        run: npx playwright test --grep-invert "@perf|@long" --shard=${{ matrix.shard }}/4
+        run: npx playwright test --grep-invert "@perf|@long|G13" --shard=${{ matrix.shard }}/4
       - name: "Guard: the shard actually ran tests"
         if: success()
         run: node tests/ci/assert-ran.mjs
@@ -99,13 +99,13 @@ jobs:
   long:
     runs-on: ubuntu-latest
     # The two 156-shot G13 tests (@long), one job per pixel scale so they never share a
-    # runner. Worst measured on CI before the post-FX/fit-cache speedup: x1 28.3 min,
+    # runner, plus one job for the other G13 aim tests. Worst measured on CI before the post-FX/fit-cache speedup: x1 28.3 min,
     # so 40 min keeps >= 25% headroom even without it.
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        scale: [1, 3]
+        scale: [1, 3, aim]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -116,7 +116,13 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: G13 head-to-toe shots at x${{ matrix.scale }} (@long)
+        if: matrix.scale != 'aim'
         run: npx playwright test -g "x${{ matrix.scale }}\) @long"
+      # The other G13 aim tests (real-mouse shots, several minutes each on CI) run here, so
+      # they don't pile into one e2e shard.
+      - name: Other G13 aim tests
+        if: matrix.scale == 'aim'
+        run: npx playwright test -g "G13" --grep-invert "@long"
       - name: "Guard: the shard actually ran tests"
         if: success()
         run: node tests/ci/assert-ran.mjs
