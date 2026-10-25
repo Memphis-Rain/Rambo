@@ -694,7 +694,7 @@ This is the one new game mode the user asked for, so it is an explicit exception
   - **Score:** each player has their own score and kills shown on their own panel. Weapon unlocks use the **team total** against the existing thresholds, and both players get the unlocks.
   - Combo is per player.
   - **Pickups:** whoever touches one first gets it. Ammo/grenade drop rates are unchanged.
-  - **Pause:** Start/P from either player pauses everything. If a pad in use disconnects, the game auto-pauses (C6), and the message names the player: "P2 CONTROLLER DISCONNECTED".
+  - **Pause:** Start/P from either player pauses everything. If a pad in use disconnects, the game auto-pauses (C6), and the message names the player: "P2 CONTROLLER DISCONNECTED". The pause belongs to that player: it clears on their own pad's Start, or on any keyboard key (the escape hatch). If both pads dropped and one owner re-claims while the other player's pad is still missing, the game goes straight into that other player's disconnect pause. A keyboard key clears all of them. With two identical pads (same gamepad id), the first Start after a double drop goes to the player whose pause is showing (ruling 2026-10-25).
 - **K7. Attract mode 2P (should-have, after K1–K6).**
   - Every 2nd attract cycle runs **two** CPU players with the M6 bot logic, one per player, with the 2P HUD showing. The aim is to sell the mode.
   - The D6 isolation still holds: after the demo, a real game starts clean, in 1P unless P2 joins.
