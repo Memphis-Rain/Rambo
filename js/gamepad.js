@@ -53,21 +53,36 @@ let _padDisconnectPaused = false;
 let _padDisconnectWho = 0;                       // M11: 1 = P1's pad, 2 = P2's
 let _padUsedIdx = -1;                            // M11 K2: the pad index P1 has given input with
 const _padOwner = new Int8Array(16);             // K2.1: who lost each pad index (1 | 2; 0 = unknown)
-const _padOwnerId = new Map();                   // K2.2: who lost a pad with this id (0 = two pads share it)
+const _padLostIds = [];                          // K2.3: { id, who } per player whose pad dropped and isn't re-claimed
 let _padViewRefused = false;                     // K2.2: a refused View press, until it's released
 
 function _padNoteLoss(id, who) {
-  if (!id) return;
-  const v = _padOwnerId.get(id);
-  _padOwnerId.set(id, v !== undefined && v !== who ? 0 : who);
+  _padResolved(who);
+  if (id) _padLostIds.push({ id, who });
 }
-// Who a (re)connected pad at index i belongs to: its id when that tells the
-// lost pads apart (browsers may hand a returning pad another slot), else
-// the index it was lost from; 0 = unknown
+// A player got a pad again: forget their loss (id entry, and the slot they claimed)
+function _padResolved(who, idx) {
+  for (let k = _padLostIds.length - 1; k >= 0; k--) if (_padLostIds[k].who === who) _padLostIds.splice(k, 1);
+  if (idx !== undefined && idx >= 0 && idx < _padOwner.length) _padOwner[idx] = 0;
+}
+// Who a (re)connected pad at index i belongs to (0 = nobody / unknown).
+// K2.3: its id decides only when exactly one unresolved lost pad has that id
+// (identical pads report the same id: then the slot it was lost from decides);
+// resolved losses are forgotten, so a stale id never blocks a new pad
 function _padOwnerOf(i, g) {
   const id = g && g.id;
-  if (id && _padOwnerId.has(id)) return _padOwnerId.get(id);
+  if (id) {
+    let who = 0, n = 0;
+    for (let k = 0; k < _padLostIds.length; k++) if (_padLostIds[k].id === id) { who = _padLostIds[k].who; n++; }
+    if (n === 1) return who;
+  }
   return i < _padOwner.length ? _padOwner[i] : 0;
+}
+// A new round / demo starts with no pad ownership left over (title reservations,
+// old drops)
+function padClearOwnership() {
+  _padOwner.fill(0);
+  _padLostIds.length = 0;
 }
 // C4: per pad slot (0 = P1, 1 = P2): last start, the effect playing now, and
 // the strongest effect blocked by the gap
@@ -160,6 +175,7 @@ function _padSetDevice(d) {
 
 // Real mouse travel past 8 px or any key switches back to mouse aim (main.js)
 function padNoteMouseMove(x, y) {
+  _padP1Missing = false; // K2.3: P1 plays on mouse + keyboard now
   if (inputDevice !== 'pad') { _padMouseAX = x; _padMouseAY = y; return; }
   if (_padMouseAX === null) { _padMouseAX = x; _padMouseAY = y; return; }
   const dx = x - _padMouseAX, dy = y - _padMouseAY;
@@ -168,6 +184,7 @@ function padNoteMouseMove(x, y) {
 // Returns true when the key only resumed a pad-disconnect pause (swallow it)
 function padNoteKey() {
   _padSetDevice('kbm');
+  _padP1Missing = false; // K2.3: keyboard input since the drop: P1 isn't missing
   if (!_padDisconnectPaused) return false;
   padResumeFromDisconnect(true); // a key always resumes, every chained pause too (K2.1, K2.2)
   return true;
@@ -191,7 +208,9 @@ function _padBodyClass(on) {
 function _padFound(g) {
   pad.connected = true; pad.id = g.id || '';
   _padP1Missing = false; // K2.2
-  pad.pressed.fill(0); pad.justPressed.fill(0);
+  _padResolved(1, pad.index); // K2.3
+  // K2.3: buttons already held when the pad is found count only once released
+  _padRead(g, pad); pad.justPressed.fill(0);
   // C6 toast; on the title the legend swap shows it, the toast waits for the game
   _padToastPending = true;
   _padToast();
@@ -371,7 +390,24 @@ function _padOnlyView() {
   return true;
 }
 
+// K2.3 (C5): any button or stick past the deadzone on ANY connected pad
+// ends the attract mode, whoever the pad belongs to
+function _padAnyInput() {
+  const gps = _padSnap;
+  if (!gps) return false;
+  const dz = CFG.PAD_DEADZONE;
+  for (let i = 0; i < gps.length; i++) {
+    const g = gps[i];
+    if (!g || !g.connected || g.mapping !== 'standard') continue;
+    for (let b = 0; b < PAD_NB; b++) { const x = g.buttons[b]; if (x && (x.pressed || x.value > 0.5)) return true; }
+    const a = g.axes || [];
+    if (Math.hypot(a[0] || 0, a[1] || 0) > dz || Math.hypot(a[2] || 0, a[3] || 0) > dz) return true;
+  }
+  return false;
+}
+
 function _pollGamepadBody() {
+  if (demoActive && _padAnyInput() && typeof demoNoteInput === 'function') demoNoteInput(); // K2.3
   // Taps are pulses: drop the unconsumed ones only after a simulated frame
   // that could have used them (not during hit-stop or a dodge roll)
   if (_padPulse.length && gameTime > _padTapT && !(player && player.dodging)) {
@@ -563,7 +599,7 @@ function padAttachP2(i) {
   if (g) { _pad2.id = g.id || ''; _padRead(g, _pad2); _pad2.justPressed.fill(0); } // the join press is not an action
   if (i === pad.index && pad.connected) _padHandOff(); // a lone pad leaves P1 (P1 stays on kbm)
   if (_padUsedIdx === i) _padUsedIdx = -1;
-  if (i < _padOwner.length) _padOwner[i] = 2;
+  _padResolved(2, i); // K2.3: claimed (a title reservation leaves no ownership behind)
 }
 
 // Start / A on a pad that is neither P1's nor P2's joins P2 (or re-attaches

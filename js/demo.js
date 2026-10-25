@@ -586,8 +586,8 @@ function _demoBot(dt) {
     }
     // Water lookahead (physical: may break the D3a direction hold)
     const sc0 = sc;
-    if (!wade && _demoIsWater(p.x + m.dx * 45, p.y + m.dy * 45)) sc -= 4;
-    if (!wade && _demoIsWater(p.x + m.dx * 100, p.y + m.dy * 100)) sc -= 2;
+    if (!wade && rv === null && _demoIsWater(p.x + m.dx * 45, p.y + m.dy * 45)) sc -= 4; // K2.3: wade in to revive
+    if (!wade && rv === null && _demoIsWater(p.x + m.dx * 100, p.y + m.dy * 100)) sc -= 2;
     // Obstacles and barrels
     for (let oi = 0; oi < obsN; oi++) {
       const o = _demoObs[oi];

@@ -295,8 +295,7 @@ function _coopAnyStanding() {
 function coopDown(p) {
   p.state = 'down';
   p.hp = 0;
-  p.downT = CFG.COOP_DOWN_TIME;
-  p._downTicked = false;
+  p.downT = Math.max(CFG.COOP_DOWN_TIME, 0.1);
   p.reviveT = 0;
   p.dodging = false; p.reloading = false; p.vx = 0; p.vy = 0; p.walking = false;
   p.bleedT = 0;
@@ -349,9 +348,10 @@ function coopUpdateDown(dt) {
   if (players.length < 2) return;
   for (let i = 0; i < players.length; i++) {
     const p = players[i];
+    const entering = !!p && p.state === 'down' && !p._wasDown;
+    if (p) p._wasDown = p.state === 'down';
     if (!p || p.state !== 'down') continue;
-    if (!(p.downT > 0) && !p._downTicked) p.downT = CFG.COOP_DOWN_TIME; // K2.2: a zero timer can't kill on entry
-    p._downTicked = true;
+    if (entering && !(p.downT > 0)) p.downT = Math.max(CFG.COOP_DOWN_TIME, 0.1); // K2.3: a zero timer can't kill on entry
     p.downT -= dt;
     p.bleedT = (p.bleedT || 0) - dt;
     if (p.bleedT <= 0) { // lying, bleeding
@@ -389,6 +389,7 @@ function coopOnWaveStart() {
 }
 
 function resetCoop() {
+  if (typeof padClearOwnership === 'function') padClearOwnership(); // K2.3: no stale pad ownership (title reservation, demo)
   players.length = 1;
   cam.z = 1;
   _coop.target = 1; _coop.zoomingIn = false; _coop.forced = null;

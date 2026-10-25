@@ -623,7 +623,8 @@ function envFlameHeat(o) {
   const r = _envRecord(o);
   if ((r.state !== 'standing' && r.state !== 'scorched') || r.charred || r.fire > 0) return;
   r.heatSeen = gameTime;
-  if (!r.heating) { r.heating = true; _envHeating.push(r); r.heatBy = dmgBy; } // K2.2: the igniter (flame's f.by)
+  r.heatBy = dmgBy; // K2.3: the latest heater lights it (the flame's f.by)
+  if (!r.heating) { r.heating = true; _envHeating.push(r); }
 }
 
 function _envIgniteTree(r, by = dmgBy) {
