@@ -758,6 +758,25 @@ describe('M11 K2.4 1P regressions', () => {
     expect(started).toBe(0);
   });
 
+  for (const b of ['A', 'START']) {
+    test.skipIf(todo)(`K2.4 N1 (D6): during a demo, a brand-new pad revealed by a held ${b} ends the demo; title, no game, nothing reserved`, () => {
+      quietDemo();
+      g.gameStarted = false;
+      titleFrame(3);
+      expect(g.startDemo()).toBe(true);
+      demoStep(5);
+      // Chrome reveals a pad on its first press: it appears with the button already down
+      rig.connect(0); rig.btn(0, BTN[b], true);
+      demoStep(6); // held for several frames
+      rig.btn(0, BTN[b], false);
+      demoStep(2); titleFrame(4);
+      expect(g.demoState().active, 'the demo ended').toBe(false);
+      expect({ started, gameStarted: g.gameStarted }, 'back on the title, no game started').toEqual({ started: 0, gameStarted: false });
+      expect(H.state().pendingPad, 'nothing reserved').toBe(null);
+      expect(H.state().titleCount || 1, 'the title still counts 1P').toBe(1);
+    });
+  }
+
   test.skipIf(todo)('K2.4 N2 (M10): on the title, a brand-new pad whose very first press is A starts the game on that press', () => {
     g.gameStarted = false;
     titleFrame(2);
