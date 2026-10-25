@@ -131,6 +131,18 @@ describe('M11 K2.2 environment credit and friendly fire', () => {
     expect(g.score - s0.team, 'team total = P2\'s gain').toBe(p2.score - s0.s2);
   });
 
+  test.skipIf(!LANDED.K2_3)('K2.3/F3: P1 flames a tree briefly, then P2 flames it until it lights: the canopy kill credits P2 (the latest heater)', () => {
+    const t = place('tree', 300, 0);
+    for (let i = 0; i < 5; i++) { g.dmgBy = 0; g.envFlameHeat(t); g.dmgBy = 0; g.updateEnv(DT); }
+    expect(g.envState(t.id).fire || 0, 'the brief P1 heat did not light it').toBe(0);
+    igniteBy(t, 1);
+    const e = victim(305, 8);
+    const died = stepUntil(() => e.dead || !g.enemies.includes(e), 15, () => { e.x = 305; e.y = 8; e.vx = 0; e.vy = 0; });
+    expect(died).toBeLessThan(15);
+    expect(p2.kills, 'P2 kill').toBe(1);
+    expect(p1.kills || 0, 'not P1').toBe(0);
+  });
+
   test.skipIf(todo)('K2.2/F3: fire spreading from P2\'s tree to the next keeps P2\'s credit', () => {
     const a = place('tree', 300, 0), b = place('tree', 360, 0);
     igniteBy(a, 1);
