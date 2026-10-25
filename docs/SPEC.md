@@ -668,7 +668,9 @@ This is the one new game mode the user asked for, so it is an explicit exception
     - A downed player can't move, so the leash keeps them on screen for the revive.
   - Shake (J5a) stays global at its current cap, in screen px, unaffected by the zoom.
 - **K4. Look and HUD.**
-  - P2 uses a distinct palette swap, red bandana and darker vest, readable at x1 and x3. Each player has a small pixel "1P" / "2P" tag above the head, in the H-series font.
+  - P2 uses a distinct palette swap: a light steel-blue camo vest over dark slate trousers, keeping the red bandana. It's the inverse of P1's dark top over olive legs, so the two read apart at a glance at x1, x3 and zoom 0.6 (ruling 2026-10-25: a darker vest couldn't be told apart from P1's near-black top).
+  - The low-HP red vignette (G10) in 2P follows the lowest HP among the **standing** players. Downed players are signalled by their HELP ring instead.
+  - The boss bar must not overlap the stats box at 800×600. That's a pre-existing 1P overlap, fixed under K4. Each player has a small pixel "1P" / "2P" tag above the head, in the H-series font.
   - **HUD:** the P1 panel (HP, weapon, ammo, grenades, score) stays where it is. The P2 panel mirrors it on the right. The minimap moves if it would overlap.
   - Everything must fit at 800×600 and 1920×1080 with no overlap. This is checked with HUD-free-box style asserts, as in the W5 test.
 - **K5. Down, revive and team second wind.**
