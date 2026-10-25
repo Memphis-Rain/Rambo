@@ -612,6 +612,79 @@ User: "you can also add xbox joystick controller support".
   - Manual: the user tests with a real Xbox pad. Josh and Anna verify with a real pad if one is available, and say so if not.
 - **Order:** after W2. It's independent of W3–W5 and F1–F4, so Josh may interleave it.
 
+## M11: Local co-op, 2 players on one screen (Josh) *(user request 2026-10-25)*
+
+User: "can you add single screen multiplayer once the xbox controllers are supported?"
+
+This is the one new game mode the user asked for, so it is an explicit exception to the §0 non-goal. The setup is 90s-arcade couch co-op: two players, one shared isometric camera, no split screen and no zoom, since zoom would break the R-series pixel grid.
+
+- **Q4 still holds for 1P.** With one player, every existing number and behaviour stays the same, and the full existing suite (unit, e2e, perf, long) passes unchanged.
+- The 2P numbers below are new and get their own unit locks.
+
+- **K1. Players refactor (no behaviour change).**
+  - `players[]` holds 1–2 player objects, and `player` stays a live alias of `players[0]`, so untouched code keeps working.
+  - Every system that reads the player in the singular is reviewed and goes over `players[]` where the K items below need it: enemy AI and targeting, pickups, hit tests on enemy rounds and explosions, camera, HUD, water wading (W2), footprints, rumble, demo.
+  - K1 is a release point of its own. It merges only when the whole existing suite is green with zero test edits, apart from the loader adding `players` to its globals.
+- **K2. Join and devices.**
+  - **Device rule.** P1 = keyboard+mouse, or pad 1 (the M10 last-used rule). P2 = the next **other** pad that presses Start or A.
+    - One pad: P1 on keyboard+mouse, P2 on the pad.
+    - Two pads: one per player. Keyboard+mouse then also drives P1.
+  - **Title.** With a second pad connected, or with one pad and P1 on keyboard, the title shows a blinking "2P PRESS START", and the player count on the title is 1P or 2P.
+  - **Drop-in mid-game.** Start on an unassigned pad spawns P2 next to P1, with 100 HP, the weapon P1 has selected and default ammo and grenades. The banner reads "PLAYER 2 JOINS!". There is no drop-out key.
+  - A pad's input (M10 C1–C3) goes only to its own player. Aim assist (C3) is per pad.
+  - **Rumble (C4)** goes only to the pad of the player the event concerns: their shots, damage taken, and blasts measured from that player.
+- **K3. Shared camera and leash.**
+  - The camera follows the midpoint of the alive players, with the same smoothing as now.
+  - **Leash:** a player cannot move to where the two players' screen-space separation would push either one within 48 low-res px of the view edge (that player's movement is clamped). Knockback and explosions may push a player past the leash. The camera then follows the midpoint, and the next move is clamped back.
+  - A downed player (K5) does not pull the camera.
+  - Shake (J5a) stays global, at its current cap.
+- **K4. Look and HUD.**
+  - P2 uses a distinct palette swap, red bandana and darker vest, readable at x1 and x3. Each player has a small pixel "1P" / "2P" tag above the head, in the H-series font.
+  - **HUD:** the P1 panel (HP, weapon, ammo, grenades, score) stays where it is. The P2 panel mirrors it on the right. The minimap moves if it would overlap.
+  - Everything must fit at 800×600 and 1920×1080 with no overlap. This is checked with HUD-free-box style asserts, as in the W5 test.
+- **K5. Down, revive and game over.**
+  - At 0 HP in 2P, a player is **DOWN**: they lie bleeding, can't act, and get a "HELP!" blink plus an 8 s ring timer. Enemies ignore downed players.
+  - **Revive:** the partner stands within 50u for 1.5 s, and gets a progress ring. The downed player comes back at 50% HP with 1 s invulnerability.
+  - If the 8 s run out, the player is **dead**. Dead means gibbed per G-series, so it's bloody, and they respawn next to the partner at the start of the next wave with 100 HP.
+  - **Game over** happens only when no player is alive and standing.
+  - 1P: unchanged, so 0 HP is game over as now.
+- **K6. Rules in 2P.**
+  - **Enemy targeting:** each enemy targets the **nearest standing** player. It re-picks at most every 1 s, and switches only if the other player is ≥ 25% closer (hysteresis, so enemies don't jitter).
+  - **Scaling:** wave enemy count ×1.5 (rounded up), boss HP ×1.5. Everything else is unchanged. Values are `CFG.COOP_ENEMY_MULT` and `CFG.COOP_BOSS_HP_MULT`.
+  - **Friendly fire:** off by default (`CFG.COOP_FRIENDLY_FIRE = false`). Bullets pass through the partner, and the partner takes no damage or knockback from your explosions. The flamethrower still never ignites players (F-series).
+  - **Score:** each player has their own score and kills shown on their own panel. Weapon unlocks use the **team total** against the existing thresholds, and both players get the unlocks.
+  - Combo is per player.
+  - **Pickups:** whoever touches one first gets it. Ammo/grenade drop rates are unchanged.
+  - **Pause:** Start/P from either player pauses everything. If a pad in use disconnects, the game auto-pauses (C6), and the message names the player: "P2 CONTROLLER DISCONNECTED".
+- **K7. Attract mode 2P (should-have, after K1–K6).**
+  - Every 2nd attract cycle runs **two** CPU players with the M6 bot logic, one per player, with the 2P HUD showing. The aim is to sell the mode.
+  - The D6 isolation still holds: after the demo, a real game starts clean, in 1P unless P2 joins.
+- **Acceptance (Anna).**
+  - Two mocked standard-mapping pads (the M10 mock extended to indices 0 and 1), plus keyboard+mouse.
+  - **Unit:**
+    - Device assignment for every combination (kbd+pad, pad+pad, a late second pad).
+    - Leash clamp math.
+    - Targeting hysteresis: no switch at 20% closer, switch at 30%.
+    - The scaling numbers.
+    - Team-total unlocks.
+    - The revive timer and range.
+    - Game over only when nobody is standing.
+    - 1P values identical to before (Q4 lock).
+  - **E2e:**
+    - P2 joins from the title and mid-game.
+    - Both players move, aim and kill independently.
+    - Neither player can leave the screen.
+    - An enemy chases the nearer player.
+    - P2 goes down and P1 revives them.
+    - Both down → game over.
+    - Each pad's rumble spy sees only its own events.
+    - P2 disconnect → auto-pause.
+    - The HUD fits at 800×600 (screenshot + boxes).
+    - No console errors (Q1).
+  - **Perf:** a 2P run with 40 enemies + gore meets the same Q2 bars as 1P.
+  - **Manual:** the user tests with real pads.
+- **Order:** K1 first, as its own release point. Then K2+K3, which together make it playable, then K5+K6, K4 polish, and K7 last. Josh may parallelise K4 HUD art with K5/K6 logic through subagents, but he integrates `main.js` and `combat.js` himself.
+
 ## B: Build hygiene
 
 - **B1. Cache busting** (found by Anna, 2026-10-25).
@@ -679,5 +752,5 @@ User: "you can also add xbox joystick controller support".
 2. Anna runs the full suite plus manual exploratory play on that milestone. She reports pass/fail per ID to Ralph and sends bugs to Josh with repro steps.
 3. Ralph reviews the diff against the spec and decides whether to accept or rework. Ralph commits when the user approves.
 
-Order (current): **M7 P1 + W1 → M8 (E0 first, since it's a bug; then E1, E2, E5, E6, E3, E4, E7, E8)**. Earlier milestones are done.
+Order (current): **M11: K1 → K2+K3 → K5+K6 → K4 → K7**. M1–M10 are done.
 Previous order: **M2 (in progress) → M1 → M6 → M3 → M4 → M5**. T runs in parallel throughout. M6 is mostly a new file (`js/demo.js`), so Josh may give it to a subagent in parallel with M1, as long as he integrates the `main.js` hooks himself to avoid edit collisions.
