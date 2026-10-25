@@ -414,9 +414,10 @@ test('K5: P2 goes down ("HELP!"), P1 stands next to them and revives them', asyn
   await placeBoth(game, { x: 0, y: 0 }, { x: 300, y: 0 });
   await game.eval(() => { const p = players[1]; p.invincible = 0; p.shield = 0; damagePlayer(p.hp + 10, p); });
   expect(await game.eval(() => players[1].state)).toBe('down');
-  await page.waitForFunction(() => /HELP!/.test(window.__screenText()), null, { timeout: T(5_000) });
+  if (LANDED.K5LOOK) await page.waitForFunction(() => /HELP!/.test(window.__screenText()), null, { timeout: T(5_000) });
   // P1 walks over with the stick until within revive range
-  await pad1(page).sticks(1, -1);
+  const dir = await game.eval(() => { const s = toScreen(players[1].x - players[0].x, players[1].y - players[0].y), d = Math.hypot(s.x, s.y); return { x: s.x / d, y: s.y / d }; });
+  await pad1(page).sticks(dir.x, dir.y); // the left stick is in screen space (M10)
   await page.waitForFunction(() => Math.hypot(players[0].x - players[1].x, players[0].y - players[1].y) < 40, null, { timeout: T(15_000) });
   await pad1(page).sticks(0, 0);
   await page.waitForFunction(() => players[1].state === 'up', null, { timeout: T(10_000) });

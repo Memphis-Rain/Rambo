@@ -38,9 +38,11 @@ export const LANDED = {
   // M11 local 2-player co-op (spec b2e84d0 + K3a 8de96ab, K5 85840e7, K2 4e5c87b): one flag per step.
   K1: true, // players[] refactor, player === players[0] (gate passed with zero test or loader edits)
   K2: true, // join and devices: coopState(), padOf(i), padAimOf(i), coopJoin(), View/Back one-pad join
-  K3: true, // shared camera, K3a zoom (camZoom(), setCamZoom()), K3b leash at COOP_ZOOM_MIN
+  K3: true, // shared camera, K3a zoom (camZoom(), setCamZoom()), K3b leash (at every zoom, spec 750049d)
+  K2_1: false, // K2.1 device edge cases (Ralph's review): pad re-claim, refused join, legend, one getGamepads per frame, P2 muzzle flash
   K4: false, // P2 look, 1P/2P tags, mirrored HUD panel (hudBoxes())
   K5: false, // down, revive, TEAM SECOND WIND (p.state, p.downT, p.reviveT)
+  K5LOOK: false, // K5 visuals: HELP! blink, ring timer, revive progress ring (pixi-hud/pixi-sprites)
   K6: false, // targeting hysteresis, x1.5 scaling, no friendly fire, per-player score, team unlocks
   K7: false, // 2P attract mode
 };

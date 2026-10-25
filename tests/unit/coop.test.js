@@ -638,7 +638,7 @@ describe('M11 K3 camera, zoom and leash', () => {
     const s1 = g.toScreen(p1.x, p1.y);
     expect([g.cam.tx, g.cam.ty]).toEqual([s1.x, s1.y]);
     expect(H.zoom().target).toBe(1);
-    p2.state = 'down'; frame();
+    p2.state = 'down'; p2.hp = 0; p2.downT = C().COOP_DOWN_TIME ?? 8; frame(); // a real DOWN (K5 bleeds out a player with no downT)
     expect(H.zoom().target).toBeLessThan(1);
   });
 
@@ -696,7 +696,7 @@ describe('M11 K3 camera, zoom and leash', () => {
     expect(g.toScreen(out.x - mover.x, out.y - mover.y).y, 'screen-down part kept').toBeCloseTo(20, 0);
   });
 
-  test.skipIf(todo || !LANDED.K2)('K3b: below max zoom-out there is no leash: moving apart runs at full speed', () => {
+  test.skipIf(todo || !LANDED.K2)('K3b: away from the limit the leash does not cut: moving apart runs at full speed', () => {
     rig.connect(0); frame(); tap(0, BTN.BACK);
     const [p1, p2] = H.players();
     p1.invincible = p2.invincible = 1e9;
@@ -705,7 +705,7 @@ describe('M11 K3 camera, zoom and leash', () => {
     expect(H.zoom().zoom).toBeGreaterThan(C().COOP_ZOOM_MIN + 0.1);
     const at = { x: p2.x, y: p2.y };
     rig.axes(0, 1, 0); frame(12); rig.axes(0, 0, 0); // P2 (on pad 0 here) runs screen-right for 0.2 s
-    expect(Math.hypot(p2.x - at.x, p2.y - at.y), 'not clamped while zoom > min').toBeGreaterThan(0.8 * C().PLAYER_SPEED * 0.2);
+    expect(Math.hypot(p2.x - at.x, p2.y - at.y), 'not clamped away from the limit').toBeGreaterThan(0.8 * C().PLAYER_SPEED * 0.2);
   });
 
   test.skipIf(todo || !LANDED.K2)('K3b: at COOP_ZOOM_MIN a runner is held at 48 low-res px inside the view, against the camera target and the drawn view (run, sprint, dodge)', () => {
@@ -824,7 +824,7 @@ describe('M11 K5 down, revive and team second wind', () => {
     expect(p2.reviveT).toBeGreaterThan(1.3);
     seconds(0.15);
     expect(p2.state).toBe('up');
-    expect(p2.hp).toBeCloseTo(p2.maxHp * 0.5, 6);
+    expect(p2.hp, '50% of maxHp (plus a frame of regen)').toBeCloseTo(p2.maxHp * 0.5, 0);
     expect(p2.invincible).toBeGreaterThan(0.9);
     expect(p2.invincible).toBeLessThanOrEqual(1);
   });
@@ -1088,8 +1088,8 @@ describe('M11 K6 rules in 2P', () => {
     p1.hp = 50; p2.hp = 50;
     g.pickups.push({ x: p2.x, y: p2.y, type: 'health', amount: 25, life: 30 });
     frame(2);
-    expect(p2.hp).toBe(75);
-    expect(p1.hp).toBe(50);
+    expect(p2.hp, 'P2 got the +25 (plus a frame of regen)').toBeCloseTo(75, 0);
+    expect(p1.hp, 'P1 did not').toBeCloseTo(50, 0);
   });
 
   test.skipIf(todo)('K6: enemy rounds hit whichever player they reach', () => {
