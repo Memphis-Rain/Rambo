@@ -95,12 +95,43 @@ function _updateFootprints(p, dt) {
   if (d) d.alpha = p.bloodyFeet > 2 ? 0.9 : p.bloodyFeet > 1 ? 0.6 : 0.35; // null: landed on water (W3)
 }
 
-function updatePlayer(dt) {
-  if (keys['f']) {
-    if (!_grenadeKeyHeld) { _grenadeKeyHeld = true; _grenadeWant = true; }
-  } else _grenadeKeyHeld = false;
-  const p = player;
+// M11 K2: a player's controls. P1's are the shared globals (keyboard, mouse
+// and the M10 pad all write those, and the HUD reads them); P2 has its own
+// object of the same shape (newCtl), written only by its pad (gamepad.js)
+const _p1Ctl = {
+  get keys() { return keys; },
+  get device() { return inputDevice; },
+  get pad() { return pad; },
+  get padAim() { return padAim; },
+  get mouseX() { return mouseX; },
+  get mouseY() { return mouseY; },
+  get mouseDown() { return mouseDown; },
+  get mouseJustPressed() { return mouseJustPressed; }, set mouseJustPressed(v) { mouseJustPressed = v; },
+  get mouseRightJustPressed() { return mouseRightJustPressed; }, set mouseRightJustPressed(v) { mouseRightJustPressed = v; },
+  get grenadeWant() { return _grenadeWant; }, set grenadeWant(v) { _grenadeWant = v; },
+  get grenadeKeyHeld() { return _grenadeKeyHeld; }, set grenadeKeyHeld(v) { _grenadeKeyHeld = v; },
+  get worldX() { return mouseWorldX; }, set worldX(v) { mouseWorldX = v; },
+  get worldY() { return mouseWorldY; }, set worldY(v) { mouseWorldY = v; },
+  get groundX() { return mouseGroundX; }, set groundX(v) { mouseGroundX = v; },
+  get groundY() { return mouseGroundY; }, set groundY(v) { mouseGroundY = v; },
+  get picked() { return _aimPicked; }, set picked(v) { _aimPicked = v; },
+};
+function newCtl(padIndex) {
+  return {
+    keys: {}, pulse: [], tapT: -1, device: 'pad', pad: padOf(1), padAim: padAimOf(1), padIndex,
+    mouseX: 0, mouseY: 0, mouseDown: false, mouseJustPressed: false, mouseRightJustPressed: false,
+    grenadeWant: false, grenadeKeyHeld: false,
+    worldX: 0, worldY: 0, groundX: 0, groundY: 0, picked: null,
+  };
+}
+function playerCtl(p) { return (p && p.ctl) || _p1Ctl; }
+
+function updatePlayer(dt, p = player) {
   if (!p) return;
+  const c = playerCtl(p), K = c.keys;
+  if (K['f']) {
+    if (!c.grenadeKeyHeld) { c.grenadeKeyHeld = true; c.grenadeWant = true; }
+  } else c.grenadeKeyHeld = false;
   const px0 = p.x, py0 = p.y;
   _tickAnimTimers(p, dt);
   if (p.hurtFlash > 0) p.hurtFlash = Math.max(0, p.hurtFlash - dt * 2.5);
@@ -108,9 +139,9 @@ function updatePlayer(dt) {
   // Regen
   p.hp = Math.min(p.hp + CFG.PLAYER_REGEN * dt, p.maxHp);
 
-  // Shield regen (after delay)
-  shieldRegenTimer += dt;
-  if (shieldRegenTimer >= CFG.SHIELD_REGEN_DELAY && p.shield < p.maxShield) {
+  // Shield regen (after delay; M11: P1's timer is the global, P2 keeps its own)
+  const regenT = p === player ? (shieldRegenTimer += dt) : (p.shieldRegenT = (p.shieldRegenT || 0) + dt);
+  if (regenT >= CFG.SHIELD_REGEN_DELAY && p.shield < p.maxShield) {
     p.shield = Math.min(p.shield + CFG.SHIELD_REGEN * dt, p.maxShield);
   }
 
@@ -130,6 +161,7 @@ function updatePlayer(dt) {
       p.vy = Math.sin(p.dodgeAngle) * CFG.DODGE_SPEED;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
+      coopApplyLeash(p, p.x - p.vx * dt, p.y - p.vy * dt); // M11 K3b
       if (Math.random()<0.3) spawnSmoke(p.x, p.y, 1);
       return;
     }
@@ -137,16 +169,17 @@ function updatePlayer(dt) {
 
   // Movement
   let sx=0, sy=0;
-  if (keys['w'] || keys['arrowup']) sy -= 1;
-  if (keys['s'] || keys['arrowdown']) sy += 1;
-  if (keys['a'] || keys['arrowleft']) sx -= 1;
-  if (keys['d'] || keys['arrowright']) sx += 1;
+  if (K['w'] || K['arrowup']) sy -= 1;
+  if (K['s'] || K['arrowdown']) sy += 1;
+  if (K['a'] || K['arrowleft']) sx -= 1;
+  if (K['d'] || K['arrowright']) sx += 1;
 
   // M10: the left stick moves in any direction, speed scaled by magnitude
   // (full from 0.9 up); keys win when both are used
   let padK = 1;
-  if (sx === 0 && sy === 0 && inputDevice === 'pad' && pad.lmag > 0) {
-    sx = pad.lx; sy = pad.ly; padK = Math.min(1, pad.lmag / 0.9);
+  const cp = c.pad;
+  if (sx === 0 && sy === 0 && c.device === 'pad' && cp.lmag > 0) {
+    sx = cp.lx; sy = cp.ly; padK = Math.min(1, cp.lmag / 0.9);
   }
   const len = Math.sqrt(sx*sx+sy*sy);
   if (len > 0) {
@@ -156,7 +189,7 @@ function updatePlayer(dt) {
     const worldDy = -sx * 0.5 / 1 + sy * 0.5 / isoScale;
     const wLen = Math.sqrt(worldDx*worldDx + worldDy*worldDy);
     let speed = CFG.PLAYER_SPEED * padK;
-    if (keys['shift']) speed *= CFG.SPRINT_MULT;
+    if (K['shift']) speed *= CFG.SPRINT_MULT;
     p.vx = (worldDx/wLen) * speed;
     p.vy = (worldDy/wLen) * speed;
     p.walking = true;
@@ -183,8 +216,10 @@ function updatePlayer(dt) {
   // E11: climbing over a fallen log (a hurdle, not a wall) is slow
   if (envLogs.length) { const ls = envLogSlow(p.x, p.y, 10); p.vx *= ls; p.vy *= ls; }
 
+  const lx0 = p.x, ly0 = p.y;
   p.x += p.vx * dt;
   p.y += p.vy * dt;
+  coopApplyLeash(p, lx0, ly0); // M11 K3b: only at COOP_ZOOM_MIN with a partner
 
   // Collision with trees, rocks, boulders
   resolveEnvCollision(p, 10);
@@ -194,7 +229,7 @@ function updatePlayer(dt) {
   _updateFootprints(p, dt);
 
   // Idle fidget (A2)
-  if (p.walking || mouseDown) { p.idleT = 0; p.fidgetT = 0; }
+  if (p.walking || c.mouseDown) { p.idleT = 0; p.fidgetT = 0; }
   else {
     p.idleT += dt;
     if (p.fidgetT > 0) p.fidgetT -= dt;
@@ -203,27 +238,31 @@ function updatePlayer(dt) {
 
   // Mouse aiming
   // Map through the offset the world was actually drawn at (Q5: exact with pixel snapping)
-  const ox = worldOffsetX !== null ? worldOffsetX : W/2 - cam.x;
-  const oy = worldOffsetY !== null ? worldOffsetY : H/2 - cam.y;
-  const worldMouse = toWorld(mouseX - ox, mouseY - oy);
-  mouseWorldX = mouseGroundX = worldMouse.x;
-  mouseWorldY = mouseGroundY = worldMouse.y;
+  // and the K3a zoom: (mx, my) = the cursor in zoom-1 iso screen units
+  const z = cam.z;
+  const ox = worldOffsetX !== null ? worldOffsetX : W/2 - cam.x * z;
+  const oy = worldOffsetY !== null ? worldOffsetY : H/2 - cam.y * z;
+  const mx = (c.mouseX - ox) / z, my = (c.mouseY - oy) / z;
+  const worldMouse = toWorld(mx, my);
+  let aimX = worldMouse.x, aimY = worldMouse.y;
+  c.groundX = aimX; c.groundY = aimY;
   // G13: the cursor maps to the GROUND, so aiming at a head meant aiming at
   // the ground behind the enemy. Over an enemy's drawn body, aim at that
   // (front-most) enemy's ground centre instead. Not for the demo bot, which
   // already aims at led ground points.
   if (!(typeof demoActive !== 'undefined' && demoActive)) {
-    const picked = pickEnemyAtScreen(mouseX - ox, mouseY - oy);
-    if (picked) { aimPointOf(picked, _aimPt); mouseWorldX = _aimPt.x; mouseWorldY = _aimPt.y; } // W2: visible column when wading
-    _aimPicked = picked;
-  } else _aimPicked = null;
-  p.aimAngle = Math.atan2(mouseWorldY - p.y, mouseWorldX - p.x);
+    const picked = pickEnemyAtScreen(mx, my);
+    if (picked) { aimPointOf(picked, _aimPt); aimX = _aimPt.x; aimY = _aimPt.y; } // W2: visible column when wading
+    c.picked = picked;
+  } else c.picked = null;
+  c.worldX = aimX; c.worldY = aimY;
+  p.aimAngle = Math.atan2(aimY - p.y, aimX - p.x);
   const sp = toScreen(p.x, p.y);
-  let smx = mouseX - ox - sp.x;
-  let smy = mouseY - oy - sp.y;
-  if (_aimPicked) { // G13: point the gun where the shot goes (the picked torso),
+  let smx = mx - sp.x;
+  let smy = my - sp.y;
+  if (c.picked) { // G13: point the gun where the shot goes (the picked torso),
     // measured from the gun hand's height (8 art px up), not the feet
-    const e = _aimPicked;
+    const e = c.picked;
     smx = (e.x - e.y) - sp.x;
     const th = e.submerge > 0 ? (entityWaterlineH(e) + ENEMY_BODY_H * e.size) * 0.5 : ENEMY_PICK_H * 0.45 * e.size;
     smy = (e.x + e.y) * CFG.ISO_SCALE - th - (sp.y - PLAYER_HAND_H);
@@ -233,7 +272,7 @@ function updatePlayer(dt) {
   // Weapon switching (1-9, 0 for 10th, - for 11th)
   const keyMap = ['1','2','3','4','5','6','7','8','9','0','-'];
   for(let i=0;i<WEAPONS.length;i++){
-    if (keys[keyMap[i]] && i < unlockedWeapons) {
+    if (K[keyMap[i]] && i < unlockedWeapons) {
       if (p.weapon !== i) {
         p.weapon = i;
         p.magAmmo = WEAPONS[i].mag;
@@ -242,21 +281,21 @@ function updatePlayer(dt) {
       }
     }
   }
-  if (keys['q']) {
-    keys['q'] = false;
+  if (K['q']) {
+    K['q'] = false;
     p.weapon = (p.weapon - 1 + unlockedWeapons) % unlockedWeapons;
     p.magAmmo = WEAPONS[p.weapon].mag; p.reloading = false; p.spinUp = 0;
   }
-  if (keys['e']) {
-    keys['e'] = false;
+  if (K['e']) {
+    K['e'] = false;
     p.weapon = (p.weapon + 1) % unlockedWeapons;
     p.magAmmo = WEAPONS[p.weapon].mag; p.reloading = false; p.spinUp = 0;
   }
   // N1: grenade on F key-down, once per press (key repeat ignored; a press
   // during a dodge roll is latched at the top of updatePlayer)
-  if (_grenadeWant) { // M10: B throws at the pad reticle
-    _grenadeWant = false;
-    if (inputDevice === 'pad') throwGrenade(padAim.x, padAim.y); else throwGrenade(mouseGroundX, mouseGroundY);
+  if (c.grenadeWant) { // M10: B throws at the pad reticle
+    c.grenadeWant = false;
+    if (c.device === 'pad') throwGrenade(c.padAim.x, c.padAim.y, p); else throwGrenade(c.groundX, c.groundY, p);
   }
 
   // Reload
@@ -265,13 +304,13 @@ function updatePlayer(dt) {
     p.reloadTimer -= dt;
     if (p.reloadTimer <= 0) { p.reloading = false; p.magAmmo = wep.mag; }
   }
-  if (keys['r'] && !p.reloading && p.magAmmo < wep.mag) {
+  if (K['r'] && !p.reloading && p.magAmmo < wep.mag) {
     p.reloading = true; p.reloadTimer = wep.reload;
   }
 
   // Dodge roll
-  if (keys[' '] && !p.dodging && p.dodgeCooldown <= 0) {
-    keys[' '] = false;
+  if (K[' '] && !p.dodging && p.dodgeCooldown <= 0) {
+    K[' '] = false;
     p.dodging = true; p.dodgeTimer = CFG.DODGE_DURATION;
     p.dodgeCooldown = CFG.DODGE_COOLDOWN;
     p.dodgeAngle = len > 0 ? Math.atan2(p.vy, p.vx) : p.angle;
@@ -279,8 +318,8 @@ function updatePlayer(dt) {
   }
 
   // === RIGHT-CLICK SPECIAL: SHOCKWAVE ===
-  if (mouseRightJustPressed && p.specialCharge >= CFG.SPECIAL_MAX_CHARGE && p.specialCooldown <= 0) {
-    mouseRightJustPressed = false;
+  if (c.mouseRightJustPressed && p.specialCharge >= CFG.SPECIAL_MAX_CHARGE && p.specialCooldown <= 0) {
+    c.mouseRightJustPressed = false;
     p.specialCharge = 0;
     p.specialCooldown = 0.5;
     // Shockwave effect
@@ -301,22 +340,22 @@ function updatePlayer(dt) {
       }
     }
   }
-  mouseRightJustPressed = false;
+  c.mouseRightJustPressed = false;
 
   // Shooting
   p.fireTimer -= dt;
-  if (wep.spinUp && mouseDown && !p.reloading) {
+  if (wep.spinUp && c.mouseDown && !p.reloading) {
     p.spinUp = Math.min(p.spinUp + dt * 2, 1);
   } else {
     p.spinUp = Math.max(p.spinUp - dt * 3, 0);
   }
 
-  const canShoot = wep.auto ? mouseDown : mouseJustPressed;
+  const canShoot = wep.auto ? c.mouseDown : c.mouseJustPressed;
   if (canShoot && !p.reloading && !p.dodging && p.fireTimer <= 0) {
     if (p.magAmmo > 0) {
       const canFire = !wep.spinUp || p.spinUp > 0.5;
       if (canFire) {
-        mouseJustPressed = false;
+        c.mouseJustPressed = false;
         const rate = wep.spinUp ? wep.rate * (2 - p.spinUp) : wep.rate;
         p.fireTimer = rate;
         p.magAmmo--;
@@ -337,7 +376,7 @@ function updatePlayer(dt) {
             bullets.push({
               x: muzzleX, y: muzzleY,
               vx: Math.cos(bAngle)*wep.speed, vy: Math.sin(bAngle)*wep.speed,
-              dmg: wep.dmg, life: 2, owner:'player',
+              dmg: wep.dmg, life: 2, owner:'player', by: p.num - 1, // M11: shooter (players[] index)
               color: wep.color, size: wep.count>1?2:2.5,
               trail: wep.trail, pierce: wep.pierce,
               explosive: wep.explosive, radius: wep.radius||0,
@@ -353,7 +392,7 @@ function updatePlayer(dt) {
         p.recoilMag = Math.min(4, 1 + Math.round(wep.kickback / 5));
         p.idleT = 0; p.fidgetT = 0;
         spawnMuzzleFlash(muzzleX, muzzleY, aim, 0.7 + wep.kickback * 0.06);
-        padRumble(Math.min(1, 0.15 + wep.kickback / 25), 0, Math.min(60, 25 + wep.kickback * 2)); // M10 C4
+        padRumble(Math.min(1, 0.15 + wep.kickback / 25), 0, Math.min(60, 25 + wep.kickback * 2), p); // M10 C4
         if (wep.shellSize > 0) spawnShellCasing(p.x, p.y, aim, wep.shellSize);
 
         const soundMap = {0:'pistol',1:'smg',2:'shotgun',3:'rifle',4:'minigun',5:'rocket',6:'plasma',7:'flamethrower',8:'railgun',9:'bfg',10:'disintegrator'};
@@ -393,6 +432,7 @@ function spawnEnemy(type, x, y, bossData) {
     stunTimer: 0, knockbackX:0, knockbackY:0,
     walking: false,
     walkDist: Math.random() * 40, recoilT: 0, attackT: 0, healPulse: 0, healGlow: 0, distToPlayer: 9999,
+    target: null, // M11 K6: the player it goes for (enemyTarget)
     shieldHp: t.hasShield ? t.shieldHp * (1 + wave*0.04) : 0,
     maxShieldHp: t.hasShield ? t.shieldHp * (1 + wave*0.04) : 0,
   };
@@ -922,7 +962,7 @@ function damagePlayer(dmg, p = player) {
   if (p.invincible > 0 || p.dodging) return;
   if (typeof demoActive !== 'undefined' && demoActive) dmg *= CFG.DEMO_DAMAGE_MULT; // D4
 
-  shieldRegenTimer = 0; // reset shield regen delay
+  if (p === player) shieldRegenTimer = 0; else p.shieldRegenT = 0; // reset shield regen delay
 
   // Shield absorbs damage first
   if (p.shield > 0) {
@@ -943,7 +983,7 @@ function damagePlayer(dmg, p = player) {
   p.hurtFlash = Math.min(1, p.hurtFlash + 0.25 + dmg / 60);
   if (p.shield <= 0) spawnBloodSpray(p.x, p.y, Math.random() * Math.PI * 2, 0.5, 14);
   addShake(3);
-  padRumble(0.3, 0.7, 90); // M10 C4: a short strong pulse
+  padRumble(0.3, 0.7, 90, p); // M10 C4: a short strong pulse, on the hit player's pad
 
   if (p.hp <= 0) {
     if (typeof demoActive !== 'undefined' && demoActive) demoOnPlayerDeath(); // D6: demo ends on death
@@ -1315,6 +1355,7 @@ function bulletHitEnemy(b, e, mult = 1) {
 // =====================================================================
 // WAVE MANAGER & BOSSES
 // =====================================================================
+const _spawnO = { x: 0, y: 0 };
 function spawnBoss(weaponIndex) {
   const name = BOSS_NAMES[weaponIndex-1] || 'Boss';
   // Pick a base enemy type that fits the power level
@@ -1322,8 +1363,9 @@ function spawnBoss(weaponIndex) {
   const bossHp = 300 + weaponIndex * 250; // Easy/relaxing HP scaling
 
   const a = Math.random() * Math.PI * 2;
-  const sx = player.x + Math.cos(a) * (CFG.VIEW_RANGE + 80);
-  const sy = player.y + Math.sin(a) * (CFG.VIEW_RANGE + 80);
+  const o = coopSpawnOrigin(_spawnO), sd = (CFG.VIEW_RANGE + 80) / cam.z; // M11 K3a: off the zoomed view
+  const sx = o.x + Math.cos(a) * sd;
+  const sy = o.y + Math.sin(a) * sd;
 
   spawnEnemy(baseIdx, sx, sy, { name, hp: bossHp });
   showNotification(`BOSS: ${name}!`, 3);
@@ -1377,10 +1419,11 @@ function updateWaves(dt) {
         if(r<=0){ typeIdx = ENEMY_TYPES.indexOf(available[i]); break; }
       }
 
-      const spawnDist = CFG.VIEW_RANGE + 100;
+      const spawnDist = (CFG.VIEW_RANGE + 100) / cam.z; // M11 K3a: off the zoomed view
       const a = Math.random() * Math.PI * 2;
-      const sx = player.x + Math.cos(a) * spawnDist;
-      const sy = player.y + Math.sin(a) * spawnDist;
+      const o = coopSpawnOrigin(_spawnO);
+      const sx = o.x + Math.cos(a) * spawnDist;
+      const sy = o.y + Math.sin(a) * spawnDist;
       spawnEnemy(typeIdx, sx, sy);
       enemiesSpawned++;
     }

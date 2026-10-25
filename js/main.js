@@ -133,12 +133,23 @@ function addShake(mag) {
   shakeMag = Math.min(CFG.SHAKE_MAX, Math.max(shakeMag, mag));
 }
 
+const _camMid = { x: 0, y: 0 };
 function updateCamera(dt) {
-  const sp = toScreen(player.x, player.y);
+  // M11 K3: the midpoint of the standing and downed players (P1 alone in 1P)
+  if (!coopMidpoint(_camMid)) { _camMid.x = player.x; _camMid.y = player.y; }
+  const sp = toScreen(_camMid.x, _camMid.y);
   cam.tx = sp.x;
   cam.ty = sp.y;
-  cam.x += (cam.tx - cam.x) * CFG.CAMERA_SMOOTH * 60 * dt;
-  cam.y += (cam.ty - cam.y) * CFG.CAMERA_SMOOTH * 60 * dt;
+  coopUpdateZoom(dt); // K3a
+  const follow = coopCamFollowMult(); // M11 K3b: 1 in 1P (the original expression, bit for bit)
+  if (follow === 1) {
+    cam.x += (cam.tx - cam.x) * CFG.CAMERA_SMOOTH * 60 * dt;
+    cam.y += (cam.ty - cam.y) * CFG.CAMERA_SMOOTH * 60 * dt;
+  } else {
+    const k = Math.min(1, CFG.CAMERA_SMOOTH * 60 * dt * follow);
+    cam.x += (cam.tx - cam.x) * k;
+    cam.y += (cam.ty - cam.y) * k;
+  }
 
   if(shakeMag > 0.1) {
     shakeX = (Math.random()-0.5) * shakeMag * 2;
@@ -259,7 +270,7 @@ function initInput() {
 // =====================================================================
 function update(dt) {
   gameTime += dt;
-  updatePlayer(dt);
+  for (let i = 0; i < players.length; i++) updatePlayer(dt, players[i]); // M11 K2: each with its own controls
   processPendingDamage();
   updateEnemies(dt);
   updateBullets(dt);
@@ -305,8 +316,9 @@ function update(dt) {
 
   // Ambient effects - fireflies in dark areas, water sparkles
   if(Math.random() < 0.05 && player){
-    const ox = player.x + randRange(-400, 400);
-    const oy = player.y + randRange(-400, 400);
+    const o = coopSpawnOrigin(_coopAmbO), r = 400 / cam.z; // M11 K3a: the whole zoomed view
+    const ox = o.x + randRange(-r, r);
+    const oy = o.y + randRange(-r, r);
     const terrain = getTerrainTypeAt(ox, oy);
     if(terrain === 'dark'){
       // Firefly
@@ -329,6 +341,7 @@ function update(dt) {
   else if(combo === 50) showNotification('LEGENDARY!', 2.5);
 
   mouseJustPressed = false;
+  coopEndFrame(); // M11 K2: P2's edges
 }
 
 // =====================================================================
@@ -344,6 +357,7 @@ function gameLoop() {
 
   if(!gameStarted) {
     if (typeof updateDemoIdle === 'function') updateDemoIdle(Math.min(frameMs / 1000, 0.1));
+    coopTitleTick(); // M11 K2: 2P hint + player count
     return;
   }
   if(paused) return;
@@ -463,6 +477,7 @@ function resetRound() {
   mouseRightDown = false; mouseRightJustPressed = false;
 
   player = createPlayer();
+  resetCoop(); // M11: back to 1P, zoom 1
   cam.x = 0; cam.y = 0;
   worldOffsetX = null; worldOffsetY = null;
   lastTime = performance.now();
@@ -472,7 +487,9 @@ function startGame() {
   if (typeof demoActive !== 'undefined' && demoActive) stopDemo();
   document.getElementById('start-screen').style.display = 'none';
   if(!audioCtx) initAudio();
+  const p2Pad = coopPendingPad(); // M11 K2: P2 joined on the title
   resetRound();
+  if (p2Pad !== null) coopJoin(p2Pad);
   gameStarted = true;
   console.log('[RAMBO] Mission started');
 }

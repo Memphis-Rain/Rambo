@@ -981,6 +981,7 @@ function renderPixiCrosshair() {
   hudElements.crosshair.visible = !padAiming;
   hudElements.reticle.visible = padAiming;
   const spReady = player && player.specialCharge >= CFG.SPECIAL_MAX_CHARGE;
+  if (players.length > 1 || hudElements.reticle2) _hudP2Reticle(); // M11 K2
   if (padAiming) { renderPadReticle(spReady); return; }
 
   const g = hudElements.crosshair;
@@ -1020,13 +1021,13 @@ const HUD_RETICLE_FILL = [
   { color: HUD_RETICLE_COLORS[1], alpha: 0.95 },
   { color: HUD_RETICLE_COLORS[2], alpha: 0.95 },
 ];
-function renderPadReticle(spReady) {
-  const g = hudElements.reticle;
-  const locked = CFG.PAD_AIM_ASSIST && player && typeof padAssistTarget === 'function' &&
-    padAssistTarget(player.x, player.y, padAim.dirX, padAim.dirY, CFG.PAD_ASSIST_RANGE, CFG.PAD_ASSIST_DEG) !== null;
+// M11 K2: one per pad (g, its player p and aim; ck = its _hudCache state key)
+function renderPadReticle(spReady, g = hudElements.reticle, p = player, aim = padAim, ck = 'reticleState') {
+  const locked = CFG.PAD_AIM_ASSIST && p && typeof padAssistTarget === 'function' &&
+    padAssistTarget(p.x, p.y, aim.dirX, aim.dirY, CFG.PAD_ASSIST_RANGE, CFG.PAD_ASSIST_DEG) !== null;
   const state = locked ? 2 : spReady ? 1 : 0;
-  if (_hudCache.reticleState !== state) {
-    _hudCache.reticleState = state;
+  if (_hudCache[ck] !== state) {
+    _hudCache[ck] = state;
     g.clear();
     const r = locked ? 10 : 14, L = 6; // half-size of the bracket box, arm length
     for (let pass = 0; pass < 2; pass++) {
@@ -1048,10 +1049,28 @@ function renderPadReticle(spReady) {
     }
   }
   // At the aim point (world -> screen with this frame's camera offset)
-  const ox = worldOffsetX !== null ? worldOffsetX : W / 2 - cam.x;
-  const oy = worldOffsetY !== null ? worldOffsetY : H / 2 - cam.y;
-  g.x = Math.round((padAim.x - padAim.y) + ox);
-  g.y = Math.round((padAim.x + padAim.y) * CFG.ISO_SCALE + oy);
+  const z = cam.z; // M11 K3a: the reticle stays screen-size; only its position zooms
+  const ox = worldOffsetX !== null ? worldOffsetX : W / 2 - cam.x * z;
+  const oy = worldOffsetY !== null ? worldOffsetY : H / 2 - cam.y * z;
+  g.x = Math.round((aim.x - aim.y) * z + ox);
+  g.y = Math.round((aim.x + aim.y) * CFG.ISO_SCALE * z + oy);
+}
+
+// M11 K2: P2's pad reticle (created when first needed; never in 1P)
+function _hudP2Reticle() {
+  const p2 = players.length > 1 ? players[1] : null;
+  const show = !!(p2 && p2.pad !== null && p2.state === 'up' && gameStarted &&
+    !(typeof demoActive !== 'undefined' && demoActive) && typeof padAimOf === 'function');
+  if (!show) { if (hudElements.reticle2) hudElements.reticle2.visible = false; return; }
+  if (!hudElements.reticle2) {
+    const g = new PIXI.Graphics();
+    g.zIndex = 8500;
+    uiContainer.addChild(g);
+    hudElements.reticle2 = g;
+    _hudCache.reticle2State = -1;
+  }
+  hudElements.reticle2.visible = true;
+  renderPadReticle(p2.specialCharge >= CFG.SPECIAL_MAX_CHARGE, hudElements.reticle2, p2, padAimOf(1), 'reticle2State');
 }
 
 /**
@@ -1140,6 +1159,9 @@ function renderPauseOverlay() {
   const visible = (typeof paused !== 'undefined') && paused;
   const ps = visible && typeof padState === 'function' ? padState() : null;
   const dc = !!(ps && ps.disconnectPaused);
+  // M11 K2: in 2P the message names the player whose pad dropped
+  const dcText = dc && players.length > 1 && ps.disconnectWho ? `P${ps.disconnectWho} CONTROLLER DISCONNECTED` : 'CONTROLLER DISCONNECTED';
+  if (o._dcTitle.text !== dcText) { o._dcTitle.text = dcText; o._mode = -1; }
   const hintText = dc ? 'PRESS START OR ANY KEY'
     : ps && ps.connected ? 'PRESS P / START TO RESUME' : 'PRESS P TO RESUME';
   if (o._hint.text !== hintText) o._hint.text = hintText;
@@ -1155,7 +1177,7 @@ function renderPauseOverlay() {
     o._w = Wi;
     o._h = Hi;
     o._mode = mode;
-    const pw = Math.min(Wi - 16, dc ? 600 : 432), ph = 168;
+    const pw = Math.min(Wi - 16, dc ? Math.max(600, o._dcTitle.width + 48) : 432), ph = 168;
     const px = (Wi - pw) >> 1, py = (Hi - ph) >> 1;
     const g = o._bg;
     g.clear();
