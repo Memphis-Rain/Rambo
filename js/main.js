@@ -466,6 +466,7 @@ function resetRound() {
     sprite.destroy(true);
   }
   chunkCache.clear();
+  clearChunkPlaceholders(); // K2.1
   clearWaterBakes();
   envObjects.length = 0;
   envChunks.clear();

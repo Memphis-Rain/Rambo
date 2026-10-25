@@ -1347,7 +1347,7 @@ function _spWade(ent, X, waterY, cut, s, hw) {
  * bubble and ripples excluded), and waterY = the drawn waterline's screen y
  * while ent.submerge > 0, else null. null when ent is not drawn.
  */
-function spDrawnBounds(ent) {
+function spDrawnBounds(ent, out) { // out: optional result object (no allocation)
   if (!ent) return null;
   const isP2 = ent !== player && ent === _sp.p2Ent;   // M11 K2
   const g = ent === player ? _sp.playerG : isP2 ? _sp.p2G : ent._spG;
@@ -1364,7 +1364,9 @@ function spDrawnBounds(ent) {
     if (Y < y0) y0 = Y;
     if (Y > y1) y1 = Y;
   }
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0, waterY: (ent.submerge || 0) > 0 ? g._waterY : null };
+  const res = out || {};
+  res.x = x0; res.y = y0; res.w = x1 - x0; res.h = y1 - y0; res.waterY = (ent.submerge || 0) > 0 ? g._waterY : null;
+  return res;
 }
 
 // =====================================================================

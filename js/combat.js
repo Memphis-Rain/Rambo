@@ -236,7 +236,7 @@ function updatePlayer(dt, p = player) {
   const lx0 = p.x, ly0 = p.y;
   p.x += p.vx * dt;
   p.y += p.vy * dt;
-  coopApplyLeash(p, lx0, ly0); // M11 K3b: only at COOP_ZOOM_MIN with a partner
+  coopApplyLeash(p, lx0, ly0); // M11 K3b: 2P only, at every zoom (spec 750049d)
 
   // Collision with trees, rocks, boulders
   resolveEnvCollision(p, 10);
@@ -408,7 +408,7 @@ function updatePlayer(dt, p = player) {
         p.recoilT = 0.04;
         p.recoilMag = Math.min(4, 1 + Math.round(wep.kickback / 5));
         p.idleT = 0; p.fidgetT = 0;
-        spawnMuzzleFlash(muzzleX, muzzleY, aim, 0.7 + wep.kickback * 0.06);
+        spawnMuzzleFlash(muzzleX, muzzleY, aim, 0.7 + wep.kickback * 0.06, undefined, p === player ? null : p); // K2.1: P2's own gun tip
         padRumble(Math.min(1, 0.15 + wep.kickback / 25), 0, Math.min(60, 25 + wep.kickback * 2), p); // M10 C4
         if (wep.shellSize > 0) spawnShellCasing(p.x, p.y, aim, wep.shellSize);
 
@@ -1258,6 +1258,7 @@ function hitBarrel(obj, dmg, byPlayer = true) {
       if(pd < 220) damagePlayer(80*(1-pd/220), pl);
     }
     score += 50;
+    if (byPlayer) { const sh = players[dmgBy] || player; if (sh) sh.score += 50; } // M11 K6: the shooter's panel
   }
 }
 

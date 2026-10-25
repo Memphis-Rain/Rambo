@@ -384,6 +384,7 @@ function _envTopple(r, ux, uy, delay, byPlayer) {
   r.fallDelay = delay; // shock front; E8 stagger is added when it gets a slot
   r.snapped = false;   // the trunk snaps (stump-only collision) when the fall starts
   r.byPlayer = !!byPlayer;
+  r.by = byPlayer ? dmgBy : 0; // M11 K6: whose fall it is (kill credit)
   r.logLen = Math.max(20, (r.height || 50) * CFG.ENV_LOG_LEN);
   if (!_envActivateTopple(r) && !r.queued) { r.queued = true; _envQueue.push(r); }
 }
@@ -474,8 +475,10 @@ function _envLand(r) {
       const side = (e.x - r.x) * -uy + (e.y - r.y) * ux;
       const ang = Math.atan2(side >= 0 ? ux : -ux, side >= 0 ? -uy : uy);
       envNoCredit = !r.byPlayer;
+      dmgBy = r.by || 0;
       damageEnemy(e, CFG.ENV_FALL_ENEMY_DMG, ang, SRC_BULLET);
       envNoCredit = false;
+      dmgBy = 0;
     }
   }
   const pr = rr + 10;
@@ -619,8 +622,9 @@ function envFlameHeat(o) {
   if (!r.heating) { r.heating = true; _envHeating.push(r); }
 }
 
-function _envIgniteTree(r) {
+function _envIgniteTree(r, by = dmgBy) {
   if (_envBurning.length >= CFG.TREE_BURN_MAX) return false;
+  r.fireBy = by; // M11 K6: whose fire (spread keeps it)
   r.fire = CFG.TREE_BURN_S * randRange(0.9, 1.1);
   r.heat = 1; r.spreadT = 0;
   _envBurning.push(r);
@@ -673,7 +677,7 @@ function _updateEnvFire(dt) {
           if (k !== ENVK_TREE && k !== ENVK_DEAD) continue;
           const q = o._envAt === _envEpoch ? o._env : envObjState(o);
           if (q === r || (q && (q.fire > 0 || q.charred || (q.state !== 'standing' && q.state !== 'scorched')))) continue;
-          if (Math.random() < pStep) _envIgniteTree(_envRecord(o));
+          if (Math.random() < pStep) _envIgniteTree(_envRecord(o), r.fireBy || 0);
         }
       }
       // enemies under the canopy burn
@@ -683,9 +687,11 @@ function _updateEnvFire(dt) {
         if (e.dead) continue;
         const dx = e.x - r.x, dy = e.y - r.y;
         if (dx * dx + dy * dy > cr * cr) continue;
-        igniteEnemy(e);
+        igniteEnemy(e, e.burnT > 0 ? e.burnBy || 0 : r.fireBy || 0); // M11 K6
         e.hp -= CFG.CANOPY_FIRE_DPS * dt;
+        dmgBy = e.burnBy || 0;
         if (e.hp <= 0) killEnemy(e, Math.atan2(dy, dx), SRC_FIRE);
+        dmgBy = 0;
       }
       if (r.fire > 0) continue;
       _envBurnOut(r);

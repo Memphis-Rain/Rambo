@@ -158,7 +158,7 @@ function _updateFlames(dt) {
       const tree = o.type === 'tree' || o.type === 'pine' || o.type === 'deadtree';
       if (tree && o.radius) {
         const cx = f.x - o.x, cy = f.y - o.y, cr = o.radius * 0.6;
-        if (cx * cx + cy * cy < cr * cr) envFlameHeat(o);
+        if (cx * cx + cy * cy < cr * cr) { dmgBy = f.by; envFlameHeat(o); dmgBy = 0; } // M11 K6: whose tree fire
       }
       const hr = envBulletRadius(o);
       if (!hr || len2 === 0) continue;
@@ -182,7 +182,7 @@ function _updateFlames(dt) {
         igniteEnemy(nearE, f.by);
       } else {
         const tt = nearO.type;
-        if (tt === 'tree' || tt === 'pine' || tt === 'deadtree') envFlameHeat(nearO);
+        if (tt === 'tree' || tt === 'pine' || tt === 'deadtree') { dmgBy = f.by; envFlameHeat(nearO); dmgBy = 0; }
       }
       flames.splice(i, 1); _flameFree.push(f);
       continue;

@@ -238,6 +238,7 @@ function generatePixiChunk(cx, cy) {
   chunkSprite.y = chunkOrigin.y;
 
   // Cache the sprite
+  chunkSprite._cx = cx; chunkSprite._cy = cy;
   chunkCache.set(key, chunkSprite);
 
   // Add to terrain container
@@ -367,6 +368,32 @@ function baseOnWater(x, y, r) {
   return false;
 }
 
+// K2.1: zoomed out, at most this many chunks bake per frame even on screen;
+// the rest show a flat placeholder diamond until their turn
+const TERRAIN_ZOOM_BAKES = 2;
+const _chunkPh = new Map(); // key -> placeholder Graphics
+function _chunkPlaceholder(cx, cy, key, cs) {
+  if (_chunkPh.has(key)) return;
+  const iso = CFG.ISO_SCALE, x0 = cx * cs, y0 = cy * cs, x1 = x0 + cs, y1 = y0 + cs;
+  const g = new PIXI.Graphics();
+  g.poly([x0 - y0, (x0 + y0) * iso, x1 - y0, (x1 + y0) * iso, x1 - y1, (x1 + y1) * iso, x0 - y1, (x0 + y1) * iso]).fill(0x56683a);
+  g._cx = cx; g._cy = cy;
+  terrainContainer.addChildAt(g, 0);
+  _chunkPh.set(key, g);
+}
+// all of them (zoom back to 1, round reset)
+function clearChunkPlaceholders() {
+  for (const g of _chunkPh.values()) { terrainContainer.removeChild(g); g.destroy(); }
+  _chunkPh.clear();
+}
+function _chunkPlaceholderDrop(key) {
+  const g = _chunkPh.get(key);
+  if (!g) return;
+  terrainContainer.removeChild(g);
+  g.destroy();
+  _chunkPh.delete(key);
+}
+
 // M11 K3a: does chunk (cx, cy)'s screen box come within `m` (zoom-1 iso
 // units) of the zoomed view? (a chunk is a diamond 2cs wide, 2cs x iso tall)
 function _chunkNearView(cx, cy, cs, m) {
@@ -391,6 +418,11 @@ function renderPixiTerrain() {
   // the screen and always bakes; the outer ring is pre-baked off-screen
   // within a per-frame budget, so walking never bakes a whole row at once
   const t0 = performance.now();
+  let baked = 0;
+  if (_chunkPh.size) { // placeholders: none at zoom 1; drop those far off the zoomed view
+    if (!zoomed) clearChunkPlaceholders();
+    else for (const [k, g] of _chunkPh) if (!_chunkNearView(g._cx, g._cy, cs, cs * 1.5)) _chunkPlaceholderDrop(k);
+  }
   bake:
   for (let ring = 0; ring <= chunkRange; ring++) {
     for (let cy = pcy - ring; cy <= pcy + ring; cy++) {
@@ -398,7 +430,15 @@ function renderPixiTerrain() {
         if (Math.max(Math.abs(cx - pcx), Math.abs(cy - pcy)) !== ring) continue;
         if (zoomed) {
           if (!_chunkNearView(cx, cy, cs, cs * 0.5)) continue;
-          if (ring > 1 && !_chunkNearView(cx, cy, cs, 0) && performance.now() - t0 > TERRAIN_BAKE_BUDGET_MS) continue;
+          const onScreen = _chunkNearView(cx, cy, cs, 0);
+          if (ring > 1 && !onScreen && performance.now() - t0 > TERRAIN_BAKE_BUDGET_MS) continue;
+          const key = `${cx},${cy}`;
+          if (chunkCache.has(key)) continue;
+          if (baked >= TERRAIN_ZOOM_BAKES) { if (onScreen) _chunkPlaceholder(cx, cy, key, cs); continue; }
+          baked++;
+          generatePixiChunk(cx, cy);
+          _chunkPlaceholderDrop(key);
+          continue;
         } else if (ring > 1 && performance.now() - t0 > TERRAIN_BAKE_BUDGET_MS) break bake;
         generatePixiChunk(cx, cy);
       }
@@ -413,7 +453,7 @@ function renderPixiTerrain() {
     const dropped = _droppedChunkKeys;
     dropped.clear();
     for (const [key, sprite] of chunkCache) {
-      const [cx2, cy2] = key.split(',').map(Number);
+      const cx2 = sprite._cx, cy2 = sprite._cy; // K2.1: stored at bake (no per-frame key parsing)
       const far = zoomed ? !_chunkNearView(cx2, cy2, cs, cs * 1.5)
         : Math.abs(cx2 - pcx) > chunkRange + 2 || Math.abs(cy2 - pcy) > chunkRange + 2;
       if (far) {
