@@ -40,7 +40,10 @@ function withMain(game) {
   for (const k of ['app', 'renderer', 'stage', 'worldContainer', 'terrainContainer', 'effectsContainer', 'uiContainer']) {
     if (!gg[k]) gg[k] = gg.PIXI;
   }
-  run(`${mainFunction('updateCamera')}
+  // main.js's one-line private state (e.g. K3's _camMid) that the extracted functions use
+  const priv = [...MAIN_SRC.matchAll(/^(?:const|let) (_\w+ = [^\n]*;)$/gm)].map((m) => `var ${m[1]}`).join('\n');
+  run(`${priv}
+${mainFunction('updateCamera')}
 ${mainFunction('addShake')}
 var updateNotification = typeof updateNotification === 'function' ? updateNotification : function () {};
 var __m11Update = (function () { return ${mainFunction('update')}; })();`);
@@ -144,11 +147,6 @@ function dummy(x, y, { hp = 1e9 } = {}) {
   e.vx = 0; e.vy = 0; e.speed = 0; e.fireTimer = 1e9;
   e.hp = e.maxHp = hp; e.shieldHp = e.maxShieldHp = 0;
   return e;
-}
-/** Screen position (low-res px) of world point (x, y) relative to the view centre at the live zoom. */
-function lowResFromCentre(x, y) {
-  const s = g.toScreen(x, y), z = H.zoom().zoom, ps = g.RETRO.PIXEL_SCALE;
-  return { x: ((s.x - g.cam.x) * z) / ps, y: ((s.y - g.cam.y) * z) / ps };
 }
 /** A bullet shaped like updatePlayer's / updateEnemies' (by: shooter index, players only). */
 function shot(x, y, vx, vy, { dmg = 30, owner = 'player', by = 0 } = {}) {
@@ -365,12 +363,12 @@ describe('M11 K2 join and devices', () => {
     const [p1, p2] = H.players();
     const fresh = g.createPlayer();
     expect(Math.hypot(p2.x - p1.x, p2.y - p1.y), 'next to P1').toBeLessThan(120);
-    expect(p2.hp).toBe(100);
+    expect(p2.hp, 'full HP (spec: 100 HP; PLAYER_MAX_HP is 800)').toBe(p2.maxHp);
     expect(p2.weapon).toBe(3);
     expect(p2.magAmmo).toBe(g.WEAPONS[3].mag);
     expect(p2.grenades).toBe(fresh.grenades);
     expect(p2).not.toBe(p1);
-    expect(p1.hp, 'P1 untouched').toBe(40);
+    expect(p1.hp, 'P1 untouched (bar regen)').toBeCloseTo(40, 0);
     expect(p1.grenades).toBe(1);
   });
 
@@ -406,14 +404,15 @@ describe('M11 K2 join and devices', () => {
   test.skipIf(todo)('K2: each pad drives only its own player (move, aim, fire); padOf/padAimOf are per player', () => {
     const [p1, p2] = twoPads();
     place(p1, 0, 0); place(p2, 0, 200);
-    const a = { x: p1.x, y: p1.y }, b = { x: p2.x, y: p2.y };
+    frame();
+    const a = { x: p1.x, y: p1.y }, b = { x: p2.x, y: p2.y }, aim1 = { ...H.aimOf(0) };
     rig.axes(1, 1, 0, 0, 1); frame(30);
     expect(Math.hypot(p2.x - b.x, p2.y - b.y), 'P2 moved').toBeGreaterThan(20);
     expect(Math.hypot(p1.x - a.x, p1.y - a.y), 'P1 did not').toBeLessThan(1);
     expect(H.padOf(1).lmag).toBeGreaterThan(0);
     expect(H.padOf(0).lmag).toBe(0);
     expect(H.aimOf(1).has).toBe(true);
-    expect(H.aimOf(0).has).toBe(false);
+    expect({ ...H.aimOf(0) }, 'P1 aim untouched by pad 1').toEqual(aim1);
     rig.axes(1, 0, 0); frame();
     g.bullets.length = 0;
     p2.fireTimer = 0; p2.magAmmo = g.WEAPONS[p2.weapon].mag; p2.reloading = false;
@@ -427,6 +426,8 @@ describe('M11 K2 join and devices', () => {
   test.skipIf(todo)('K2: aim assist is per pad: an enemy 4.3 deg off the P2 aim bends only the P2 shot', () => {
     const [p1, p2] = twoPads();
     place(p1, 0, 0); place(p2, 0, 300);
+    frame();
+    const aim1 = { ...H.aimOf(0) };
     rig.axes(1, 0, 0, 1, 0); frame(3); // P2 aims screen-right with the right stick
     const d = H.aimOf(1), off = 4.3 * Math.PI / 180;
     const e = dummy(p2.x + (d.dirX * Math.cos(off) - d.dirY * Math.sin(off)) * 250, p2.y + (d.dirX * Math.sin(off) + d.dirY * Math.cos(off)) * 250);
@@ -436,7 +437,7 @@ describe('M11 K2 join and devices', () => {
     const b = g.bullets.find((q) => q.owner === 'player' && q.by === 1);
     const want = Math.atan2(e.y - p2.y, e.x - p2.x), got = Math.atan2(b.vy, b.vx);
     expect(Math.abs(Math.atan2(Math.sin(got - want), Math.cos(got - want))), 'assisted onto the enemy (within pistol spread)').toBeLessThan(g.WEAPONS[0].spread + 0.01);
-    expect(H.aimOf(0).has, 'P1 aim untouched').toBe(false);
+    expect({ ...H.aimOf(0) }, 'P1 aim untouched').toEqual(aim1);
   });
 
   test.skipIf(todo)('K2/C4: rumble goes only to the pad of the player concerned (shots, damage, blasts)', () => {
@@ -470,7 +471,7 @@ describe('M11 K2 join and devices', () => {
     expect(g.paused).toBe(false);
     rig.disconnect(1); frame();
     expect(g.paused).toBe(true);
-    expect(banners().concat(g.padStats().lastToast || []).join('\n')).toMatch(/P2 CONTROLLER DISCONNECTED/);
+    expect(g.padState().disconnectWho, 'the overlay names P2 (pixi-hud.js: "P2 CONTROLLER DISCONNECTED")').toBe(2);
     expect(H.players()).toContain(p2);
   });
 });
@@ -481,8 +482,10 @@ describe('M11 K2 join and devices', () => {
 describe('M11 K3 camera, zoom and leash', () => {
   beforeEach(setup);
   const todo = !LANDED.K3;
-  /** 2P without pads (coopJoin): enough for the camera and zoom, which read players[]. */
+  /** 2P via coopJoin (no join press): enough for the camera and zoom, which read players[]. P2's
+   * pad must be plugged in, or the next poll auto-pauses for it (K2/C6). */
   const twoUp = () => {
+    rig.connect(1); frame();
     const p2 = H.join(1);
     if (!p2) throw new Error('coopJoin returned null');
     const [p1] = H.players();
@@ -496,9 +499,11 @@ describe('M11 K3 camera, zoom and leash', () => {
     const v = viewLowRes(), z = C().COOP_ZOOM_MIN, m = C().COOP_LEASH_PX, d = lowRes(a.x - b.x, a.y - b.y);
     return Math.abs(d.x) * z <= v.w - 2 * m + slack && Math.abs(d.y) * z <= v.h - 2 * m + slack;
   };
-  /** Screen-x separation (CSS px at zoom 1) at the leash limit. */
-  const limitCss = () => ((viewLowRes().w - 2 * C().COOP_LEASH_PX) / C().COOP_ZOOM_MIN) * g.RETRO.PIXEL_SCALE;
-  const cssW = (f) => viewLowRes().w * f * g.RETRO.PIXEL_SCALE;
+  // Separations below are screen-x, in low-res px at zoom 1 (what screenRight() takes).
+  /** The separation at the leash limit. */
+  const limitLow = () => (viewLowRes().w - 2 * C().COOP_LEASH_PX) / C().COOP_ZOOM_MIN;
+  /** A fraction of the view width. */
+  const lowW = (f) => viewLowRes().w * f;
 
   test.skipIf(todo)('K3a: CFG defaults (spec K3a/K3b; rates are linear, in zoom units per second)', () => {
     expect(C()).toMatchObject({ COOP_ZOOM_MIN: 0.6, COOP_ZOOM_MARGIN: 64, COOP_ZOOM_OUT_RATE: 3, COOP_ZOOM_IN_RATE: 1, COOP_ZOOM_DEADBAND: 0.05, COOP_LEASH_PX: 48 });
@@ -529,7 +534,7 @@ describe('M11 K3 camera, zoom and leash', () => {
   });
 
   test.skipIf(todo)('K3a: coopZoomTarget (pure) is clamped at 0.6 however far apart', () => {
-    const v = viewLowRes(), h = findHome(), r = screenRight(cssW(3));
+    const v = viewLowRes(), h = findHome(), r = screenRight(lowW(3));
     expect(g.coopZoomTarget([{ x: h.x, y: h.y }, { x: h.x + r.dx, y: h.y + r.dy }], v.w, v.h)).toBe(0.6);
   });
 
@@ -551,7 +556,7 @@ describe('M11 K3 camera, zoom and leash', () => {
 
   test.skipIf(todo)('K3a: camZoom().target is the K3a target of the players, live', () => {
     const [p1, p2] = twoUp();
-    const r = screenRight(cssW(0.9));
+    const r = screenRight(lowW(0.9));
     place(p1, 0, 0); place(p2, r.dx, r.dy);
     frame();
     expect(H.zoom().target).toBeCloseTo(expectedZoom([p1, p2]), 6);
@@ -560,7 +565,7 @@ describe('M11 K3 camera, zoom and leash', () => {
 
   test.skipIf(todo)('K3a: zooming out is linear at COOP_ZOOM_OUT_RATE (3/s) down to the target, never past it', () => {
     const [p1, p2] = twoUp();
-    const r = screenRight(cssW(1.4));
+    const r = screenRight(lowW(1.4));
     place(p1, 0, 0); place(p2, r.dx, r.dy);
     frame();
     const target = H.zoom().target;
@@ -578,9 +583,9 @@ describe('M11 K3 camera, zoom and leash', () => {
 
   test.skipIf(todo)('K3a: zoom-in deadband: held while the target is < 5% above the zoom; at >= 5% it zooms in linearly at COOP_ZOOM_IN_RATE (1/s)', () => {
     const [p1, p2] = twoUp();
-    const v = viewLowRes(), ps = g.RETRO.PIXEL_SCALE;
-    const sepFor = (z) => ((v.w - 128) / z) * ps; // CSS separation whose fit is exactly z
-    const sep = (css) => { const r = screenRight(css); place(p1, 0, 0); place(p2, r.dx, r.dy); };
+    const v = viewLowRes();
+    const sepFor = (z) => (v.w - 128) / z; // the separation whose fit is exactly z
+    const sep = (low) => { const r = screenRight(low); place(p1, 0, 0); place(p2, r.dx, r.dy); };
     sep(sepFor(0.7)); seconds(1);
     const z0 = H.zoom().zoom;
     expect(z0).toBeCloseTo(0.7, 6);
@@ -597,12 +602,12 @@ describe('M11 K3 camera, zoom and leash', () => {
 
   test.skipIf(todo)('K3a: back together the zoom returns to exactly 1.0, also from inside the deadband of 1', () => {
     const [p1, p2] = twoUp();
-    const near = screenRight(((viewLowRes().w - 128) / 0.97) * g.RETRO.PIXEL_SCALE); // fit 0.97: within 5% of 1
+    const near = screenRight((viewLowRes().w - 128) / 0.97); // fit 0.97: within 5% of 1
     place(p1, 0, 0); place(p2, near.dx, near.dy); seconds(1);
     expect(H.zoom().zoom).toBeCloseTo(0.97, 6);
     place(p2, 40, 0); seconds(1);
     expect(H.zoom()).toMatchObject({ zoom: 1, target: 1 });
-    const far = screenRight(cssW(3));
+    const far = screenRight(lowW(3));
     place(p2, far.dx, far.dy); seconds(1);
     expect(H.zoom().zoom).toBe(C().COOP_ZOOM_MIN);
     place(p2, 40, 0); seconds(1);
@@ -627,7 +632,7 @@ describe('M11 K3 camera, zoom and leash', () => {
 
   test.skipIf(todo)('K3a: dead players do not count for the midpoint or the zoom; downed players do', () => {
     const [p1, p2] = twoUp();
-    const r = screenRight(cssW(1));
+    const r = screenRight(lowW(1));
     place(p1, 0, 0); place(p2, r.dx, r.dy);
     p2.state = 'dead'; frame();
     const s1 = g.toScreen(p1.x, p1.y);
@@ -651,7 +656,7 @@ describe('M11 K3 camera, zoom and leash', () => {
   test.skipIf(todo)('K3b: coopLeashClamp (pure): an outward move is cut at the leash limit; inward and still moves are untouched', () => {
     const v = viewLowRes(), z = C().COOP_ZOOM_MIN, m = C().COOP_LEASH_PX, h = findHome();
     const other = { x: h.x, y: h.y };
-    const r0 = screenRight(limitCss() - 10), r1 = screenRight(limitCss() + 30), rin = screenRight(limitCss() - 40);
+    const r0 = screenRight(limitLow() - 10), r1 = screenRight(limitLow() + 30), rin = screenRight(limitLow() - 40);
     const mover = { x: h.x + r0.dx, y: h.y + r0.dy };
     const out = { x: 0, y: 0 };
     g.coopLeashClamp(mover, other, h.x + r1.dx, h.y + r1.dy, out);
@@ -666,7 +671,7 @@ describe('M11 K3 camera, zoom and leash', () => {
   test.skipIf(todo)('K3b: coopLeashClamp (pure): a player knocked past the leash is not yanked back; outward is cut, inward is free', () => {
     const h = findHome();
     const other = { x: h.x, y: h.y };
-    const rk = screenRight(limitCss() + 100), rOut = screenRight(limitCss() + 120), rIn = screenRight(limitCss() + 80);
+    const rk = screenRight(limitLow() + 100), rOut = screenRight(limitLow() + 120), rIn = screenRight(limitLow() + 80);
     const mover = { x: h.x + rk.dx, y: h.y + rk.dy };
     const out = { x: 0, y: 0 };
     const sep = (q) => Math.abs(lowRes(q.x - other.x, q.y - other.y).x);
@@ -682,7 +687,7 @@ describe('M11 K3 camera, zoom and leash', () => {
   test.skipIf(todo)('K3b: coopLeashClamp (pure): a move along the limit keeps its screen-down part', () => {
     const h = findHome();
     const other = { x: h.x, y: h.y };
-    const r = screenRight(limitCss() - 1);
+    const r = screenRight(limitLow() - 1);
     const mover = { x: h.x + r.dx, y: h.y + r.dy };
     const out = { x: 0, y: 0 };
     const down = 20 / (2 * C().ISO_SCALE), rr = screenRight(30); // 20 CSS px screen-down, 30 screen-right
@@ -695,7 +700,7 @@ describe('M11 K3 camera, zoom and leash', () => {
     rig.connect(0); frame(); tap(0, BTN.BACK);
     const [p1, p2] = H.players();
     p1.invincible = p2.invincible = 1e9;
-    const r = screenRight(cssW(0.6));
+    const r = screenRight(lowW(0.6));
     place(p1, 0, 0); place(p2, r.dx, r.dy); seconds(1);
     expect(H.zoom().zoom).toBeGreaterThan(C().COOP_ZOOM_MIN + 0.1);
     const at = { x: p2.x, y: p2.y };
@@ -709,20 +714,27 @@ describe('M11 K3 camera, zoom and leash', () => {
     p1.invincible = p2.invincible = 1e9;
     place(p1, 0, 0); place(p2, 40, -40);
     rig.axes(0, 1, 0); // P2 runs screen-right for 10 s
+    // Smallest margin to the view edge, low-res px, against the camera target (the midpoint the
+    // leash math assumes) and against the drawn camera (cam.x/y, which eases toward the target).
     let atMin = 0;
+    const worst = { target: { m: Infinity }, drawn: { m: Infinity } };
     for (let i = 0; i < 600; i++) {
       frame();
       if (H.zoom().zoom > C().COOP_ZOOM_MIN + 1e-6) continue;
       atMin++;
-      const v = viewLowRes();
+      const v = viewLowRes(), z = H.zoom().zoom, ps = g.RETRO.PIXEL_SCALE;
       for (const p of [p1, p2]) {
-        const s = lowResFromCentre(p.x, p.y);
-        expect(v.w / 2 - Math.abs(s.x), `frame ${i}: x margin`).toBeGreaterThanOrEqual(C().COOP_LEASH_PX - 1);
-        expect(v.h / 2 - Math.abs(s.y), `frame ${i}: y margin`).toBeGreaterThanOrEqual(C().COOP_LEASH_PX - 1);
+        const s = g.toScreen(p.x, p.y);
+        for (const [k, cx, cy] of [['target', g.cam.tx, g.cam.ty], ['drawn', g.cam.x, g.cam.y]]) {
+          const m = Math.min(v.w / 2 - Math.abs(((s.x - cx) * z) / ps), v.h / 2 - Math.abs(((s.y - cy) * z) / ps));
+          if (m < worst[k].m) worst[k] = { m, frame: i, who: p === p1 ? 'P1' : 'P2' };
+        }
       }
     }
     rig.axes(0, 0, 0);
     expect(atMin, 'frames at max zoom-out').toBeGreaterThan(100);
+    expect(worst.target.m, `margin vs the camera target: ${JSON.stringify(worst.target)}`).toBeGreaterThanOrEqual(C().COOP_LEASH_PX - 0.01);
+    expect(worst.drawn.m, `margin vs the drawn (eased) camera: ${JSON.stringify(worst.drawn)}`).toBeGreaterThanOrEqual(C().COOP_LEASH_PX - 0.01);
     const d0 = Math.hypot(p2.x - p1.x, p2.y - p1.y);
     rig.axes(0, -1, 0); frame(20); rig.axes(0, 0, 0);
     expect(Math.hypot(p2.x - p1.x, p2.y - p1.y), 'moving back is free').toBeLessThan(d0 - 20);
@@ -828,7 +840,7 @@ describe('M11 K5 down, revive and team second wind', () => {
     g.waveActive = false; g.waveTimer = 0;
     frame(2);
     expect(p2.state).toBe('up');
-    expect(p2.hp).toBe(100);
+    expect(p2.hp, 'full HP (spec: 100 HP; PLAYER_MAX_HP is 800)').toBe(p2.maxHp);
     expect(Math.hypot(p2.x - p1.x, p2.y - p1.y)).toBeLessThan(120);
   });
 
