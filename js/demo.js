@@ -528,10 +528,26 @@ function _demoBot(dt) {
     else _dB.huntT += dt;
   } else { _dB.huntBest = Infinity; _dB.huntT = 0; }
   const wade = _dB.huntT > 4;
+  // K7 (spec 0b04d96): a DOWN partner -> get into revive range and hold there
+  // until the revive completes, still aiming and firing; give up only below
+  // 25% of our own HP. 2P only (rv stays null in 1P: nothing below changes)
+  let rv = null, rvD = Infinity;
+  if (players.length > 1 && p.hp >= p.maxHp * 0.25) {
+    for (let i = 0; i < players.length; i++) {
+      const q = players[i];
+      if (q && q !== p && q.state === 'down') { rv = q; rvD = dist(p.x, p.y, q.x, q.y); }
+    }
+  }
+  const rvHold = rv !== null && rvD < (_dB.rvIn ? 42 : 28); // inside COOP_REVIVE_RANGE (50u), with hysteresis
+  _dB.rvIn = rvHold;
+  if (rv !== null && !rvHold) {
+    wantX = (rv.x - p.x) / (rvD || 1); wantY = (rv.y - p.y) / (rvD || 1); wantW = 3.2;
+    leash = 0;
+  }
   const oX = dO > 0 ? (_dB.originX - p.x) / dO : 0, oY = dO > 0 ? (_dB.originY - p.y) / dO : 0;
 
   let pk = null, pkD = Infinity;
-  if (p.hp < p.maxHp * 0.4) {
+  if (p.hp < p.maxHp * 0.4 && rv === null) {
     for (const k of pickups) {
       if (k.type !== 'health') continue;
       const d = dist(p.x, p.y, k.x, k.y);
@@ -645,7 +661,7 @@ function _demoBot(dt) {
 
   // --- Dodge roll (melee in range, bomber close, or a bullet about to hit) ---
   let dodgeX = 0, dodgeY = 0, wantDodge = false;
-  if (!p.dodging && p.dodgeCooldown <= 0 && _dB.dodgeLock <= 0) {
+  if (!p.dodging && p.dodgeCooldown <= 0 && _dB.dodgeLock <= 0 && !rvHold) { // K7: no roll out of revive range
     if (nearestMelee) {
       const t = ENEMY_TYPES[nearestMelee.type];
       const trig = t.explodeOnDeath ? 90 : nearestMelee.range + 18;
@@ -698,6 +714,10 @@ function _demoBot(dt) {
   _dC.keys['w'] = mv.w; _dC.keys['a'] = mv.a; _dC.keys['s'] = mv.s; _dC.keys['d'] = mv.d;
   _dC.keys['shift'] = !!pk || dO > DEMO_LEASH + 150 || (nearestMelee !== null && nearestMeleeD < 110) ||
     (tgt !== null && !tgtVisible && tgtD > 500 && dO < DEMO_LEASH);
+  if (rv !== null) { // K7: run to the downed partner; stand still once in range
+    if (rvHold) { _dC.keys['w'] = _dC.keys['a'] = _dC.keys['s'] = _dC.keys['d'] = false; _dC.keys['shift'] = false; }
+    else if (rvD > 120) _dC.keys['shift'] = true;
+  }
 
   // --- Aim: lead the target + smoothed human jitter ---
   _dB.jitterTimer -= dt;
