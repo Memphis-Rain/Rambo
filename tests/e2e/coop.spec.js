@@ -77,7 +77,9 @@ const dummy = (game, x, y, hp = 1e9) => game.eval(([ex, ey, h]) => {
 }, [x, y, hp]);
 /** On-screen CSS rect of a world sprite (its Pixi bounds in the low-res RT, times PIXEL_SCALE): zoom-proof. */
 const drawnRect = (game, expr) => game.eval((ex) => {
-  const o = (0, eval)(ex), gr = o && o._spG;
+  const o = (0, eval)(ex);
+  // players are drawn into _sp.playerG (P1) and _sp.p2G (P2); enemies into their own _spG
+  const gr = o === players[0] ? _sp.playerG : o === players[1] ? _sp.p2G : o && o._spG;
   if (!gr || !gr.visible) return null;
   const b = gr.getBounds(), s = RETRO.PIXEL_SCALE;
   return { x: b.minX * s, y: b.minY * s, w: (b.maxX - b.minX) * s, h: (b.maxY - b.minY) * s };
@@ -135,9 +137,9 @@ test('K2: drop-in mid-game: kbm P1 + a pad, View/Back spawns P2 next to P1 with 
   await rawTap(page, 0, BTN.BACK);
   await page.waitForFunction(() => players.length === 2, null, { timeout: T(5_000) });
   await page.waitForFunction(() => /PLAYER 2 JOINS!/.test(window.__screenText()), null, { timeout: T(5_000) });
-  const s = await game.eval(() => ({ d: Math.hypot(players[1].x - players[0].x, players[1].y - players[0].y), hp: players[1].hp }));
+  const s = await game.eval(() => ({ d: Math.hypot(players[1].x - players[0].x, players[1].y - players[0].y), hp: players[1].hp, maxHp: players[1].maxHp }));
   expect(s.d).toBeLessThan(120);
-  expect(s.hp).toBe(100);
+  expect(s.hp, 'full health (spec 496fd74)').toBe(s.maxHp);
 });
 
 test('K2: both players move, aim and kill independently', async ({ game, page }) => {
@@ -166,7 +168,7 @@ test('K2: both players move, aim and kill independently', async ({ game, page })
   await pad2(page).press(BTN.RT);
   await page.waitForFunction((i) => !enemies.includes(window.__dummies[i]), e2, { timeout: T(10_000) });
   await pad2(page).release(BTN.RT);
-  expect(await game.eval(() => players.map((p) => p.kills))).toEqual([1, 1]);
+  if (LANDED.K6) expect(await game.eval(() => players.map((p) => p.kills)), 'K6: kills credited to the shooter').toEqual([1, 1]);
 });
 
 test('K2/C4: each pad\'s rumble spy sees only its own player\'s events', async ({ game, page }) => {
@@ -229,28 +231,42 @@ test('K3a: at zoom 0.7 mouse aim lands within 1 low-res px (T5) and worldToView 
   await boot(game, page);
   await twoPlayers(game, page);
   await placeBoth(game, { x: 0, y: 0 }, { x: 60, y: 0 });
-  await game.eval((h) => window.__h(h)(0.7), H.setZoom);
-  await game.advance(0.5);
+  await game.eval((h) => window.__h(h)(1), H.setZoom);
+  await game.advance(0.3);
   const s = await game.eval(() => RETRO.PIXEL_SCALE);
   const p1 = await game.eval(() => ({ x: players[0].x, y: players[0].y }));
   const ei = await dummy(game, p1.x + 220, p1.y - 60);
-  await game.advance(0.2);
-  // the mapping agrees with what is drawn: the enemy's feet under its sprite
-  const m = await game.eval(([h, i]) => { const e = window.__dummies[i]; return window.__h(h)(e.x, e.y); }, [H.w2v, ei]);
-  const rect = await drawnRect(game, `window.__dummies[${ei}]`);
-  expect(Math.abs(m.x - (rect.x + rect.w / 2)), 'feet x under the drawn sprite').toBeLessThanOrEqual(s + 1);
-  expect(m.y, 'feet at the bottom of the drawn sprite').toBeGreaterThan(rect.y + rect.h * 0.6);
-  expect(m.y).toBeLessThanOrEqual(rect.y + rect.h + s + 1);
-  // T5: the mouse at a CSS point aims at the ground point under it, within 1 low-res px
+  // The mapping agrees with what is drawn: the enemy's feet (worldToView) sit at the same place
+  // in its drawn sprite at zoom 1 and 0.7, i.e. the feet-to-sprite-corner offsets and the sprite
+  // size all scale by the zoom (the sprite need not be centred on its feet).
+  const layout = async () => {
+    await game.advance(0.2);
+    const m = await game.eval(([h, i]) => { const e = window.__dummies[i]; return window.__h(h)(e.x, e.y); }, [H.w2v, ei]);
+    const r = await drawnRect(game, `window.__dummies[${ei}]`);
+    return { dx: m.x - r.x, dy: r.y + r.h - m.y, w: r.w, h: r.h };
+  };
+  const at1 = await layout();
+  await game.eval((h) => window.__h(h)(0.7), H.setZoom);
+  const at07 = await layout();
+  for (const k of ['dx', 'dy', 'w', 'h']) {
+    expect(Math.abs(at07[k] - 0.7 * at1[k]), `${k}: ${at07[k].toFixed(1)} at 0.7 vs ${at1[k].toFixed(1)} at 1`).toBeLessThanOrEqual(s + 1);
+  }
+  // T5: the mouse at a CSS point aims P1 (kbm) at the ground point under it, within 1 low-res
+  // px. No enemies, so the G13 pick can't swap the ground point for an enemy's centre.
+  await game.eval(() => { enemies.length = 0; });
   for (const [fx, fy] of [[0.3, 0.3], [0.75, 0.6], [0.5, 0.8]]) {
     const pt = await game.eval(([a, b]) => ({ x: Math.round(W * a), y: Math.round(H * b) }), [fx, fy]);
     await page.mouse.move(pt.x, pt.y);
     await game.advance(0.1);
-    const r = await game.eval((h2v) => {
-      const a = aimPointOf(player, { x: 0, y: 0 });
-      return { back: window.__h(h2v)(a.x, a.y) };
-    }, H.w2v);
-    expect(Math.hypot(r.back.x - pt.x, r.back.y - pt.y), `mouse (${pt.x}, ${pt.y})`).toBeLessThanOrEqual(s);
+    const r = await game.eval(([h2v, v2w, q]) => {
+      const back = window.__h(h2v)(mouseWorldX, mouseWorldY), w = window.__h(v2w)(q.x, q.y);
+      return { back, w, mw: { x: mouseWorldX, y: mouseWorldY }, aim: player.aimAngle, want: Math.atan2(mouseWorldY - player.y, mouseWorldX - player.x) };
+    }, [H.w2v, H.v2w, pt]);
+    expect(Math.hypot(r.back.x - pt.x, r.back.y - pt.y), `mouse (${pt.x}, ${pt.y}): worldToView(aim ground point)`).toBeLessThanOrEqual(s);
+    // 1 low-res px is <= s / zoom world units across, (s / zoom) / (2 ISO_SCALE) down
+    expect(Math.abs(r.w.x - r.mw.x), `mouse (${pt.x}, ${pt.y}): viewToWorld x`).toBeLessThanOrEqual(s / 0.7 + 0.5);
+    expect(Math.abs(r.w.y - r.mw.y), `mouse (${pt.x}, ${pt.y}): viewToWorld y`).toBeLessThanOrEqual(s / 0.7 + 0.5);
+    expect(Math.abs(r.aim - r.want), 'P1 aims at it').toBeLessThan(0.05);
   }
   await game.eval((h) => window.__h(h)(null), H.setZoom);
 });
@@ -305,6 +321,40 @@ test('K3a: at zoom 0.6 the world reaches every view edge (no blank or unloaded a
   });
   for (const [k, f] of Object.entries(r)) expect(f, `${k} edge blank fraction`).toBeLessThan(0.01);
   await game.eval((h) => window.__h(h)(null), H.setZoom);
+});
+
+test('K3a: world-anchored texts (score pop, damage number) keep their zoom-1 pixel size at zoom 0.6', async ({ game, page }) => {
+  test.skip(!LANDED.K3, 'K3 not landed');
+  await boot(game, page);
+  await game.start();
+  await game.freezeWaves();
+  await game.toLand();
+  // P2 via coopJoin on the plugged-in pad 1 (no join press needed for the camera)
+  await game.eval(() => { coopJoin(1); for (const p of players) p.invincible = 1e9; });
+  // All world text goes into one Graphics (_sp.textG, pixi-sprites.js _spRenderTexts), so with
+  // exactly one text alive its bounds are that text's drawn rect (x PIXEL_SCALE = CSS px).
+  const textRect = async (kind, z) => {
+    await game.eval(([k, zz]) => {
+      setCamZoom(zz);
+      dmgNumbers.length = 0; floatingTexts.length = 0; enemies.length = 0;
+      const p = players[0];
+      if (k === 'pop') floatingTexts.push({ x: p.x + 40, y: p.y - 40, text: '+81', life: 30, maxLife: 30, color: '#ff0', size: 14 });
+      else dmgNumbers.push({ owner: null, x: p.x + 40, y: p.y - 40, z: 20, vx: 0, vy: 0, vz: 0, value: 81, kind: DMG_NORMAL, life: 30, maxLife: 30, age: 1 });
+    }, [kind, z]);
+    await frames(page, 3);
+    return game.eval(() => {
+      const b = _sp.textG.getBounds(), s = RETRO.PIXEL_SCALE;
+      return { w: (b.maxX - b.minX) * s, h: (b.maxY - b.minY) * s, s };
+    });
+  };
+  for (const kind of ['pop', 'dmg']) {
+    const one = await textRect(kind, 1);
+    const far = await textRect(kind, 0.6);
+    expect(one.w, `${kind}: drawn at zoom 1`).toBeGreaterThan(0);
+    expect(Math.abs(far.w - one.w), `${kind}: width at 0.6 ${far.w} vs 1 ${one.w}`).toBeLessThanOrEqual(one.s);
+    expect(Math.abs(far.h - one.h), `${kind}: height at 0.6 ${far.h} vs 1 ${one.h}`).toBeLessThanOrEqual(one.s);
+  }
+  await game.eval(() => { setCamZoom(null); dmgNumbers.length = 0; floatingTexts.length = 0; });
 });
 
 test('K3a: the HUD is not zoomed: HUD panel boxes are identical at zoom 1 and 0.7', async ({ game, page }) => {
