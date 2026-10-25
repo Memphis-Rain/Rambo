@@ -12,6 +12,7 @@ const HOOKS = {
   visibleH: 'entityVisibleH',   // (ent) -> drawn body height above the waterline, world-screen units
   waterFx: 'waterFxStats',      // () -> { clouds, splashes, decalsBlocked, camoRebakes }
   waterBlood: 'waterBloodAt',   // (x, y) -> { c, band } (band 0..4, 0 = none)
+  bloodAdd: 'waterBloodAdd',    // (x, y, amt, R): + amt x (1 - d/(R+1)) on water tiles within R tiles
   burnStats: 'burnStats',       // () -> { burning, max, ignitions, extinguished }
 };
 
@@ -384,6 +385,52 @@ const TILE_COLOURS = ({ K, C }) => {
   return { K: sample(K), C: sample(C) };
 };
 
+/** In-page: luma (Rec. 601) of every displayed pixel within +-20u of K's centre (the inner half of
+ *  the tile, as TILE_COLOURS), plus their mean colour, from ONE extract of the stage. */
+const TILE_LUMA = ({ K }) => {
+  const { pixels, width, height } = app.renderer.extract.pixels({ target: app.stage, frame: new PIXI.Rectangle(0, 0, W, H) });
+  const res = width / W, half = CFG.TILE_SIZE / 4, seen = new Set(), luma = [], reddish = [];
+  let r = 0, g = 0, b = 0;
+  for (let dx = -half; dx <= half; dx += 0.5) {
+    for (let dy = -half; dy <= half; dy += 0.5) {
+      const s = toScreen(K.x + dx, K.y + dy);
+      const x = Math.round((s.x + worldOffsetX) * res), y = Math.round((s.y + worldOffsetY) * res);
+      if (x < 0 || y < 0 || x >= width || y >= height) continue;
+      const i = (y * width + x) * 4;
+      if (seen.has(i)) continue;
+      seen.add(i);
+      r += pixels[i]; g += pixels[i + 1]; b += pixels[i + 2];
+      luma.push(0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2]);
+      reddish.push(pixels[i] > pixels[i + 1] && pixels[i] > pixels[i + 2]);
+    }
+  }
+  const n = luma.length;
+  return { luma, reddish, rgb: { r: r / n, g: g / n, b: b / n } };
+};
+
+/** In-page: mean colour of the displayed pixels in each world rect {x0, x1, y0, y1}, one extract. */
+const RECT_COLOURS = ({ rects }) => {
+  const { pixels, width, height } = app.renderer.extract.pixels({ target: app.stage, frame: new PIXI.Rectangle(0, 0, W, H) });
+  const res = width / W;
+  return rects.map((q) => {
+    const seen = new Set();
+    let r = 0, g = 0, b = 0;
+    for (let x = q.x0; x <= q.x1; x += 0.5) {
+      for (let y = q.y0; y <= q.y1; y += 0.5) {
+        const s = toScreen(x, y);
+        const px = Math.round((s.x + worldOffsetX) * res), py = Math.round((s.y + worldOffsetY) * res);
+        if (px < 0 || py < 0 || px >= width || py >= height) continue;
+        const i = (py * width + px) * 4;
+        if (seen.has(i)) continue;
+        seen.add(i);
+        r += pixels[i]; g += pixels[i + 1]; b += pixels[i + 2];
+      }
+    }
+    const n = seen.size;
+    return { r: r / n, g: g / n, b: b / n, n };
+  });
+};
+
 /** In-page: kill `n` enemies around K, alternating corpse and gib deaths. */
 const KILL_AT = ({ K, n }) => {
   for (let i = 0; i < n; i++) {
@@ -440,6 +487,115 @@ test.describe('W5 water reddens', () => {
     const k = r.centre >= 3 ? 1.8 : 1.4;
     expect(px.K.r, `band ${r.centre}: R >= ${k} x G (${summary})`).toBeGreaterThanOrEqual(k * px.K.g);
     expect(px.K.r, `band ${r.centre}: R >= ${k} x B (${summary})`).toBeGreaterThanOrEqual(k * px.K.b);
+  });
+
+  test('W5 look: at bands 1-3 the tinted tile keeps >= 30% of the clean tile highlight pixels (luma >= clean p95); hue bar at bands 2 and 3', async ({ game }, testInfo) => {
+    test.setTimeout(T(180_000));
+    await startCalm(game);
+    const s = await game.eval(FIND_POND_PAIR);
+    expect(s, 'a 3x3 pond tile').toBeTruthy();
+    await parkAt(game, s.M);
+    await game.eval(() => {
+      RETRO.DITHER = true; RETRO.CRT = true;
+      if (typeof _applyRetroToggles === 'function') _applyRetroToggles();
+    });
+    await game.advance(0.3);
+    // The water shimmers, so each state is read over FRAMES extracts 0.25 s apart.
+    const FRAMES = 4;
+    const read = async () => {
+      const out = [];
+      for (let f = 0; f < FRAMES; f++) {
+        if (f) await game.advance(0.25);
+        out.push(await game.eval(TILE_LUMA, s));
+      }
+      return out;
+    };
+    const clean = await read();
+    const all = clean.flatMap((q) => q.luma).sort((a, b) => a - b);
+    const p95 = all[Math.floor(0.95 * (all.length - 1))];
+    const count = (frames) => frames.reduce((n, q) => n + q.luma.filter((l) => l >= p95).length, 0) / frames.length;
+    const countRed = (frames) => frames.reduce((n, q) => n + q.luma.filter((l, i) => l >= p95 && q.reddish[i]).length, 0) / frames.length;
+    const cleanHi = count(clean);
+    expect(clean[0].luma.length, 'tile-centre pixels on screen').toBeGreaterThan(100);
+    const rows = [`clean: p95 luma ${p95.toFixed(1)}, ${cleanHi.toFixed(1)}/${clean[0].luma.length} highlight px`];
+    // Mid-band concentrations on the whole 3x3 (no kills: no clouds, no corpses), set once per band;
+    // the centre is shielded from edge diffusion for the second or so each read takes.
+    for (const [band, c] of [[1, 0.1], [2, 0.32], [3, 0.6]]) {
+      const got = await game.eval(({ h, K, c }) => {
+        const ts = CFG.TILE_SIZE;
+        for (let a = -1; a <= 1; a++) {
+          for (let b = -1; b <= 1; b++) {
+            const now = window[h.waterBlood](K.x + a * ts, K.y + b * ts).c;
+            window[h.bloodAdd](K.x + a * ts, K.y + b * ts, c - now, 0);
+          }
+        }
+        return window[h.waterBlood](K.x, K.y);
+      }, { h: HOOKS, K: s.K, c });
+      expect(got.band, `c ${c} reads as band ${band}`).toBe(band);
+      await game.advance(0.3);
+      const tinted = await read();
+      const after = await game.eval(({ h, K }) => window[h.waterBlood](K.x, K.y), { h: HOOKS, K: s.K });
+      expect(after.band, `still band ${band} after the reads (c ${after.c.toFixed(3)})`).toBe(band);
+      const hi = count(tinted);
+      const n = tinted.length;
+      const rgb = ['r', 'g', 'b'].map((ch) => tinted.reduce((t, q) => t + q.rgb[ch], 0) / n);
+      const row = `band ${band}: ${hi.toFixed(1)} highlight px = ${(100 * hi / cleanHi).toFixed(0)}% of clean (${countRed(tinted).toFixed(1)} of them reddish); rgb(${rgb.map((v) => v.toFixed(0)).join(',')}) R/G ${(rgb[0] / rgb[1]).toFixed(2)} R/B ${(rgb[0] / rgb[2]).toFixed(2)}`;
+      rows.push(row);
+      if (LANDED.W5LOOK) expect(hi, `spec 3db5629 highlights kept at band ${band} (${row})`).toBeGreaterThanOrEqual(0.3 * cleanHi);
+      // Spec b0cdc51 hue bar at tile centres: band 2 -> 1.4x, band 3 -> 1.8x (band 4: the kills test).
+      if (band >= 2) {
+        const k = band >= 3 ? 1.8 : 1.4;
+        expect(rgb[0], `band ${band}: R >= ${k} x G (${row})`).toBeGreaterThanOrEqual(k * rgb[1]);
+        expect(rgb[0], `band ${band}: R >= ${k} x B (${row})`).toBeGreaterThanOrEqual(k * rgb[2]);
+      }
+    }
+    await game.snap(testInfo, 'w5-band3-highlights.png');
+    const summary = rows.join('; ') + (LANDED.W5LOOK ? '' : ' [highlight bar informational until W5LOOK]');
+    testInfo.annotations.push({ type: 'W5 look', description: summary });
+    console.log(`W5 look: ${summary}`);
+  });
+
+  test('W5 look: band edges are feathered (the outer ~25% of a band-4 tile steps toward its clean neighbour, and the neighbour edge toward it)', async ({ game }, testInfo) => {
+    test.skip(!LANDED.W5LOOK, 'W5 look follow-up not landed (tests/milestones.js)');
+    test.setTimeout(T(180_000));
+    await startCalm(game);
+    const s = await game.eval(FIND_POND_PAIR);
+    expect(s, 'a 3x3 pond tile').toBeTruthy();
+    await parkAt(game, s.M);
+    // A lone band-4 tile K with clean water east of it (N). Diffusion off, so N stays band 0.
+    const bands = await game.eval(({ h, K }) => {
+      RETRO.DITHER = true; RETRO.CRT = true;
+      if (typeof _applyRetroToggles === 'function') _applyRetroToggles();
+      CFG.W5_DIFFUSE = 0;
+      window[h.bloodAdd](K.x, K.y, 0.9, 0);
+      const ts = CFG.TILE_SIZE;
+      return { K: window[h.waterBlood](K.x, K.y).band, N: window[h.waterBlood](K.x + ts, K.y).band };
+    }, { h: HOOKS, K: s.K });
+    expect(bands, 'K band 4, its east neighbour clean').toEqual({ K: 4, N: 0 });
+    await game.advance(0.3);
+    // Strips 10u wide: K's centre, K's east feather zone (25-35u from its centre: the outer 25% is
+    // 30-40u), N's west feather zone, N's centre. Rows within +-20u of the tile's centre line.
+    const ts = 80, { x, y } = s.K;
+    const strip = (x0, x1) => ({ x0, x1, y0: y - 20, y1: y + 20 });
+    const rects = [strip(x - 5, x + 5), strip(x + 30, x + 39), strip(x + 41, x + 50), strip(x + ts - 5, x + ts + 5)];
+    const runs = [];
+    for (let f = 0; f < 4; f++) {
+      if (f) await game.advance(0.25);
+      runs.push(await game.eval(RECT_COLOURS, { rects }));
+    }
+    const red = (q) => q.r - (q.g + q.b) / 2;
+    const [kc, ke, ne, nc] = rects.map((_, i) => runs.reduce((t, r) => t + red(r[i]), 0) / runs.length);
+    await game.snap(testInfo, 'w5-feather.png');
+    const summary = `redness: K centre ${kc.toFixed(1)}, K edge ${ke.toFixed(1)}, N edge ${ne.toFixed(1)}, N centre ${nc.toFixed(1)}`;
+    testInfo.annotations.push({ type: 'W5 feather', description: summary });
+    console.log(`W5 feather: ${summary}`);
+    expect(runs[0].every((q) => q.n > 50), 'strip pixels on screen').toBe(true);
+    // Hard edges: K edge == K centre and N edge == N centre. Feathered: each edge moves >= 10% of the
+    // K-to-N redness gap toward the other tile (a linear step to the midpoint gives ~25%).
+    const gap = kc - nc;
+    expect(gap, `band 4 is much redder than clean water (${summary})`).toBeGreaterThan(40);
+    expect(kc - ke, `K's edge steps toward clean (${summary})`).toBeGreaterThanOrEqual(0.1 * gap);
+    expect(ne - nc, `N's edge steps toward red (${summary})`).toBeGreaterThanOrEqual(0.1 * gap);
   });
 
   test('W5: the water camo is not rebaked during a fight (camera still), and the blood state updates at <= 4 Hz', async ({ game }, testInfo) => {
