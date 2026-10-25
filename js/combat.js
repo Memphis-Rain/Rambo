@@ -115,9 +115,9 @@ const _p1Ctl = {
   get device() { return inputDevice; },
   get pad() { return pad; },
   get padAim() { return padAim; },
-  get mouseX() { return mouseX; },
-  get mouseY() { return mouseY; },
-  get mouseDown() { return mouseDown; },
+  get mouseX() { return mouseX; }, set mouseX(v) { mouseX = v; },
+  get mouseY() { return mouseY; }, set mouseY(v) { mouseY = v; },
+  get mouseDown() { return mouseDown; }, set mouseDown(v) { mouseDown = v; }, // (K7: the demo bot)
   get mouseJustPressed() { return mouseJustPressed; }, set mouseJustPressed(v) { mouseJustPressed = v; },
   get mouseRightJustPressed() { return mouseRightJustPressed; }, set mouseRightJustPressed(v) { mouseRightJustPressed = v; },
   get grenadeWant() { return _grenadeWant; }, set grenadeWant(v) { _grenadeWant = v; },

@@ -27,6 +27,12 @@ const DEMO_PREF_DIST = {
   Plasma: 270, Flamethrower: 180, Railgun: 360, BFG: 380, Disintegrator: 250,
 };
 
+// M11 K7: the bot runs once per CPU player; these point at the one it drives:
+// its state (P1: _demo itself), its controls (P1: the shared globals via
+// _p1Ctl, P2: its ctl) and the player
+let _dB = null, _dC = null, _dP = null;
+let _demo2 = null;                // P2's bot state in a 2P attract cycle
+
 const _demo = {
   elapsed: 0, idleTimer: 0, endPending: false,
   weaponTimer: 0, showcasePos: 0, weaponIndex: 0, wantWeapon: -1,
@@ -40,6 +46,7 @@ const _demo = {
   overlay: null, styleInjected: false,
   terrain: new Map(),
   lastGrenadeT: -Infinity, grenadesThrown: 0, grenadeEvalT: 0, // N1
+  cycle: 0,                        // K7: attract cycles since load (every 2nd runs 2P)
 };
 
 // ---------------------------------------------------------------------
@@ -87,6 +94,7 @@ function demoState() {
     targetId: _demo.target ? _demo.targetId : -1,
     idleTimer: _demo.idleTimer,
     grenadesThrown: _demo.grenadesThrown,
+    players: players.length, // K7: 2 in a 2P attract cycle
   };
 }
 
@@ -105,20 +113,21 @@ function startDemo() {
   _demo.endPending = false;
   _demo.weaponTimer = Infinity; // press the first showcase weapon on frame 1
   _demo.wantWeapon = -1;
-  _demo.target = null; _demo.targetId = -1;
-  _demo.moveIdx = -1; _demo.moveHold = 0; _demo.flipCd = 0; _demo.dirAge = 0;
-  _demo.huntBest = Infinity; _demo.huntT = 0;
-  _demo.losBlocked = false; _demo.losBlockedT = 0;
-  _demo.strafeDir = Math.random() < 0.5 ? -1 : 1;
-  _demo.strafeTimer = 2;
-  _demo.jx = _demo.jy = _demo.jtx = _demo.jty = 0; _demo.jitterTimer = 0;
-  _demo.dodgeLock = 0; _demo.reloadLock = 0;
-  _demo.originX = player ? player.x : 0;
-  _demo.originY = player ? player.y : 0;
-  _demo.patrolA = Math.random() * Math.PI * 2;
+  _demoInitBot(_demo, player);
   _demo.weaponIndex = player ? player.weapon : 0;
   _demo.terrain.clear();
-  _demo.lastGrenadeT = -Infinity; _demo.grenadesThrown = 0; _demo.grenadeEvalT = 0;
+  // K7: every 2nd attract cycle runs two CPU players (the 2P HUD sells the mode)
+  _demo.cycle++;
+  _demo2 = null;
+  if (_demo.cycle % 2 === 0 && player && typeof coopJoin === 'function') {
+    const p2 = coopJoin(null);
+    if (p2) {
+      p2.ctl.device = 'kbm'; // the bot aims with the virtual mouse, like P1's
+      _demo2 = { pulsed: [], showcasePos: 3 }; // a different weapon from P1's
+      _demoInitBot(_demo2, p2);
+      _demo2.weaponTimer = Infinity;
+    }
+  }
 
   demoActive = true;
   gameStarted = true;
@@ -128,11 +137,29 @@ function startDemo() {
   return true;
 }
 
+// Per-bot state (the order of the Math.random calls is P1's, as before K7)
+function _demoInitBot(b, p) {
+  b.target = null; b.targetId = -1;
+  b.moveIdx = -1; b.moveHold = 0; b.flipCd = 0; b.dirAge = 0;
+  b.huntBest = Infinity; b.huntT = 0;
+  b.losBlocked = false; b.losBlockedT = 0;
+  b.strafeDir = Math.random() < 0.5 ? -1 : 1;
+  b.strafeTimer = 2;
+  b.jx = b.jy = b.jtx = b.jty = 0; b.jitterTimer = 0;
+  b.dodgeLock = 0; b.reloadLock = 0;
+  b.originX = p ? p.x : 0;
+  b.originY = p ? p.y : 0;
+  b.patrolA = Math.random() * Math.PI * 2;
+  b.lastGrenadeT = -Infinity; b.grenadesThrown = 0; b.grenadeEvalT = 0;
+  if (b !== _demo) { b.wantWeapon = -1; b.nextId = 1; b.chasingFar = false; b.weaponTimer = 0; }
+}
+
 function stopDemo() {
   if (!demoActive) return false;
   demoActive = false;
   _demo.endPending = false;
   _demo.target = null; _demo.targetId = -1;
+  _demo2 = null;
   _demoClearInputs();
   resetRound();
   _demoClearInputs();
@@ -191,8 +218,21 @@ function updateDemo(dt) {
   // Showcase pacing: short breaks between waves so the screen stays busy
   if (!waveActive && waveTimer > DEMO_WAVE_GAP) waveTimer = DEMO_WAVE_GAP;
 
-  _demoBot(dt);
+  _dB = _demo; _dC = _p1Ctl; _dP = player;
+  if (player.state === 'up') _demoBot(dt); // K7: a downed CPU player waits for its partner
   _demo.weaponIndex = player.weapon;
+
+  // K7: P2's bot drives P2's controls
+  const p2 = _demo2 && players.length > 1 ? players[1] : null;
+  if (p2 && p2.ctl) {
+    const c2 = p2.ctl;
+    for (const k of _demo2.pulsed) c2.keys[k] = false;
+    _demo2.pulsed.length = 0;
+    c2.mouseJustPressed = false;
+    c2.mouseRightJustPressed = false;
+    if (p2.state === 'up') { _dB = _demo2; _dC = c2; _dP = p2; _demoBot(dt); }
+  }
+  _dB = _demo; _dC = _p1Ctl; _dP = player;
 }
 
 // ---------------------------------------------------------------------
@@ -208,8 +248,8 @@ function _demoClearInputs() {
 }
 
 function _demoPress(k) {
-  keys[k] = true;
-  _demo.pulsed.push(k);
+  _dC.keys[k] = true;
+  _dB.pulsed.push(k);
 }
 
 // D3b: would a non-piercing round from (x0,y0) to (x1,y1) hit a tree trunk,
@@ -254,8 +294,8 @@ function _demoAimAt(wx, wy) {
   const z = cam.z; // M11 K3a
   const ox = hasOff ? worldOffsetX : W / 2 - cam.x * z;
   const oy = hasOff ? worldOffsetY : H / 2 - cam.y * z;
-  mouseX = sx * z + ox;
-  mouseY = sy * z + oy;
+  _dC.mouseX = sx * z + ox;
+  _dC.mouseY = sy * z + oy;
 }
 
 // Per-frame scratch storage (the bot allocates nothing per frame)
@@ -311,6 +351,10 @@ function _demoThreatWeight(e) {
 }
 
 function _demoOnScreen(p, e) {
+  if (players.length > 1) { // K7: the shared (zoomed) camera view
+    const sx = (e.x - e.y) - cam.x, sy = (e.x + e.y) * CFG.ISO_SCALE - cam.y;
+    return Math.abs(sx) < ((W || 1280) / 2 - 24) / cam.z && Math.abs(sy) < ((H || 720) / 2 - 24) / cam.z;
+  }
   // Relative to the player, who the camera follows; keep a margin
   const dx = e.x - p.x, dy = e.y - p.y;
   const sx = dx - dy, sy = (dx + dy) * CFG.ISO_SCALE; // toScreen, inlined
@@ -373,22 +417,22 @@ function _demoGrenadePoint(p, out) {
 // Bot brain
 // ---------------------------------------------------------------------
 function _demoBot(dt) {
-  const p = player;
+  const p = _dP;
   const wep = WEAPONS[p.weapon];
   const moves = _demoGetMoves();
-  if (_demo.dodgeLock > 0) _demo.dodgeLock -= dt;
-  if (_demo.reloadLock > 0) _demo.reloadLock -= dt;
+  if (_dB.dodgeLock > 0) _dB.dodgeLock -= dt;
+  if (_dB.reloadLock > 0) _dB.reloadLock -= dt;
 
   // --- Showcase weapon cycle (D4) ---
-  _demo.weaponTimer += dt;
-  if (_demo.weaponTimer >= CFG.DEMO_WEAPON_CYCLE) {
-    _demo.weaponTimer = 0;
-    _demo.wantWeapon = DEMO_SHOWCASE[_demo.showcasePos % DEMO_SHOWCASE.length] % WEAPONS.length;
-    _demo.showcasePos++;
+  _dB.weaponTimer += dt;
+  if (_dB.weaponTimer >= CFG.DEMO_WEAPON_CYCLE) {
+    _dB.weaponTimer = 0;
+    _dB.wantWeapon = DEMO_SHOWCASE[_dB.showcasePos % DEMO_SHOWCASE.length] % WEAPONS.length;
+    _dB.showcasePos++;
   }
   // Keep tapping the key until the switch lands (it is ignored mid-dodge)
-  if (_demo.wantWeapon >= 0 && _demo.wantWeapon < unlockedWeapons && p.weapon !== _demo.wantWeapon) {
-    _demoPress(DEMO_KEYMAP[_demo.wantWeapon]);
+  if (_dB.wantWeapon >= 0 && _dB.wantWeapon < unlockedWeapons && p.weapon !== _dB.wantWeapon) {
+    _demoPress(DEMO_KEYMAP[_dB.wantWeapon]);
   }
 
   // --- Perception ---
@@ -407,7 +451,7 @@ function _demoBot(dt) {
   }
 
   // --- Target selection with hysteresis ---
-  let cur = _demo.target;
+  let cur = _dB.target;
   if (cur && (cur.dead || enemies.indexOf(cur) < 0)) cur = null;
   let best = null, bestS = Infinity, curS = Infinity;
   let far = null, farD = Infinity;
@@ -423,23 +467,23 @@ function _demoBot(dt) {
   }
   // Nothing in range but the wave isn't over (e.g. a straggler stuck behind
   // terrain): hunt the nearest one so the next wave can start
-  _demo.chasingFar = false;
-  if (!best && far) { best = far; _demo.chasingFar = true; }
+  _dB.chasingFar = false;
+  if (!best && far) { best = far; _dB.chasingFar = true; }
   if (cur && curS < Infinity && best !== cur && bestS > curS * 0.7) best = cur;
-  if (best !== _demo.target) {
-    _demo.target = best;
+  if (best !== _dB.target) {
+    _dB.target = best;
     if (best) {
-      if (!best._demoId) best._demoId = _demo.nextId++;
-      _demo.targetId = best._demoId;
-    } else _demo.targetId = -1;
+      if (!best._demoId) best._demoId = _dB.nextId++;
+      _dB.targetId = best._demoId;
+    } else _dB.targetId = -1;
   }
-  const tgt = _demo.target;
+  const tgt = _dB.target;
   const tgtD = tgt ? dist(p.x, p.y, tgt.x, tgt.y) : Infinity;
   const tgtVisible = tgt ? _demoOnScreen(p, tgt) : false;
 
   // --- Movement: score the 8 achievable directions ---
-  _demo.strafeTimer -= dt;
-  if (_demo.strafeTimer <= 0) { _demo.strafeDir *= -1; _demo.strafeTimer = randRange(3, 5); } // D3a: deliberate, readable strafing
+  _dB.strafeTimer -= dt;
+  if (_dB.strafeTimer <= 0) { _dB.strafeDir *= -1; _dB.strafeTimer = randRange(3, 5); } // D3a: deliberate, readable strafing
 
   let wantX, wantY, wantW;
   if (tgt) {
@@ -451,36 +495,36 @@ function _demoBot(dt) {
     const off = tgtD - pref;
     const radial = Math.abs(off) < 40 ? 0 : clamp((off - Math.sign(off) * 40) / 60, -1.2, 1);
     // Blocked line of fire (D3b): strafe harder to open it up
-    const strafe = _demo.losBlocked ? 1.6 : 0.9;
-    wantX = tox * radial + (-toy) * _demo.strafeDir * strafe;
-    wantY = toy * radial + tox * _demo.strafeDir * strafe;
+    const strafe = _dB.losBlocked ? 1.6 : 0.9;
+    wantX = tox * radial + (-toy) * _dB.strafeDir * strafe;
+    wantY = toy * radial + tox * _dB.strafeDir * strafe;
     wantW = 1.6;
   } else {
     // Patrol a slow circle around the origin
-    _demo.patrolA += dt * 0.4;
-    const px = _demo.originX + Math.cos(_demo.patrolA) * 160;
-    const py = _demo.originY + Math.sin(_demo.patrolA) * 160;
+    _dB.patrolA += dt * 0.4;
+    const px = _dB.originX + Math.cos(_dB.patrolA) * 160;
+    const py = _dB.originY + Math.sin(_dB.patrolA) * 160;
     wantX = px - p.x; wantY = py - p.y;
     wantW = 1.0;
   }
   const wl = Math.sqrt(wantX * wantX + wantY * wantY) || 1;
   wantX /= wl; wantY /= wl;
 
-  const dO = dist(p.x, p.y, _demo.originX, _demo.originY);
+  const dO = dist(p.x, p.y, _dB.originX, _dB.originY);
   let leash = clamp((dO - DEMO_LEASH_SOFT) / (DEMO_LEASH_FULL - DEMO_LEASH_SOFT) * 3, 0, 4);
   // Stragglers keep a wave from ending: hunt them past the leash. Only for an
   // out-of-range target or the last couple of enemies (keying it on
   // visibility toggled the pull at the screen edge)
-  const hunting = tgt && (_demo.chasingFar || enemies.length <= 2);
+  const hunting = tgt && (_dB.chasingFar || enemies.length <= 2);
   if (hunting) leash = 0;
   // A straggler hunt that stops closing in for 4 s (e.g. water in the way)
   // wades through: water only slows, while a stalled hunt stalls the wave
   if (hunting) {
-    if (tgtD < _demo.huntBest - 40) { _demo.huntBest = tgtD; _demo.huntT = 0; }
-    else _demo.huntT += dt;
-  } else { _demo.huntBest = Infinity; _demo.huntT = 0; }
-  const wade = _demo.huntT > 4;
-  const oX = dO > 0 ? (_demo.originX - p.x) / dO : 0, oY = dO > 0 ? (_demo.originY - p.y) / dO : 0;
+    if (tgtD < _dB.huntBest - 40) { _dB.huntBest = tgtD; _dB.huntT = 0; }
+    else _dB.huntT += dt;
+  } else { _dB.huntBest = Infinity; _dB.huntT = 0; }
+  const wade = _dB.huntT > 4;
+  const oX = dO > 0 ? (_dB.originX - p.x) / dO : 0, oY = dO > 0 ? (_dB.originY - p.y) / dO : 0;
 
   let pk = null, pkD = Infinity;
   if (p.hp < p.maxHp * 0.4) {
@@ -558,26 +602,26 @@ function _demoBot(dt) {
     // Health detour
     if (pk) sc += 2.4 * (m.dx * (pk.x - p.x) + m.dy * (pk.y - p.y)) / (pkD || 1);
     // Stickiness against flicker
-    if (mi === _demo.moveIdx) { sc += 0.25; curScore = sc; }
+    if (mi === _dB.moveIdx) { sc += 0.25; curScore = sc; }
     _demoScores[mi] = sc;
     if (sc > bestScore) { bestScore = sc; bestM = mi; }
   }
   // Boxed in: try the other strafe direction, at most once a second (flipping
   // every frame made the bot reverse diagonals back and forth)
-  _demo.flipCd -= dt;
-  if (bestScore < -2.5 && tgt && _demo.flipCd <= 0) { _demo.strafeDir *= -1; _demo.flipCd = 1; }
+  _dB.flipCd -= dt;
+  if (bestScore < -2.5 && tgt && _dB.flipCd <= 0) { _dB.strafeDir *= -1; _dB.flipCd = 1; }
   // D3a: commit to a direction so movement reads as deliberate kiting. Any
   // change waits DEMO_MOVE_HOLD unless the current move is blocked; turning
   // back against it (key-space dot < 0) also needs a clearly better move.
-  _demo.moveHold -= dt;
-  _demo.dirAge += dt;
-  if (_demo.moveIdx >= 0 && bestM !== _demo.moveIdx) {
-    const cur = moves[_demo.moveIdx];
+  _dB.moveHold -= dt;
+  _dB.dirAge += dt;
+  if (_dB.moveIdx >= 0 && bestM !== _dB.moveIdx) {
+    const cur = moves[_dB.moveIdx];
     // Only a physical block (water/obstacle ahead) or a dodge may break the
     // hold; crowd pressure is ordinary evasion and waits like any other change
     // Well past the leash and still heading out counts as blocked too
     const outward = leash > 0 && dO > DEMO_LEASH + 75 && cur.dx * oX + cur.dy * oY < 0;
-    const blocked = _demoPhys[_demo.moveIdx] < -1.5 || outward;
+    const blocked = _demoPhys[_dB.moveIdx] < -1.5 || outward;
     if (blocked) {
       // Blocked: turn aside (<= 90 deg) rather than reverse, if any side is open
       let side = -1, sideScore = -Infinity;
@@ -589,15 +633,15 @@ function _demoBot(dt) {
     } else {
       const reverse = _demoKeyDot(cur, moves[bestM]) < 0;
       // Turning back needs the direction held a while AND a clearly better move
-      if (_demo.moveHold > 0 || (reverse && (_demo.dirAge < 0.8 || bestScore - curScore < 1.0))) bestM = _demo.moveIdx;
+      if (_dB.moveHold > 0 || (reverse && (_dB.dirAge < 0.8 || bestScore - curScore < 1.0))) bestM = _dB.moveIdx;
     }
   }
-  if (bestM !== _demo.moveIdx) { _demo.moveHold = DEMO_MOVE_HOLD; _demo.dirAge = 0; }
-  _demo.moveIdx = bestM;
+  if (bestM !== _dB.moveIdx) { _dB.moveHold = DEMO_MOVE_HOLD; _dB.dirAge = 0; }
+  _dB.moveIdx = bestM;
 
   // --- Dodge roll (melee in range, bomber close, or a bullet about to hit) ---
   let dodgeX = 0, dodgeY = 0, wantDodge = false;
-  if (!p.dodging && p.dodgeCooldown <= 0 && _demo.dodgeLock <= 0) {
+  if (!p.dodging && p.dodgeCooldown <= 0 && _dB.dodgeLock <= 0) {
     if (nearestMelee) {
       const t = ENEMY_TYPES[nearestMelee.type];
       const trig = t.explodeOnDeath ? 90 : nearestMelee.range + 18;
@@ -628,7 +672,7 @@ function _demoBot(dt) {
         break;
       }
     }
-    if (wantDodge && Math.random() < 0.15) { wantDodge = false; _demo.dodgeLock = 0.3; } // human miss
+    if (wantDodge && Math.random() < 0.15) { wantDodge = false; _dB.dodgeLock = 0.3; } // human miss
   }
   if (wantDodge) {
     let bi = bestM, bs = -Infinity;
@@ -640,28 +684,28 @@ function _demoBot(dt) {
     }
     bestM = bi;
     _demoPress(' ');
-    _demo.dodgeLock = 0.6;
+    _dB.dodgeLock = 0.6;
     // Keep running the way we rolled instead of snapping straight back
-    _demo.moveIdx = bi;
-    _demo.moveHold = 0.45; _demo.dirAge = 0;
+    _dB.moveIdx = bi;
+    _dB.moveHold = 0.45; _dB.dirAge = 0;
   }
 
   const mv = moves[bestM];
-  keys['w'] = mv.w; keys['a'] = mv.a; keys['s'] = mv.s; keys['d'] = mv.d;
-  keys['shift'] = !!pk || dO > DEMO_LEASH + 150 || (nearestMelee !== null && nearestMeleeD < 110) ||
+  _dC.keys['w'] = mv.w; _dC.keys['a'] = mv.a; _dC.keys['s'] = mv.s; _dC.keys['d'] = mv.d;
+  _dC.keys['shift'] = !!pk || dO > DEMO_LEASH + 150 || (nearestMelee !== null && nearestMeleeD < 110) ||
     (tgt !== null && !tgtVisible && tgtD > 500 && dO < DEMO_LEASH);
 
   // --- Aim: lead the target + smoothed human jitter ---
-  _demo.jitterTimer -= dt;
-  if (_demo.jitterTimer <= 0) {
-    _demo.jitterTimer = randRange(0.12, 0.25);
+  _dB.jitterTimer -= dt;
+  if (_dB.jitterTimer <= 0) {
+    _dB.jitterTimer = randRange(0.12, 0.25);
     const r = (4 + (isFinite(tgtD) ? tgtD : 200) * 0.03) * Math.sqrt(Math.random());
     const a = Math.random() * Math.PI * 2;
-    _demo.jtx = Math.cos(a) * r; _demo.jty = Math.sin(a) * r;
+    _dB.jtx = Math.cos(a) * r; _dB.jty = Math.sin(a) * r;
   }
   const jk = 1 - Math.exp(-dt * 12);
-  _demo.jx += (_demo.jtx - _demo.jx) * jk;
-  _demo.jy += (_demo.jty - _demo.jy) * jk;
+  _dB.jx += (_dB.jtx - _dB.jx) * jk;
+  _dB.jy += (_dB.jty - _dB.jy) * jk;
 
   if (tgt) {
     const tvx = tgt.stunTimer > 0 ? (tgt.knockbackX || 0) : (tgt.vx || 0);
@@ -669,25 +713,25 @@ function _demoBot(dt) {
     // W2: a wading target is hit on its visible column, not at its feet
     const ap = aimPointOf(tgt, _demoWadeAim);
     const aim = demoAimLead(p.x, p.y, ap.x, ap.y, tvx, tvy, wep.speed, _demoAim);
-    _demoAimAt(aim.x + _demo.jx, aim.y + _demo.jy);
+    _demoAimAt(aim.x + _dB.jx, aim.y + _dB.jy);
   } else {
     // Look where we're going
-    _demoAimAt(p.x + mv.dx * 160 + _demo.jx, p.y + mv.dy * 160 + _demo.jy);
+    _demoAimAt(p.x + mv.dx * 160 + _dB.jx, p.y + mv.dy * 160 + _dB.jy);
   }
 
   // --- Fire ---
   let fire = tgt !== null && tgtVisible && !p.reloading;
   // D3b: don't waste non-piercing fire into trees/crates/sandbags on the line
-  _demo.losBlocked = false;
+  _dB.losBlocked = false;
   // Check both the line to the target and the actually aimed (lead + jitter) line
   if (fire && !wep.pierce && (_demoLosBlocked(p.x, p.y, tgt.x, tgt.y, wep.spread) ||
-      _demoLosBlocked(p.x, p.y, _demoAim.x + _demo.jx, _demoAim.y + _demo.jy, wep.spread))) {
+      _demoLosBlocked(p.x, p.y, _demoAim.x + _dB.jx, _demoAim.y + _dB.jy, wep.spread))) {
     fire = false;
-    _demo.losBlocked = true;
-    _demo.losBlockedT += dt;
+    _dB.losBlocked = true;
+    _dB.losBlockedT += dt;
     // still blocked after a while: prefer another target for a moment
-    if (_demo.losBlockedT > 1.2) { tgt._demoLosBadUntil = _demo.elapsed + 1.5; _demo.losBlockedT = 0; }
-  } else _demo.losBlockedT = 0;
+    if (_dB.losBlockedT > 1.2) { tgt._demoLosBadUntil = _demo.elapsed + 1.5; _dB.losBlockedT = 0; }
+  } else _dB.losBlockedT = 0;
   if (fire) {
     // Don't shoot a barrel next to ourselves
     const ax = (tgt.x - p.x) / (tgtD || 1), ay = (tgt.y - p.y) / (tgtD || 1);
@@ -703,39 +747,39 @@ function _demoBot(dt) {
   }
   if (fire) {
     if (wep.auto) {
-      mouseDown = true;
+      _dC.mouseDown = true;
     } else if (p.fireTimer <= dt && Math.random() < 0.6) { // small human trigger delay
-      mouseDown = true;
-      mouseJustPressed = true;
+      _dC.mouseDown = true;
+      _dC.mouseJustPressed = true;
     } else {
-      mouseDown = false;
+      _dC.mouseDown = false;
     }
   } else {
-    mouseDown = false;
+    _dC.mouseDown = false;
   }
 
   // --- Reload when low and nobody is close ---
-  if (!p.reloading && _demo.reloadLock <= 0 && wep.mag > 1 && p.magAmmo < wep.mag && closeCount === 0) {
+  if (!p.reloading && _dB.reloadLock <= 0 && wep.mag > 1 && p.magAmmo < wep.mag && closeCount === 0) {
     const low = p.magAmmo <= Math.max(1, Math.floor(wep.mag * 0.25));
     const idle = !tgtVisible && p.magAmmo < wep.mag * 0.6;
-    if (low || idle) { _demoPress('r'); _demo.reloadLock = 0.5; }
+    if (low || idle) { _demoPress('r'); _dB.reloadLock = 0.5; }
   }
 
   // --- Grenade (N1): a clustered group out of our own blast radius ---
   // Throws straight at the world point (the demo owns input; F would aim at
   // the virtual cursor, which is busy leading the gun target)
-  if (p.grenades > 0 && p.grenadeCd <= 0 && gameTime - _demo.lastGrenadeT >= DEMO_GRENADE_GAP &&
-      gameTime >= _demo.grenadeEvalT) {
-    _demo.grenadeEvalT = gameTime + DEMO_GRENADE_EVAL;
-    if (_demoGrenadePoint(p, _demoGrenPt) && throwGrenade(_demoGrenPt.x, _demoGrenPt.y)) {
-      _demo.lastGrenadeT = gameTime;
-      _demo.grenadesThrown++;
+  if (p.grenades > 0 && p.grenadeCd <= 0 && gameTime - _dB.lastGrenadeT >= DEMO_GRENADE_GAP &&
+      gameTime >= _dB.grenadeEvalT) {
+    _dB.grenadeEvalT = gameTime + DEMO_GRENADE_EVAL;
+    if (_demoGrenadePoint(p, _demoGrenPt) && throwGrenade(_demoGrenPt.x, _demoGrenPt.y, p)) {
+      _dB.lastGrenadeT = gameTime;
+      _dB.grenadesThrown++;
     }
   }
 
   // --- Shockwave when charged and swarmed ---
   if (p.specialCharge >= CFG.SPECIAL_MAX_CHARGE && p.specialCooldown <= 0 && inSpecial >= 5) {
-    mouseRightJustPressed = true;
+    _dC.mouseRightJustPressed = true;
   }
 }
 
