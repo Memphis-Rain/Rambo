@@ -93,7 +93,7 @@ export default [
         ...globals.browser,
         PIXI: 'readonly',
         ...Object.assign({}, ...Object.values(declsByFile)),
-        // Test hooks promised by the spec and Josh (R2, R7, G4, G5, G8, G9, D8).
+        // Test hooks promised by the spec and Josh (R2, R7, G4, G5, G8, G9, D8, M11).
         // Tests skip until they exist; drop entries once the game defines them.
         ...Object.fromEntries([
           'RETRO', 'retroState', 'snapToPixel',
@@ -102,6 +102,7 @@ export default [
           'dmgNumbers', 'DMG_NORMAL', 'DMG_CRIT', 'DMG_SHIELD',
           'hitStopTimer', 'addHitStop',
           'startDemo', 'stopDemo', 'demoState', 'demoAimLead', 'decalStats', 'envCanopyAlpha', 'envLayerStats', '_spRemainSig',
+          'players', // M11 K1
         ].map((name) => [name, 'readonly'])),
       },
     },
