@@ -689,7 +689,7 @@ This is the one new game mode the user asked for, so it is an explicit exception
 - **K6. Rules in 2P.**
   - **Enemy targeting:** each enemy targets the **nearest standing** player. It re-picks at most every 1 s, and switches only if the other player is ≥ 25% closer (hysteresis, so enemies don't jitter).
   - **Scaling:** wave enemy count ×1.5 (rounded up), boss HP ×1.5. Everything else is unchanged. Values are `CFG.COOP_ENEMY_MULT` and `CFG.COOP_BOSS_HP_MULT`.
-  - **Friendly fire:** off by default (`CFG.COOP_FRIENDLY_FIRE = false`). Bullets pass through the partner, and the partner takes no damage or knockback from your explosions. The flamethrower still never ignites players (F-series).
+  - **Friendly fire:** off by default (`CFG.COOP_FRIENDLY_FIRE = false`). Bullets pass through the partner, and the partner takes no damage or knockback from your explosions. The flamethrower still never ignites players (F-series). **Felled trees (E6)** follow the same rule: a fall credited to one player doesn't damage the other player. Self-damage stays as in 1P (Q4), and uncredited falls (enemy fire, ownerless fire spread) damage everyone. **Kill credit through fire:** a tree remembers who ignited it, and kills from its canopy fire or from fire spreading off it credit that player (ruling 2026-10-25).
   - **Shockwave charge** (LT / right click) is per player, filled by that player's own kills (`b.by`).
   - **Score:** each player has their own score and kills shown on their own panel. Weapon unlocks use the **team total** against the existing thresholds, and both players get the unlocks.
   - Combo is per player.
