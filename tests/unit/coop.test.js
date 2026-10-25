@@ -23,7 +23,7 @@ const H = {
   padOf: (i) => g.padOf(i), // per-player pad state, same shape as M10 `pad`
   aimOf: (i) => g.padAimOf(i), // per-player padAim
   join: (padIndex) => g.coopJoin(padIndex), // spawns P2 directly -> players[1] | null
-  zoom: () => g.camZoom(), // { zoom, target }
+  zoom: () => g.camZoom(), // { zoom, target, forced }
   setZoom: (z) => g.setCamZoom(z), // hold z; null releases
   damage: (dmg, p) => g.damagePlayer(dmg, p),
 };
@@ -481,11 +481,57 @@ describe('M11 K2 join and devices', () => {
 describe('M11 K3 camera, zoom and leash', () => {
   beforeEach(setup);
   const todo = !LANDED.K3;
+  /** 2P without pads (coopJoin): enough for the camera and zoom, which read players[]. */
   const twoUp = () => {
-    const [p1, p2] = (rig.connect(0), frame(), tap(0, BTN.BACK), H.players());
+    const p2 = H.join(1);
+    if (!p2) throw new Error('coopJoin returned null');
+    const [p1] = H.players();
     p1.invincible = p2.invincible = 1e9;
     return [p1, p2];
   };
+  /** Low-res px of a world offset's screen projection at zoom 1. */
+  const lowRes = (dx, dy) => { const s = g.toScreen(dx, dy), ps = g.RETRO.PIXEL_SCALE; return { x: s.x / ps, y: s.y / ps }; };
+  /** The leash limit: at COOP_ZOOM_MIN, both players >= COOP_LEASH_PX inside the view edges. */
+  const leashOk = (a, b, slack = 0.01) => {
+    const v = viewLowRes(), z = C().COOP_ZOOM_MIN, m = C().COOP_LEASH_PX, d = lowRes(a.x - b.x, a.y - b.y);
+    return Math.abs(d.x) * z <= v.w - 2 * m + slack && Math.abs(d.y) * z <= v.h - 2 * m + slack;
+  };
+  /** Screen-x separation (CSS px at zoom 1) at the leash limit. */
+  const limitCss = () => ((viewLowRes().w - 2 * C().COOP_LEASH_PX) / C().COOP_ZOOM_MIN) * g.RETRO.PIXEL_SCALE;
+  const cssW = (f) => viewLowRes().w * f * g.RETRO.PIXEL_SCALE;
+
+  test.skipIf(todo)('K3a: CFG defaults (spec K3a/K3b; rates are linear, in zoom units per second)', () => {
+    expect(C()).toMatchObject({ COOP_ZOOM_MIN: 0.6, COOP_ZOOM_MARGIN: 64, COOP_ZOOM_OUT_RATE: 3, COOP_ZOOM_IN_RATE: 1, COOP_ZOOM_DEADBAND: 0.05, COOP_LEASH_PX: 48 });
+  });
+
+  test.skipIf(todo)('K3a: coopZoomTarget (pure) is 1 for fewer than 2 points and for players close together', () => {
+    const v = viewLowRes(), h = findHome();
+    expect(g.coopZoomTarget([], v.w, v.h)).toBe(1);
+    expect(g.coopZoomTarget([{ x: h.x, y: h.y }], v.w, v.h)).toBe(1);
+    expect(g.coopZoomTarget([{ x: h.x, y: h.y }, { x: h.x + 60, y: h.y }], v.w, v.h)).toBe(1);
+  });
+
+  test.skipIf(todo)('K3a: coopZoomTarget (pure) is the largest zoom <= 1 keeping 64 low-res px margins, on screen x and y, at PIXEL_SCALE 3 and 1', () => {
+    const h = findHome();
+    for (const ps of [3, 1]) {
+      g.RETRO.PIXEL_SCALE = ps;
+      const v = viewLowRes();
+      for (const frac of [0.5, 0.8, 0.95]) {
+        const r = screenRight(((v.w - 128) / 0.6) * frac);
+        const pts = [{ x: h.x, y: h.y }, { x: h.x + r.dx, y: h.y + r.dy }];
+        expect(g.coopZoomTarget(pts, v.w, v.h), `x${ps} screen-x ${frac}`).toBeCloseTo(expectedZoom(pts), 6);
+      }
+      const d = (((v.h - 128) / 0.6) * 0.8 * ps) / (2 * C().ISO_SCALE); // world +x+y runs down the screen
+      const pts = [{ x: h.x, y: h.y }, { x: h.x + d, y: h.y + d }];
+      expect(g.coopZoomTarget(pts, v.w, v.h), `x${ps} screen-y`).toBeCloseTo(expectedZoom(pts), 6);
+      expect(g.coopZoomTarget(pts, v.w, v.h)).toBeLessThan(1);
+    }
+  });
+
+  test.skipIf(todo)('K3a: coopZoomTarget (pure) is clamped at 0.6 however far apart', () => {
+    const v = viewLowRes(), h = findHome(), r = screenRight(cssW(3));
+    expect(g.coopZoomTarget([{ x: h.x, y: h.y }, { x: h.x + r.dx, y: h.y + r.dy }], v.w, v.h)).toBe(0.6);
+  });
 
   test.skipIf(todo)('K3: the camera target is the midpoint of the counted players', () => {
     const [p1, p2] = twoUp();
@@ -496,10 +542,6 @@ describe('M11 K3 camera, zoom and leash', () => {
     expect(g.cam.ty).toBeCloseTo(s.y, 6);
   });
 
-  test.skipIf(todo)('K3a: CFG defaults: COOP_ZOOM_MIN 0.6', () => {
-    expect(C().COOP_ZOOM_MIN).toBe(0.6);
-  });
-
   test.skipIf(todo)('K3a: players close together: zoom is exactly 1.0', () => {
     const [p1, p2] = twoUp();
     place(p1, 0, 0); place(p2, 60, 0);
@@ -507,98 +549,85 @@ describe('M11 K3 camera, zoom and leash', () => {
     expect(H.zoom()).toMatchObject({ zoom: 1, target: 1 });
   });
 
-  test.skipIf(todo)('K3a: target = largest zoom <= 1 keeping both players 64 low-res px inside the edges (screen-x and screen-y spreads)', () => {
+  test.skipIf(todo)('K3a: camZoom().target is the K3a target of the players, live', () => {
     const [p1, p2] = twoUp();
-    const v = viewLowRes();
-    for (const frac of [0.6, 0.8, 0.95]) {
-      // along screen x: separation of frac x (full width / 0.6) low-res px at zoom 1
-      const r = screenRight(((v.w - 128) / 0.6) * frac);
-      place(p1, 0, 0); place(p2, r.dx, r.dy);
-      frame();
-      expect(H.zoom().target, `screen-x spread ${frac}`).toBeCloseTo(expectedZoom([p1, p2]), 4);
-    }
-    // along screen y (iso: world +x+y goes down the screen)
-    const d = ((v.h - 128) / 0.6 * 0.8 * g.RETRO.PIXEL_SCALE) / (2 * C().ISO_SCALE);
-    place(p1, 0, 0); place(p2, d, d);
+    const r = screenRight(cssW(0.9));
+    place(p1, 0, 0); place(p2, r.dx, r.dy);
     frame();
-    expect(H.zoom().target, 'screen-y spread').toBeCloseTo(expectedZoom([p1, p2]), 4);
+    expect(H.zoom().target).toBeCloseTo(expectedZoom([p1, p2]), 6);
     expect(H.zoom().target).toBeLessThan(1);
   });
 
-  test.skipIf(todo)('K3a: the target is clamped at 0.6 however far apart', () => {
+  test.skipIf(todo)('K3a: zooming out is linear at COOP_ZOOM_OUT_RATE (3/s) down to the target, never past it', () => {
     const [p1, p2] = twoUp();
-    const r = screenRight(viewLowRes().w * 3);
-    place(p1, 0, 0); place(p2, r.dx, r.dy);
-    frame();
-    expect(H.zoom().target).toBe(C().COOP_ZOOM_MIN);
-    seconds(3);
-    expect(H.zoom().zoom).toBeCloseTo(C().COOP_ZOOM_MIN, 3);
-    expect(H.zoom().zoom).toBeGreaterThanOrEqual(C().COOP_ZOOM_MIN);
-  });
-
-  test.skipIf(todo)('K3a: zooming out follows the target (reaches it within 1.5 s, never overshoots)', () => {
-    const [p1, p2] = twoUp();
-    const r = screenRight(viewLowRes().w * 1.2);
+    const r = screenRight(cssW(1.4));
     place(p1, 0, 0); place(p2, r.dx, r.dy);
     frame();
     const target = H.zoom().target;
-    expect(target).toBeLessThan(0.95);
-    let prev = 1;
-    for (let i = 0; i < 90; i++) {
+    expect(target).toBeLessThan(0.9);
+    let prev = H.zoom().zoom;
+    for (let i = 0; i < 60; i++) {
       frame();
       const z = H.zoom().zoom;
-      expect(z).toBeLessThanOrEqual(prev + 1e-9);
+      expect(prev - z, `frame ${i}: step`).toBeCloseTo(Math.min(C().COOP_ZOOM_OUT_RATE * DT, prev - target), 6);
       expect(z).toBeGreaterThanOrEqual(target - 1e-9);
       prev = z;
     }
-    expect(prev).toBeCloseTo(target, 2);
+    expect(prev).toBeCloseTo(target, 6);
   });
 
-  test.skipIf(todo)('K3a: zoom-in deadband: no zoom-in while the target is < 5% above the zoom; at >= 5% it zooms in, slower than out', () => {
+  test.skipIf(todo)('K3a: zoom-in deadband: held while the target is < 5% above the zoom; at >= 5% it zooms in linearly at COOP_ZOOM_IN_RATE (1/s)', () => {
     const [p1, p2] = twoUp();
-    const sep = (lowRes) => { const r = screenRight(lowRes); place(p1, 0, 0); place(p2, r.dx, r.dy); };
-    const v = viewLowRes();
-    const sepFor = (z) => (v.w - 128) / z; // separation whose fit is exactly z
-    sep(sepFor(0.7)); seconds(3);
+    const v = viewLowRes(), ps = g.RETRO.PIXEL_SCALE;
+    const sepFor = (z) => ((v.w - 128) / z) * ps; // CSS separation whose fit is exactly z
+    const sep = (css) => { const r = screenRight(css); place(p1, 0, 0); place(p2, r.dx, r.dy); };
+    sep(sepFor(0.7)); seconds(1);
     const z0 = H.zoom().zoom;
-    expect(z0).toBeCloseTo(0.7, 2);
+    expect(z0).toBeCloseTo(0.7, 6);
     sep(sepFor(z0 * 1.04)); seconds(3);
-    expect(H.zoom().zoom, 'target 4% above: held').toBeCloseTo(z0, 6);
-    sep(sepFor(z0 * 1.06)); frame();
-    expect(H.zoom().target).toBeCloseTo(z0 * 1.06, 3);
-    seconds(0.25);
-    const zin = H.zoom().zoom - z0;
-    expect(zin, 'target 6% above: zooming in').toBeGreaterThan(0);
-    seconds(6);
-    expect(H.zoom().zoom).toBeCloseTo(z0 * 1.06, 2);
-    // in runs at 1/s, out at 3/s: over the same 0.25 s, a zoom-out step of the same size moves more
-    const zIn = H.zoom().zoom;
-    sep(sepFor(zIn - (z0 * 1.06 - z0))); frame();
-    seconds(0.25);
-    expect(zIn - H.zoom().zoom, 'zoom-out faster than zoom-in').toBeGreaterThan(zin);
+    expect(H.zoom().target).toBeCloseTo(z0 * 1.04, 6);
+    expect(H.zoom().zoom, 'target 4% above: held').toBe(z0);
+    sep(sepFor(z0 * 1.06));
+    const prev = H.zoom().zoom;
+    frame();
+    expect(H.zoom().zoom - prev, 'one frame of zoom-in').toBeCloseTo(C().COOP_ZOOM_IN_RATE * DT, 6);
+    seconds(1);
+    expect(H.zoom().zoom).toBeCloseTo(z0 * 1.06, 6);
   });
 
-  test.skipIf(todo)('K3a: back together, the zoom returns to exactly 1.0', () => {
+  test.skipIf(todo)('K3a: back together the zoom returns to exactly 1.0, also from inside the deadband of 1', () => {
     const [p1, p2] = twoUp();
-    const r = screenRight(viewLowRes().w);
-    place(p1, 0, 0); place(p2, r.dx, r.dy); seconds(2);
-    expect(H.zoom().zoom).toBeLessThan(1);
-    place(p2, 40, 0); seconds(8);
+    const near = screenRight(((viewLowRes().w - 128) / 0.97) * g.RETRO.PIXEL_SCALE); // fit 0.97: within 5% of 1
+    place(p1, 0, 0); place(p2, near.dx, near.dy); seconds(1);
+    expect(H.zoom().zoom).toBeCloseTo(0.97, 6);
+    place(p2, 40, 0); seconds(1);
+    expect(H.zoom()).toMatchObject({ zoom: 1, target: 1 });
+    const far = screenRight(cssW(3));
+    place(p2, far.dx, far.dy); seconds(1);
+    expect(H.zoom().zoom).toBe(C().COOP_ZOOM_MIN);
+    place(p2, 40, 0); seconds(1);
     expect(H.zoom()).toMatchObject({ zoom: 1, target: 1 });
   });
 
-  test.skipIf(todo)('K3a: setCamZoom holds a zoom; null hands it back to the camera', () => {
+  test.skipIf(todo)('K3a: setCamZoom holds a clamped zoom (forced); NaN is ignored; null hands it back', () => {
     const [p1, p2] = twoUp();
     place(p1, 0, 0); place(p2, 40, 0);
     H.setZoom(0.7); frame(30);
+    expect(H.zoom()).toMatchObject({ zoom: 0.7, forced: true });
+    H.setZoom(NaN); frame();
     expect(H.zoom().zoom).toBe(0.7);
-    H.setZoom(null); seconds(8);
+    H.setZoom(0.2); frame();
+    expect(H.zoom().zoom).toBe(0.6);
+    H.setZoom(5); frame();
     expect(H.zoom().zoom).toBe(1);
+    H.setZoom(0.7); frame();
+    H.setZoom(null); seconds(1);
+    expect(H.zoom()).toMatchObject({ zoom: 1, forced: false });
   });
 
   test.skipIf(todo)('K3a: dead players do not count for the midpoint or the zoom; downed players do', () => {
     const [p1, p2] = twoUp();
-    const r = screenRight(viewLowRes().w);
+    const r = screenRight(cssW(1));
     place(p1, 0, 0); place(p2, r.dx, r.dy);
     p2.state = 'dead'; frame();
     const s1 = g.toScreen(p1.x, p1.y);
@@ -608,59 +637,100 @@ describe('M11 K3 camera, zoom and leash', () => {
     expect(H.zoom().target).toBeLessThan(1);
   });
 
-  test.skipIf(todo)('K3b: below max zoom-out there is no leash: moving apart runs at full speed', () => {
-    const [p1, p2] = twoUp();
-    const r = screenRight(viewLowRes().w * 0.6);
-    place(p1, 0, 0); place(p2, r.dx, r.dy); seconds(2);
+  test.skipIf(todo)('K3a: in 1P worldToView/viewToWorld equal toScreen + worldOffset and invert each other', () => {
+    g.worldOffsetX = 640; g.worldOffsetY = 360;
+    const h = findHome();
+    const v = g.worldToView(h.x + 50, h.y - 20), s = g.toScreen(h.x + 50, h.y - 20);
+    expect(v.x).toBeCloseTo(s.x + g.worldOffsetX, 6);
+    expect(v.y).toBeCloseTo(s.y + g.worldOffsetY, 6);
+    const w = g.viewToWorld(v.x, v.y);
+    expect(w.x).toBeCloseTo(h.x + 50, 6);
+    expect(w.y).toBeCloseTo(h.y - 20, 6);
+  });
+
+  test.skipIf(todo)('K3b: coopLeashClamp (pure): an outward move is cut at the leash limit; inward and still moves are untouched', () => {
+    const v = viewLowRes(), z = C().COOP_ZOOM_MIN, m = C().COOP_LEASH_PX, h = findHome();
+    const other = { x: h.x, y: h.y };
+    const r0 = screenRight(limitCss() - 10), r1 = screenRight(limitCss() + 30), rin = screenRight(limitCss() - 40);
+    const mover = { x: h.x + r0.dx, y: h.y + r0.dy };
+    const out = { x: 0, y: 0 };
+    g.coopLeashClamp(mover, other, h.x + r1.dx, h.y + r1.dy, out);
+    expect(leashOk(out, other), 'clamped inside the limit').toBe(true);
+    expect(Math.abs(Math.abs(lowRes(out.x - other.x, out.y - other.y).x) * z - (v.w - 2 * m)), 'cut at the limit').toBeLessThan(0.5);
+    g.coopLeashClamp(mover, other, h.x + rin.dx, h.y + rin.dy, out);
+    expect([out.x, out.y], 'inward: untouched').toEqual([h.x + rin.dx, h.y + rin.dy]);
+    g.coopLeashClamp(mover, other, mover.x, mover.y, out);
+    expect([out.x, out.y], 'still: untouched').toEqual([mover.x, mover.y]);
+  });
+
+  test.skipIf(todo)('K3b: coopLeashClamp (pure): a player knocked past the leash is not yanked back; outward is cut, inward is free', () => {
+    const h = findHome();
+    const other = { x: h.x, y: h.y };
+    const rk = screenRight(limitCss() + 100), rOut = screenRight(limitCss() + 120), rIn = screenRight(limitCss() + 80);
+    const mover = { x: h.x + rk.dx, y: h.y + rk.dy };
+    const out = { x: 0, y: 0 };
+    const sep = (q) => Math.abs(lowRes(q.x - other.x, q.y - other.y).x);
+    g.coopLeashClamp(mover, other, mover.x, mover.y, out);
+    expect([out.x, out.y], 'standing still past the leash: stays').toEqual([mover.x, mover.y]);
+    g.coopLeashClamp(mover, other, h.x + rOut.dx, h.y + rOut.dy, out);
+    expect(sep(out), 'outward: separation does not grow').toBeLessThanOrEqual(sep(mover) + 1e-6);
+    expect(sep(out), 'and is not pulled in either').toBeGreaterThan(sep(mover) - 1);
+    g.coopLeashClamp(mover, other, h.x + rIn.dx, h.y + rIn.dy, out);
+    expect([out.x, out.y], 'inward: free').toEqual([h.x + rIn.dx, h.y + rIn.dy]);
+  });
+
+  test.skipIf(todo)('K3b: coopLeashClamp (pure): a move along the limit keeps its screen-down part', () => {
+    const h = findHome();
+    const other = { x: h.x, y: h.y };
+    const r = screenRight(limitCss() - 1);
+    const mover = { x: h.x + r.dx, y: h.y + r.dy };
+    const out = { x: 0, y: 0 };
+    const down = 20 / (2 * C().ISO_SCALE), rr = screenRight(30); // 20 CSS px screen-down, 30 screen-right
+    g.coopLeashClamp(mover, other, mover.x + down + rr.dx, mover.y + down + rr.dy, out);
+    expect(leashOk(out, other)).toBe(true);
+    expect(g.toScreen(out.x - mover.x, out.y - mover.y).y, 'screen-down part kept').toBeCloseTo(20, 0);
+  });
+
+  test.skipIf(todo || !LANDED.K2)('K3b: below max zoom-out there is no leash: moving apart runs at full speed', () => {
+    rig.connect(0); frame(); tap(0, BTN.BACK);
+    const [p1, p2] = H.players();
+    p1.invincible = p2.invincible = 1e9;
+    const r = screenRight(cssW(0.6));
+    place(p1, 0, 0); place(p2, r.dx, r.dy); seconds(1);
     expect(H.zoom().zoom).toBeGreaterThan(C().COOP_ZOOM_MIN + 0.1);
     const at = { x: p2.x, y: p2.y };
     rig.axes(0, 1, 0); frame(12); rig.axes(0, 0, 0); // P2 (on pad 0 here) runs screen-right for 0.2 s
     expect(Math.hypot(p2.x - at.x, p2.y - at.y), 'not clamped while zoom > min').toBeGreaterThan(0.8 * C().PLAYER_SPEED * 0.2);
-    expect(H.zoom().zoom).toBeGreaterThan(C().COOP_ZOOM_MIN);
   });
 
-  test.skipIf(todo)('K3b: at COOP_ZOOM_MIN a player running away is clamped; both stay >= 48 low-res px inside the view edges', () => {
-    const [p1, p2] = twoUp();
+  test.skipIf(todo || !LANDED.K2)('K3b: at COOP_ZOOM_MIN a player running away is clamped; both stay >= 48 low-res px inside the view edges', () => {
+    rig.connect(0); frame(); tap(0, BTN.BACK);
+    const [p1, p2] = H.players();
+    p1.invincible = p2.invincible = 1e9;
     place(p1, 0, 0); place(p2, 40, -40);
-    rig.axes(0, 1, 0); // P2 (pad 0 here) runs screen-right for 10 s
+    rig.axes(0, 1, 0); // P2 runs screen-right for 10 s
+    let atMin = 0;
     for (let i = 0; i < 600; i++) {
       frame();
       if (H.zoom().zoom > C().COOP_ZOOM_MIN + 1e-6) continue;
+      atMin++;
       const v = viewLowRes();
       for (const p of [p1, p2]) {
         const s = lowResFromCentre(p.x, p.y);
-        expect(v.w / 2 - Math.abs(s.x), `frame ${i}: x margin`).toBeGreaterThanOrEqual(48 - 1);
-        expect(v.h / 2 - Math.abs(s.y), `frame ${i}: y margin`).toBeGreaterThanOrEqual(48 - 1);
+        expect(v.w / 2 - Math.abs(s.x), `frame ${i}: x margin`).toBeGreaterThanOrEqual(C().COOP_LEASH_PX - 1);
+        expect(v.h / 2 - Math.abs(s.y), `frame ${i}: y margin`).toBeGreaterThanOrEqual(C().COOP_LEASH_PX - 1);
       }
     }
     rig.axes(0, 0, 0);
-    expect(H.zoom().zoom, 'it got to max zoom-out').toBeCloseTo(C().COOP_ZOOM_MIN, 3);
-    // moving back toward P1 is free
+    expect(atMin, 'frames at max zoom-out').toBeGreaterThan(100);
     const d0 = Math.hypot(p2.x - p1.x, p2.y - p1.y);
     rig.axes(0, -1, 0); frame(20); rig.axes(0, 0, 0);
-    expect(Math.hypot(p2.x - p1.x, p2.y - p1.y)).toBeLessThan(d0 - 20);
-  });
-
-  test.skipIf(todo)('K3b: knockback may push past the leash; the next outward move is clamped (no teleport back)', () => {
-    const [p1, p2] = twoUp();
-    const r = screenRight(viewLowRes().w * 2.5);
-    place(p1, 0, 0); place(p2, r.dx, r.dy); seconds(3);
-    expect(H.zoom().zoom).toBeCloseTo(C().COOP_ZOOM_MIN, 3);
-    const d0 = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-    let last = { x: p2.x, y: p2.y };
-    rig.axes(0, 1, 0);
-    for (let i = 0; i < 60; i++) {
-      frame();
-      expect(Math.hypot(p2.x - last.x, p2.y - last.y), 'no snap').toBeLessThan(C().PLAYER_SPEED * DT * 2 + 1);
-      last = { x: p2.x, y: p2.y };
-    }
-    rig.axes(0, 0, 0);
-    expect(Math.hypot(p2.x - p1.x, p2.y - p1.y), 'separation does not grow').toBeLessThanOrEqual(d0 + 1);
+    expect(Math.hypot(p2.x - p1.x, p2.y - p1.y), 'moving back is free').toBeLessThan(d0 - 20);
   });
 
   test.skipIf(todo)('K3: shake stays global and capped at SHAKE_MAX, whatever the zoom', () => {
     twoUp();
-    H.setZoom(0.6);
+    H.setZoom(0.6); frame();
     g.addShake(1e3);
     expect(g.shakeMag).toBe(C().SHAKE_MAX);
     H.setZoom(null);
