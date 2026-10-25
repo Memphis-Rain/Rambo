@@ -46,6 +46,19 @@ const CFG = {
   PAD_RUMBLE_GAP_MS: 50,       // at most one new effect per 50 ms
   // M9 W2: wading
   WADE_RAMP: 0.25,             // s for the waterline to rise/fall fully
+  // M9 W3-W5: blood in water
+  BLOOD_CLOUD_LIFE: 8,         // s; expands to 2x over 4 s, fades in steps
+  BODY_FLOAT_S: 0.5,           // W4: a corpse in water floats, sinks, dissolves
+  BODY_SINK_S: 2.5,
+  BODY_DISSOLVE_S: 1.5,
+  GIB_SINK_S: 0.9,
+  W5_HIT: 0.02,                // per-tile blood concentration added (within 1 / 2 / 3 tiles)
+  W5_GIB: 0.05,
+  W5_KILL: 0.15,
+  W5_TICK: 0.25,               // s between diffusion/decay ticks (<= 4 Hz)
+  W5_HALF_LIFE: 180,           // s
+  W5_DIFFUSE: 0.3,             // /s exchange rate with each 4-neighbour water tile
+  W5_STORE_MIN: 0.004,         // below this a tile's trace is dropped (below 0.02 it reads/draws as 0)
   // M9 N1: grenades (F)
   GRENADE_DMG: 200,            // RPG path: splash 0.7 x dmg x (1 - d/R), no direct hit
   GRENADE_RADIUS: 140,

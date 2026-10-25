@@ -23,6 +23,9 @@ const SP_Z_DECAL = -999999;      // baked decal chunks
 const SP_Z_DECAL_RECENT = -999998.5;
 const SP_Z_ENVL = -999996.5;     // M8 E10: per-chunk remains (stumps, logs, rubble): above the water overlay (logs float), below ground shadows
 const SP_Z_GROUND = -999996;     // ground shadows / flat debris (water overlay is -999997)
+const SP_Z_WBLOOD = -999996.9;   // M9 W5: blood tint over the water camo, below remains / shadows / bodies
+const SP_Z_CLOUD = -999996.8;    // M9 W3: blood clouds on the water surface (above the tint)
+const SP_Z_WBSHEEN = -999996.84; // M9 W5: ripple sheen on bloody water (above the tint and the camo ripples at -999996.85)
 const SP_Z_FX = 999000;          // telegraphs, rings, health bars
 const SP_Z_TEXT = 999500;        // pixel font
 
@@ -88,6 +91,10 @@ const _sp = {
   dec: null,
   // M8 E10: env remains layer (per terrain chunk)
   envL: null,
+  // M9 W3/W5: blood on the water
+  wbG: null, wbVer: -1,      // W5 tint overlay, rebuilt only when waterBloodVersion changes
+  cloudG: null,              // W3 blood clouds (per frame)
+  texBayer: [], patStyle: new Map(), patMat: null,
 };
 
 // Type -> visual kind lookup (by enemy name, so table order can change)
@@ -190,6 +197,35 @@ function _spShapeTex(rows, pal) {
   });
 }
 
+// M9 W3/W4/W5 ordered dither: 4x4 Bayer textures (white texel where the
+// Bayer rank < n, n = 1..15 of 16), repeated in the Graphics' own space at
+// one texel per art pixel. Fills with them are stepped coverage, never a
+// smooth alpha; in worldContainer space the grid is fixed to the world, so a
+// drifting cloud moves over a still pattern (no shimmer).
+const _spBayer4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+function _spPatTex(n) {
+  let t = _sp.texBayer[n];
+  if (!t) {
+    t = _sp.texBayer[n] = _spCanvasTex(4, 4, (c) => {
+      c.fillStyle = '#fff';
+      for (let i = 0; i < 16; i++) if (_spBayer4[i] < n) c.fillRect(i & 3, i >> 2, 1, 1);
+    });
+    t.source.addressMode = 'repeat';
+  }
+  return t;
+}
+// Cached fill style: n of 16 pixels in colour c (no per-frame allocation)
+function _spPat(n, c) {
+  const key = n * 0x1000000 + c;
+  let st = _sp.patStyle.get(key);
+  if (!st) {
+    if (!_sp.patMat) _sp.patMat = new PIXI.Matrix(ART, 0, 0, ART, 0, 0);
+    st = { texture: _spPatTex(n), color: c, alpha: 1, textureSpace: 'global', matrix: _sp.patMat };
+    _sp.patStyle.set(key, st);
+  }
+  return st;
+}
+
 // N1 grenade art. O outline, G olive, L highlight, D shade, S steel cap/lever, s steel shade
 const _spGrenadePal = { O: '#120c08', G: '#5a6a2c', L: '#8c9c4c', D: '#34401a', S: '#b4b4a8', s: '#62625a' };
 // Spin frames: upright, on its side (cap right), upside down; frame 3 = side mirrored.
@@ -252,6 +288,8 @@ function initPixiSprites() {
     _sp.env.forEach((g) => { if (g && g._notchG) _spDestroy(g._notchG); _spDestroy(g); });
     _spDestroy(_sp.playerG); _spDestroy(_sp.ghostG); _spDestroy(_sp.shadowG);
     _spDestroy(_sp.fxG); _spDestroy(_sp.textG); _spDestroy(_sp.groundG); _spDestroy(_sp.hurtG);
+    _spDestroy(_sp.wbG); _spDestroy(_sp.cloudG);
+    _spDestroy(_sp.wbSheenA); _spDestroy(_sp.wbSheenB);
     if (_sp.dec) {
       for (const c of _sp.dec.chunks) _spDestroy(c.g);
       for (const g of _sp.dec.freeG) _spDestroy(g);
@@ -289,6 +327,13 @@ function initPixiSprites() {
   _sp.ghostG = mk(0);
   _sp.fxG = mk(SP_Z_FX);
   _sp.textG = mk(SP_Z_TEXT);
+  _sp.wbG = mk(SP_Z_WBLOOD);           // W5 (static between band changes)
+  _sp.cloudG = mk(SP_Z_CLOUD);         // W3
+  _sp.wbSheenA = mk(SP_Z_WBSHEEN);     // W5 ripple sheen, the two pulse groups
+  _sp.wbSheenB = mk(SP_Z_WBSHEEN);
+  _sp.wbG.eventMode = 'none'; _sp.cloudG.eventMode = 'none';
+  _sp.wbSheenA.eventMode = 'none'; _sp.wbSheenB.eventMode = 'none';
+  _sp.wbVer = -1;
 
   // G10 hurt overlay: full-res UI, below the HUD, never takes input
   _sp.hurtG = new PIXI.Graphics();
@@ -582,6 +627,21 @@ function _spClipFor(g, wy) {
 function _spKeepBounds(g, waterY) {
   g._bx0 = _pbBX0; g._by0 = _pbBY0; g._bx1 = _pbBX1; g._by1 = _pbBY1;
   g._waterY = waterY;
+}
+
+// W4: the buffer's silhouette (outlines included) as one fill with style st
+// (a dither pattern), honouring the one-shot clip
+function _pflushPat(g, st) {
+  const A = ART;
+  let any = false;
+  for (let i = 0; i < _pbN; i++) {
+    const o = _pbO[i];
+    if (!_pcut(_pbX[i] - o, _pbY[i] - o, _pbX[i] + _pbW[i] + o, _pbY[i] + _pbH[i] + o)) continue;
+    g.rect(_pcX0 * A, _pcY0 * A, (_pcX1 - _pcX0) * A, (_pcY1 - _pcY0) * A);
+    any = true;
+  }
+  if (any) g.fill(st);
+  _pcAx = -1;
 }
 
 // =====================================================================
@@ -980,6 +1040,8 @@ function renderPixiSprites() {
   const t0 = performance.now();
   _spBeginFrame();
   _spRenderDecals();
+  _spRenderWaterBlood();
+  _spRenderBloodClouds();
   _spRenderEnvLayer();
   const t1 = performance.now();
   _spRenderEnv();
@@ -1352,24 +1414,82 @@ function _spRenderBodies() {
       astep = 1 + Math.min(3, ((age - CFG.BODY_FADE_START) / span * 4) | 0);
       alpha = 1 - astep * 0.2;
     }
-    const fading = astep > 0 ? 1 : 0;
-    if (g._key !== fading) {
-      g._key = fading;
-      g.clear();
-      const k = b.type !== undefined ? _spTypeKind[b.type] : 0;
-      const P = _P;
-      P.kind = k; P.s = b.size || 1; P.aim = 0.6;
-      P.flip = (b.flip || 1) < 0 ? -1 : 1;
-      P.walkF = -1; P.bob = 0; P.headBob = 0; P.recoil = 0; P.attack = 0;
-      P.dead = true; P.curl = false; P.gunOverride = false; P.spin = -1;
-      P.blink = 0; P.visor = 0; P.tail = 0; P.glowTip = 0;
-      _spBuildPuppet();
-      _pflush(g, b.isBoss ? SP_OUTLINE_BOSS : SP_OUTLINE, 0, fading === 1, 0);
-    }
     g.rotation = m * Q;
     g.alpha = alpha;
     g.position.set(_spSnap(sx), _spSnap(sy - z));
     g.zIndex = depthKey(b.x, b.y) - 1;
+    // W4: in water. Never baked anywhere: corpses are live Graphics, and the
+    // logic blocks their blood decals on water.
+    if (b.inWater) { _spBodyInWater(b, g, m); continue; }
+    const fading = astep > 0 ? 1 : 0;
+    if (g._key !== fading) {
+      g._key = fading;
+      g.clear();
+      _spBodyPuppet(b);
+      _pflush(g, b.isBoss ? SP_OUTLINE_BOSS : SP_OUTLINE, 0, fading === 1, 0);
+    }
+  }
+}
+
+// Dead-pose puppet of corpse b into the command buffer
+function _spBodyPuppet(b) {
+  const P = _P;
+  P.kind = b.type !== undefined ? _spTypeKind[b.type] : 0; P.s = b.size || 1; P.aim = 0.6;
+  P.flip = (b.flip || 1) < 0 ? -1 : 1;
+  P.walkF = -1; P.bob = 0; P.headBob = 0; P.recoil = 0; P.attack = 0;
+  P.dead = true; P.curl = false; P.gunOverride = false; P.spin = -1;
+  P.blink = 0; P.visor = 0; P.tail = 0; P.glowTip = 0;
+  _spBuildPuppet();
+}
+
+// W4 corpse in water: lying (rotation m = 2 or 6, quarter turns), local x is
+// screen-vertical. The waterline rises from the bottom in whole art rows:
+// floating it hides SP_FLOAT_HIDE of the body, sinking rises to all of it.
+// Below the waterline the body shows as a dithered murky silhouette, which
+// the dissolve thins out in 4 steps. Rebuilt only when the row / step changes.
+const SP_FLOAT_HIDE = 0.4;
+const SP_SUB_COL = 0x2e141c;            // the drowned body seen through the water
+const SP_SUB_DENS = [8, 6, 4, 2, 1];    // 16ths: sinking, then dissolve steps 0..3
+function _spBodyInWater(b, g, m) {
+  if (b._spWX0 === undefined) {
+    _spBodyPuppet(b);
+    let x0 = 32767, x1 = -32767, y0 = 32767, y1 = -32767;
+    for (let i = 0; i < _pbN; i++) {
+      const o = _pbO[i];
+      if (_pbX[i] - o < x0) x0 = _pbX[i] - o;
+      if (_pbX[i] + _pbW[i] + o > x1) x1 = _pbX[i] + _pbW[i] + o;
+      if (_pbY[i] - o < y0) y0 = _pbY[i] - o;
+      if (_pbY[i] + _pbH[i] + o > y1) y1 = _pbY[i] + _pbH[i] + o;
+    }
+    b._spWX0 = x0; b._spWX1 = x1; b._spWY0 = y0; b._spWY1 = y1;
+    g._key = -1;
+  }
+  const lo = b._spWX0, hi = b._spWX1, rows = hi - lo;
+  const ph = b.sinkPhase;
+  const f = ph === 'float' ? SP_FLOAT_HIDE : ph === 'sink' ? SP_FLOAT_HIDE + (1 - SP_FLOAT_HIDE) * (b.sinkFrac || 0) : 1;
+  const hidden = Math.min(rows, Math.round(f * rows));
+  const dstep = ph === 'dissolve' ? 1 + Math.min(4, ((b.dissolve || 0) * 4) | 0) : 0;
+  if (dstep > 4) { g.visible = false; return; }
+  const down = m !== 6; // m 2: screen y grows with local x (bottom = hi); m 6: bottom = lo
+  const cut = down ? hi - hidden : lo + hidden;
+  const key = 1000 + hidden * 8 + dstep;
+  if (g._key !== key) {
+    g._key = key;
+    g.clear();
+    _spBodyPuppet(b);
+    if (hidden > 0) { _spClip(1, !down, cut); _pflushPat(g, _spPat(SP_SUB_DENS[dstep], SP_SUB_COL)); }
+    if (hidden < rows) { _spClip(1, down, cut); _pflush(g, b.isBoss ? SP_OUTLINE_BOSS : SP_OUTLINE, 0, false, 0); }
+  }
+  // ripple ring where the body cuts the surface (ground layer, under it)
+  if (hidden < rows && dstep === 0) {
+    const A = ART, wy = g.y + (down ? cut : -cut) * A;
+    const mid = (b._spWY0 + b._spWY1) * 0.5 * A;
+    const X = _spSnap(down ? g.x - mid : g.x + mid);
+    const fr = ((gameTime * 5) | 0) % 3;
+    const rx = Math.round((b._spWY1 - b._spWY0) * 0.5) + 1 + fr;
+    const gg = _sp.groundG;
+    _spRingRows(gg, X, wy, rx, Math.max(1, Math.round(rx * 0.3)));
+    gg.fill({ color: 0xd8f0ff, alpha: fr === 0 ? 0.75 : fr === 1 ? 0.5 : 0.3 });
   }
 }
 
@@ -1668,7 +1788,8 @@ function _spRenderGibs() {
     const gb = gibs[i];
     const sx = gb.x - gb.y, gy = (gb.x + gb.y) * iso;
     if (!_spInView(sx, gy)) continue;
-    const z = gb.z || 0;
+    const wet = gb.inWater === true;
+    const z = wet ? 0 : gb.z || 0;
     const X = _spSnap(sx), Y = _spSnap(gy - z);
     if (z > 2) sg.rect(X - A, _spSnap(gy), 3 * A, A);
     const part = gb.part | 0;
@@ -1682,6 +1803,7 @@ function _spRenderGibs() {
     if (r & 1) { const t = w; w = h; h = t; }
     const zz = depthKey(gb.x, gb.y);
     const x0 = X - ((w * A) >> 1) - ((w * A >> 1) % A), y0 = Y - h * A;
+    if (wet) { _spGibSink(gb, x0, y0, w, h, r, Y, zz); continue; }
     _spRectSprite(x0 - A, y0 - A, (w + 2) * A, (h + 2) * A, 0x2a0808, zz);
     _spRectSprite(x0, y0, w * A, h * A, gb.color === undefined ? 0x8a1010 : gb.color, zz + 0.001);
     // red meat pixel at the torn end
@@ -1690,6 +1812,219 @@ function _spRenderGibs() {
     _spRectSprite(mx, my, A, A, 0xc01818, zz + 0.002);
   }
   sg.fill({ color: 0, alpha: 0.35 });
+}
+
+// W4: a gib in water goes down through the waterline (its ground row Y) one
+// art row at a time over CFG.GIB_SINK_S; the rows below Y are cropped. No
+// shadow; a foam pixel either side while it is still above the surface.
+function _spGibSink(gb, x0, y0, w, h, r, Y, zz) {
+  const A = ART, R = h + 2;
+  const k = Math.min(R, ((gb.sinkT || 0) / CFG.GIB_SINK_S * (R + 1)) | 0) * A;
+  const top = y0 - A + k;
+  if (top >= Y) return;
+  _spRectSprite(x0 - A, top, (w + 2) * A, Y - top, 0x2a0808, zz);
+  const ft = y0 + k;
+  if (ft < Y) {
+    _spRectSprite(x0, ft, w * A, Math.min(h * A, Y - ft), gb.color === undefined ? 0x8a1010 : gb.color, zz + 0.001);
+    const mx = (r === 0 || r === 3) ? x0 + (w - 1) * A : x0;
+    const my = ((r < 2) ? y0 + (h - 1) * A : y0) + k;
+    if (my < Y) _spRectSprite(mx, my, A, A, 0xc01818, zz + 0.002);
+  }
+  _spRectSprite(x0 - 2 * A, Y - A, A, A, 0xe8f4ff, zz + 0.003);
+  _spRectSprite(x0 + (w + 1) * A, Y - A, A, A, 0xe8f4ff, zz + 0.003);
+}
+
+// =====================================================================
+// BLOOD ON THE WATER (M9 W3 clouds, W5 tint)
+// =====================================================================
+// W5: one Graphics of tile diamonds, a dither pattern per band (coverage
+// 4 / 9 / 11 / 12 of 16, i.e. up to 75%, saturated reds: the frame grade
+// lifts pure red to ~(161,38,0), so only coverage pushes R past G/B: band 2
+// reads R >= 1.4 x G and B, band 3+ >= 1.8 x with dither + CRT on; spec
+// b0cdc51). Tile
+// (i, j) = world [i ts, (i+1) ts) x [j ts, (j+1) ts): the same diamond the
+// terrain chunk draws for it. Rebuilt only when waterBloodVersion changes
+// (<= 4 Hz, and resetWater bumps it), never per frame, and the baked water
+// camo is untouched (the tint sits on top of it); the camo's ripple
+// highlights are drawn above the tint (pixi-terrain.js WATER_RIP_Z).
+// Feathered borders: each tile is cut into 5 x 5 cells along its world axes
+// (inner 50% + two 12.5% strips per side). A strip cell blends bilinearly
+// toward the side / diagonal neighbours (t = 1/5 in the inner strip, 2/5 in
+// the outer one, so the two tiles' strips make a symmetric 5-step ramp
+// across the border): its coverage rounds to a whole Bayer step (stepped, no
+// smooth alpha) and its colour is the coverage-weighted mix of the bands'
+// colours, quantised to steps of 8 per channel (a band 3 -> 4 border is
+// mostly a colour change). Clean water neighbours get their half of the
+// ramp; land neighbours count as the tile itself (the shoreline keeps its
+// edge). Geometry is grouped by (coverage, colour) and filled once per style.
+// Water life: the camo's ripple highlights sit above the tint, and on band
+// 2+ tiles (where the red would swallow them) the same ripple rect gets a
+// pale sheen, one art pixel tall, pulsing in the camo ripples' two stepped
+// counter-phase groups (alpha only per frame, geometry with the tint).
+const SP_WB_SHEEN = 0xe8a0a0;
+const SP_WB_DENS = [0, 4, 9, 11, 12];
+const SP_WB_COL = [0, 0x960000, 0xb80000, 0xa80000, 0x900000];
+const SP_WB_CUT = [0, 0.125, 0.25, 0.75, 0.875, 1];
+const SP_WB_T = [2 / 5, 1 / 5, 0, 1 / 5, 2 / 5];
+const SP_WB_SIDE = [-1, -1, 0, 1, 1];
+const _spWbNb = new Int8Array(9);        // 3 x 3 neighbour bands, [(b + 1) * 3 + (a + 1)]
+const _spWbW = new Float32Array(5);      // per-band weight of one cell
+const _spWbCell = new Float64Array(25);  // style key per cell (0 = none)
+const _spWbPolys = new Map();            // style key -> point lists of its cells
+const _spWbSeen = new Set();
+function _spWbBand(i, j) {               // band of a bloody tile, 0 clean water, -1 land
+  const t = waterBloodTiles.get(_wbKey(i, j));
+  if (t && t.band > 0) return t.band;
+  return _wbIsWet(i, j) ? 0 : -1;
+}
+function _spWbTile(i, j, ts, iso) {
+  const nb = _spWbNb, w = _spWbW, cell = _spWbCell;
+  const b0 = Math.max(0, _spWbBand(i, j));
+  let flat = true;
+  for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+    let k = (a || b) ? _spWbBand(i + a, j + b) : b0;
+    if (k < 0) k = b0;
+    nb[(b + 1) * 3 + a + 1] = k;
+    if (k !== b0) flat = false;
+  }
+  if (flat) {
+    if (b0 > 0) _spWbPoly(SP_WB_DENS[b0] * 0x1000000 + SP_WB_COL[b0], i, j, 0, 0, 1, 1, ts, iso);
+    return;
+  }
+  for (let cv = 0; cv < 5; cv++) {
+    const sv = SP_WB_SIDE[cv], tv = SP_WB_T[cv];
+    for (let cu = 0; cu < 5; cu++) {
+      const su = SP_WB_SIDE[cu], tu = SP_WB_T[cu];
+      w.fill(0);
+      w[b0] += (1 - tu) * (1 - tv);
+      w[nb[4 + su]] += tu * (1 - tv);
+      w[nb[(sv + 1) * 3 + 1]] += (1 - tu) * tv;
+      w[nb[(sv + 1) * 3 + su + 1]] += tu * tv;
+      let d = 0, r = 0, gg = 0, bb = 0, used = 0, one = 0;
+      for (let k = 1; k <= 4; k++) {
+        if (!w[k]) continue;
+        const wd = w[k] * SP_WB_DENS[k], c = SP_WB_COL[k];
+        d += wd; r += wd * (c >> 16); gg += wd * ((c >> 8) & 255); bb += wd * (c & 255);
+        used++; one = k;
+      }
+      const n = Math.min(15, Math.round(d));
+      let col = 0;
+      if (n > 0) {
+        if (used === 1) col = SP_WB_COL[one];
+        else {
+          const q = (v) => Math.min(255, Math.round(v / d / 8) * 8);
+          col = (q(r) << 16) | (q(gg) << 8) | q(bb);
+        }
+      }
+      cell[cv * 5 + cu] = n > 0 ? n * 0x1000000 + col : 0;
+    }
+  }
+  // runs of one style along each row -> one quad per run
+  for (let cv = 0; cv < 5; cv++) {
+    let cu = 0;
+    while (cu < 5) {
+      const s = cell[cv * 5 + cu];
+      let e = cu + 1;
+      while (e < 5 && cell[cv * 5 + e] === s) e++;
+      if (s) _spWbPoly(s, i, j, SP_WB_CUT[cu], SP_WB_CUT[cv], SP_WB_CUT[e], SP_WB_CUT[cv + 1], ts, iso);
+      cu = e;
+    }
+  }
+}
+// world quad [i + u0, i + u1] x [j + v0, j + v1] (tiles) -> screen parallelogram
+function _spWbPoly(style, i, j, u0, v0, u1, v1, ts, iso) {
+  const x0 = (i + u0) * ts, x1 = (i + u1) * ts, y0 = (j + v0) * ts, y1 = (j + v1) * ts;
+  let L = _spWbPolys.get(style);
+  if (!L) { L = []; _spWbPolys.set(style, L); }
+  L.push([x0 - y0, (x0 + y0) * iso, x1 - y0, (x1 + y0) * iso, x1 - y1, (x1 + y1) * iso, x0 - y1, (x0 + y1) * iso]);
+}
+function _spWbSheen(t, ts, iso) {
+  if (t.band < 2 || typeof waterTileHash !== 'function') return;
+  // same rect as bakeChunkWater's ripple highlight for this tile
+  const dhw = ts, dhh = ts * iso;
+  const rh = waterTileHash(t.i, t.j, 99);
+  const rx = (((rh >> 8) & 0xff) / 255 - 0.5) * dhw * 0.4;
+  const ry = (((rh >> 16) & 0xff) / 255 - 0.5) * dhh * 0.4;
+  const rw = 8 + ((rh >> 24) & 0xf);
+  if (!waterRectInDiamond(rx, ry, rw, 2, dhw, dhh)) return;
+  const cx = (t.i - t.j) * ts, cy = (t.i + t.j + 1) * dhh;
+  (rh & 1 ? _sp.wbSheenA : _sp.wbSheenB).rect(_spSnap(cx + rx - rw * 0.5), _spSnap(cy + ry - 1), Math.max(ART, _spSnap(rw)), ART);
+}
+function _spRenderWaterBlood() {
+  const g = _sp.wbG;
+  if (!g || typeof waterBloodTiles === 'undefined') return;
+  // per frame: the sheen pulses like the camo ripples (renderPixiWaterOverlay)
+  const tq = Math.floor(gameTime * WATER_STEP_HZ) / WATER_STEP_HZ, pulse = Math.sin(tq * 0.5);
+  const sA = _sp.wbSheenA, sB = _sp.wbSheenB;
+  // stepped, and capped below opaque (a glint, not a stripe)
+  sA.alpha = Math.round(Math.max(0, pulse) * 4) / 4 * 0.6; sA.visible = sA.alpha > 0;
+  sB.alpha = Math.round(Math.max(0, -pulse) * 4) / 4 * 0.6; sB.visible = sB.alpha > 0;
+  if (waterBloodVersion === _sp.wbVer) return;
+  const t0 = performance.now();
+  _sp.wbVer = waterBloodVersion;
+  g.clear(); sA.clear(); sB.clear();
+  _spWbPolys.clear();
+  // bloody tiles + the clean water tiles around them (their half of the ramp)
+  const ts = CFG.TILE_SIZE, iso = CFG.ISO_SCALE, seen = _spWbSeen;
+  seen.clear();
+  for (const t of waterBloodTiles.values()) {
+    if (t.band <= 0) continue;
+    _spWbTile(t.i, t.j, ts, iso);
+    _spWbSheen(t, ts, iso);
+    for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+      if (!a && !b) continue;
+      const i = t.i + a, j = t.j + b, k = _wbKey(i, j);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      if (_spWbBand(i, j) === 0) _spWbTile(i, j, ts, iso); // a bloody tile draws itself; land never
+    }
+  }
+  for (const [style, L] of _spWbPolys) {
+    for (let q = 0; q < L.length; q++) g.poly(L[q], true);
+    g.fill(_spPat(Math.floor(style / 0x1000000), style % 0x1000000));
+  }
+  sA.fill(SP_WB_SHEEN); sB.fill(SP_WB_SHEEN);
+  _sp.wbStyles = _spWbPolys.size;
+  _sp.wbBuildMs = performance.now() - t0;
+}
+
+// W3: each cloud = a seeded 3-lobe dithered rim + a denser core, both
+// fading in 4 coverage steps over its life (and darkening). Per frame into
+// one Graphics, grouped by step so it is <= 8 fills.
+const SP_CLOUD_RIM = [6, 4, 2, 1], SP_CLOUD_CORE = [12, 8, 5, 2];
+const SP_CLOUD_COL = [0x9a1212, 0x881010, 0x760e0e, 0x640c0c];
+function _spRenderBloodClouds() {
+  const g = _sp.cloudG;
+  if (!g) return;
+  g.clear();
+  if (typeof bloodClouds === 'undefined' || !bloodClouds.length) return;
+  const iso = CFG.ISO_SCALE, A = ART, K = Math.SQRT2;
+  for (let step = 0; step < 4; step++) {
+    for (let core = 0; core < 2; core++) {
+      let any = false;
+      for (let i = 0; i < bloodClouds.length; i++) {
+        const c = bloodClouds[i];
+        if (Math.min(3, (c.t / c.life * 4) | 0) !== step) continue;
+        const sx = c.x - c.y, sy = (c.x + c.y) * iso;
+        if (!_spInView(sx, sy)) continue;
+        const X = _spSnap(sx), Y = _spSnap(sy);
+        const rx = Math.max(A, _spSnap(c.r * K)), ry = Math.max(A, _spSnap(c.r * K * iso));
+        if (core) {
+          g.ellipse(X, Y, Math.max(A, _spSnap(rx * 0.55)), Math.max(A, _spSnap(ry * 0.55)));
+        } else {
+          const h = c.seed | 0;
+          g.ellipse(X, Y, _spSnap(rx * 0.85), Math.max(A, _spSnap(ry * 0.85)));
+          for (let l = 0; l < 2; l++) {
+            const hl = h >>> (l * 8);
+            const ox = (((hl & 15) - 7.5) / 7.5) * rx * 0.4, oy = ((((hl >> 4) & 15) - 7.5) / 7.5) * ry * 0.4;
+            g.ellipse(_spSnap(X + ox), _spSnap(Y + oy), Math.max(A, _spSnap(rx * 0.6)), Math.max(A, _spSnap(ry * 0.6)));
+          }
+        }
+        any = true;
+      }
+      if (any) g.fill(_spPat(core ? SP_CLOUD_CORE[step] : SP_CLOUD_RIM[step], SP_CLOUD_COL[step]));
+    }
+  }
 }
 
 // M8 E4: flying env debris (envphys.js envDebris), pooled sprites like gibs.

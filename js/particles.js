@@ -138,6 +138,14 @@ function addDecal(kind, x, y, size, color, angle=0, maxSize=0, color2=0) {
   return d;
 }
 
+// W3: blood that LANDS (drops, drips, gibs, corpses, pools, footprints) goes
+// through here: on a water tile it becomes a blood cloud, not a decal (null).
+// Direct addDecal() calls (tests, the environment) always place their decal.
+function bloodDecal(kind, x, y, size, color, angle=0, maxSize=0, color2=0) {
+  if (typeof waterBlocksDecal === 'function' && waterBlocksDecal(kind, x, y, Math.max(size, maxSize * 0.5))) return null;
+  return addDecal(kind, x, y, size, color, angle, maxSize, color2);
+}
+
 // D6: forget all decal bookkeeping (the decal list itself is bloodPools)
 function resetDecalState() {
   _bloodMap.clear();
@@ -202,7 +210,7 @@ function spawnBloodSpray(x, y, angle, intensity=1, z=12) {
       randRange(0.12, 0.25), randRange(3, 6), 0xc01818, 'mist', OPT_BLOOD_MIST, z, randRange(0, 30));
   }
   if (intensity >= 1.5) {
-    addDecal(DECAL_POOL, x + randRange(-6, 6), y + randRange(-6, 6), 3, BLOOD_COLORS[3], 0, randRange(8, 14) * intensity);
+    bloodDecal(DECAL_POOL, x + randRange(-6, 6), y + randRange(-6, 6), 3, BLOOD_COLORS[3], 0, randRange(8, 14) * intensity);
   }
 }
 
@@ -402,17 +410,26 @@ function spawnGibs(x, y, angle, typeIdx, power=1, scale=1) {
               part === GIB_LEG ? shadeHex(uniform, 0.75) : part === GIB_TORSO ? uniform : 0x8a1010;
     g.size = (part === GIB_TORSO ? 2.6 : part === GIB_MEAT ? 1.6 : 2) * Math.max(1, scale);
     g.life = 6; g.smear = 0; g.bloodT = 0; g.rest = 0;
+    g.inWater = false; g.sinkT = 0; // W4: pooled objects start dry
     gibs.push(g);
   }
 }
 
 function _settleGib(g) {
-  addDecal(DECAL_GIB, g.x, g.y, g.size, 0x8a1010, g.rot, 0, g.color);
+  bloodDecal(DECAL_GIB, g.x, g.y, g.size, 0x8a1010, g.rot, 0, g.color);
 }
 
 function updateGibs(dt) {
   for (let i = gibs.length - 1; i >= 0; i--) {
     const g = gibs[i];
+    // W4: a gib in water sinks (no bounce, no decal)
+    if ((g.inWater || g.z + g.vz * dt <= 0) && waterSinkGib(g, dt)) {
+      const last = gibs.pop();
+      if (last !== g) gibs[i] = last;
+      _gibFree.push(g);
+      continue;
+    }
+    if (g.inWater) continue;
     g.life -= dt;
     g.vz -= 700 * dt;
     g.z += g.vz * dt;
@@ -430,7 +447,7 @@ function updateGibs(dt) {
       if (g.vz < -90) {
         g.vz = -g.vz * 0.35;            // bounce
         g.rotSpeed *= 0.5;
-        addDecal(DECAL_SPLAT, g.x, g.y, 2.5, bloodColor());
+        bloodDecal(DECAL_SPLAT, g.x, g.y, 2.5, bloodColor());
       } else {
         g.vz = 0;
         const f = Math.max(0, 1 - 5 * dt);
@@ -438,7 +455,7 @@ function updateGibs(dt) {
         g.rotSpeed *= f;
         const spd = Math.abs(g.vx) + Math.abs(g.vy);
         g.smear += spd * dt;
-        if (g.smear > 5) { g.smear = 0; addDecal(DECAL_SMEAR, g.x, g.y, 1.6, BLOOD_COLORS[3]); }
+        if (g.smear > 5) { g.smear = 0; bloodDecal(DECAL_SMEAR, g.x, g.y, 1.6, BLOOD_COLORS[3]); }
         if (spd < 6) g.rest += dt;
       }
     }
@@ -455,9 +472,13 @@ function updateGibs(dt) {
 // CORPSES - fall/knockback animation, smears, arterial spurts (G5, G6)
 // =====================================================================
 function updateCorpses(dt) {
-  for (const b of bodies) {
+  for (let bi = bodies.length - 1; bi >= 0; bi--) {
+    const b = bodies[bi];
     if (b.fall === undefined) continue; // legacy body object
     if (b.fall < 1) b.fall = Math.min(1, b.fall + dt / 0.28);
+    // W4: in water a corpse floats, sinks and dissolves (never baked)
+    if (waterSinkBody(b, dt)) { bodies.splice(bi, 1); continue; }
+    if (b.inWater) continue;
     if (!b.settled) {
       b.vz -= 700 * dt;
       b.z += b.vz * dt;
@@ -468,17 +489,17 @@ function updateCorpses(dt) {
         b.z = 0;
         if (b.vz < -160) {
           b.vz = -b.vz * 0.25;
-          addDecal(DECAL_SPLAT, b.x, b.y, 3, bloodColor());
+          bloodDecal(DECAL_SPLAT, b.x, b.y, 3, bloodColor());
         } else {
           b.vz = 0;
           const f = Math.max(0, 1 - 6 * dt);
           b.vx *= f; b.vy *= f; b.spin *= f;
           const spd = Math.abs(b.vx) + Math.abs(b.vy);
           b.smear += spd * dt;
-          if (b.smear > 6) { b.smear = 0; addDecal(DECAL_SMEAR, b.x, b.y, 2.4 * b.size, BLOOD_COLORS[3]); }
+          if (b.smear > 6) { b.smear = 0; bloodDecal(DECAL_SMEAR, b.x, b.y, 2.4 * b.size, BLOOD_COLORS[3]); }
           if (spd < 8 && b.fall >= 1) {
             b.settled = true;
-            addDecal(DECAL_POOL, b.x, b.y, 3, BLOOD_COLORS[(Math.random() * 2 + 3) | 0], 0, randRange(13, 22) * b.size);
+            bloodDecal(DECAL_POOL, b.x, b.y, 3, BLOOD_COLORS[(Math.random() * 2 + 3) | 0], 0, randRange(13, 22) * b.size);
           }
         }
       }
@@ -565,7 +586,7 @@ function updateParticles(dt) {
       if (p.z <= 0 && p.vz < 0) {
         p.z = 0;
         if (p.splat) {
-          addDecal(p.splat, p.x, p.y, p.size, p.color);
+          bloodDecal(p.splat, p.x, p.y, p.size, p.color);
           _removeParticle(i);
           continue;
         }

@@ -265,6 +265,7 @@ function update(dt) {
   updateBullets(dt);
   updateGrenades(dt);    // M9 N1
   updateWading(dt);      // M9 W2
+  updateWater(dt);       // M9 W3-W5: blood clouds, blood concentration (4 Hz)
   updateEnv(dt);         // M8: env reactions, falling trees, debris
   processPendingDamage();
   updateWaves(dt);

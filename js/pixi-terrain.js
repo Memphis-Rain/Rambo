@@ -434,6 +434,7 @@ const waterCache = new Map();          // chunk key -> { camo, ripA, ripB } spri
 const WATER_BAKE_RES = 1 / 3;          // the world is shown at 1/3 resolution anyway (R1)
 const WATER_DRIFT = 3;                 // max drift in screen units (1 low-res pixel)
 const WATER_STEP_HZ = 8;               // animation update rate (stepped, <= 10 Hz)
+const WATER_RIP_Z = -999996.85;        // W5: ripple highlights above the blood tint (-999996.9), below clouds (-999996.8)
 const WATER_CAMO_COLORS = [
   0x163d5c, 0x1a4a6e, 0x0f3348, 0x1e5577,
   0x12405a, 0x255d80, 0x0d2c40, 0x1b5270,
@@ -469,6 +470,9 @@ function _bakeWaterLayer(g, w, h) {
 function bakeChunkWater(cx, cy) {
   const key = `${cx},${cy}`;
   destroyChunkWater(key);
+  // W5: every (re)bake is counted, so tests can prove the camo is not rebaked
+  // per frame (waterFxStats().camoRebakes); the blood tint is an overlay layer
+  if (typeof waterCamoBakes !== 'undefined') waterCamoBakes++;
   const sz = CFG.CHUNK_SIZE, ts = CFG.TILE_SIZE, iso = CFG.ISO_SCALE;
   const w = sz * ts * 2 + ts * 2, h = sz * ts * iso * 2 + ts * 2;
   // Same local frame as the terrain chunk sprite
@@ -514,6 +518,7 @@ function bakeChunkWater(cx, cy) {
     entry.camo.position.set(ox0, oy0); // drifted per frame by renderPixiWaterOverlay
     entry.ripA.position.set(ox0, oy0);
     entry.ripB.position.set(ox0, oy0);
+    entry.ripA.zIndex = entry.ripB.zIndex = WATER_RIP_Z; // the water still glints through the blood
     waterCache.set(key, entry);
   } else {
     waterCache.set(key, null);
