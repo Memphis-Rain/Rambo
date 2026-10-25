@@ -25,6 +25,7 @@ const SP_Z_ENVL = -999996.5;     // M8 E10: per-chunk remains (stumps, logs, rub
 const SP_Z_GROUND = -999996;     // ground shadows / flat debris (water overlay is -999997)
 const SP_Z_WBLOOD = -999996.9;   // M9 W5: blood tint over the water camo, below remains / shadows / bodies
 const SP_Z_CLOUD = -999996.8;    // M9 W3: blood clouds on the water surface (above the tint)
+const SP_Z_WBSHEEN = -999996.84; // M9 W5: ripple sheen on bloody water (above the tint and the camo ripples at -999996.85)
 const SP_Z_FX = 999000;          // telegraphs, rings, health bars
 const SP_Z_TEXT = 999500;        // pixel font
 
@@ -288,6 +289,7 @@ function initPixiSprites() {
     _spDestroy(_sp.playerG); _spDestroy(_sp.ghostG); _spDestroy(_sp.shadowG);
     _spDestroy(_sp.fxG); _spDestroy(_sp.textG); _spDestroy(_sp.groundG); _spDestroy(_sp.hurtG);
     _spDestroy(_sp.wbG); _spDestroy(_sp.cloudG);
+    _spDestroy(_sp.wbSheenA); _spDestroy(_sp.wbSheenB);
     if (_sp.dec) {
       for (const c of _sp.dec.chunks) _spDestroy(c.g);
       for (const g of _sp.dec.freeG) _spDestroy(g);
@@ -327,7 +329,10 @@ function initPixiSprites() {
   _sp.textG = mk(SP_Z_TEXT);
   _sp.wbG = mk(SP_Z_WBLOOD);           // W5 (static between band changes)
   _sp.cloudG = mk(SP_Z_CLOUD);         // W3
+  _sp.wbSheenA = mk(SP_Z_WBSHEEN);     // W5 ripple sheen, the two pulse groups
+  _sp.wbSheenB = mk(SP_Z_WBSHEEN);
   _sp.wbG.eventMode = 'none'; _sp.cloudG.eventMode = 'none';
+  _sp.wbSheenA.eventMode = 'none'; _sp.wbSheenB.eventMode = 'none';
   _sp.wbVer = -1;
 
   // G10 hurt overlay: full-res UI, below the HUD, never takes input
@@ -1840,26 +1845,147 @@ function _spGibSink(gb, x0, y0, w, h, r, Y, zz) {
 // (i, j) = world [i ts, (i+1) ts) x [j ts, (j+1) ts): the same diamond the
 // terrain chunk draws for it. Rebuilt only when waterBloodVersion changes
 // (<= 4 Hz, and resetWater bumps it), never per frame, and the baked water
-// camo is untouched (the tint sits on top of it).
+// camo is untouched (the tint sits on top of it); the camo's ripple
+// highlights are drawn above the tint (pixi-terrain.js WATER_RIP_Z).
+// Feathered borders: each tile is cut into 5 x 5 cells along its world axes
+// (inner 50% + two 12.5% strips per side). A strip cell blends bilinearly
+// toward the side / diagonal neighbours (t = 1/5 in the inner strip, 2/5 in
+// the outer one, so the two tiles' strips make a symmetric 5-step ramp
+// across the border): its coverage rounds to a whole Bayer step (stepped, no
+// smooth alpha) and its colour is the coverage-weighted mix of the bands'
+// colours, quantised to steps of 8 per channel (a band 3 -> 4 border is
+// mostly a colour change). Clean water neighbours get their half of the
+// ramp; land neighbours count as the tile itself (the shoreline keeps its
+// edge). Geometry is grouped by (coverage, colour) and filled once per style.
+// Water life: the camo's ripple highlights sit above the tint, and on band
+// 2+ tiles (where the red would swallow them) the same ripple rect gets a
+// pale sheen, one art pixel tall, pulsing in the camo ripples' two stepped
+// counter-phase groups (alpha only per frame, geometry with the tint).
+const SP_WB_SHEEN = 0xe8a0a0;
 const SP_WB_DENS = [0, 4, 9, 11, 12];
 const SP_WB_COL = [0, 0x960000, 0xb80000, 0xa80000, 0x900000];
+const SP_WB_CUT = [0, 0.125, 0.25, 0.75, 0.875, 1];
+const SP_WB_T = [2 / 5, 1 / 5, 0, 1 / 5, 2 / 5];
+const SP_WB_SIDE = [-1, -1, 0, 1, 1];
+const _spWbNb = new Int8Array(9);        // 3 x 3 neighbour bands, [(b + 1) * 3 + (a + 1)]
+const _spWbW = new Float32Array(5);      // per-band weight of one cell
+const _spWbCell = new Float64Array(25);  // style key per cell (0 = none)
+const _spWbPolys = new Map();            // style key -> point lists of its cells
+const _spWbSeen = new Set();
+function _spWbBand(i, j) {               // band of a bloody tile, 0 clean water, -1 land
+  const t = waterBloodTiles.get(_wbKey(i, j));
+  if (t && t.band > 0) return t.band;
+  return _wbIsWet(i, j) ? 0 : -1;
+}
+function _spWbTile(i, j, ts, iso) {
+  const nb = _spWbNb, w = _spWbW, cell = _spWbCell;
+  const b0 = Math.max(0, _spWbBand(i, j));
+  let flat = true;
+  for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+    let k = (a || b) ? _spWbBand(i + a, j + b) : b0;
+    if (k < 0) k = b0;
+    nb[(b + 1) * 3 + a + 1] = k;
+    if (k !== b0) flat = false;
+  }
+  if (flat) {
+    if (b0 > 0) _spWbPoly(SP_WB_DENS[b0] * 0x1000000 + SP_WB_COL[b0], i, j, 0, 0, 1, 1, ts, iso);
+    return;
+  }
+  for (let cv = 0; cv < 5; cv++) {
+    const sv = SP_WB_SIDE[cv], tv = SP_WB_T[cv];
+    for (let cu = 0; cu < 5; cu++) {
+      const su = SP_WB_SIDE[cu], tu = SP_WB_T[cu];
+      w.fill(0);
+      w[b0] += (1 - tu) * (1 - tv);
+      w[nb[4 + su]] += tu * (1 - tv);
+      w[nb[(sv + 1) * 3 + 1]] += (1 - tu) * tv;
+      w[nb[(sv + 1) * 3 + su + 1]] += tu * tv;
+      let d = 0, r = 0, gg = 0, bb = 0, used = 0, one = 0;
+      for (let k = 1; k <= 4; k++) {
+        if (!w[k]) continue;
+        const wd = w[k] * SP_WB_DENS[k], c = SP_WB_COL[k];
+        d += wd; r += wd * (c >> 16); gg += wd * ((c >> 8) & 255); bb += wd * (c & 255);
+        used++; one = k;
+      }
+      const n = Math.min(15, Math.round(d));
+      let col = 0;
+      if (n > 0) {
+        if (used === 1) col = SP_WB_COL[one];
+        else {
+          const q = (v) => Math.min(255, Math.round(v / d / 8) * 8);
+          col = (q(r) << 16) | (q(gg) << 8) | q(bb);
+        }
+      }
+      cell[cv * 5 + cu] = n > 0 ? n * 0x1000000 + col : 0;
+    }
+  }
+  // runs of one style along each row -> one quad per run
+  for (let cv = 0; cv < 5; cv++) {
+    let cu = 0;
+    while (cu < 5) {
+      const s = cell[cv * 5 + cu];
+      let e = cu + 1;
+      while (e < 5 && cell[cv * 5 + e] === s) e++;
+      if (s) _spWbPoly(s, i, j, SP_WB_CUT[cu], SP_WB_CUT[cv], SP_WB_CUT[e], SP_WB_CUT[cv + 1], ts, iso);
+      cu = e;
+    }
+  }
+}
+// world quad [i + u0, i + u1] x [j + v0, j + v1] (tiles) -> screen parallelogram
+function _spWbPoly(style, i, j, u0, v0, u1, v1, ts, iso) {
+  const x0 = (i + u0) * ts, x1 = (i + u1) * ts, y0 = (j + v0) * ts, y1 = (j + v1) * ts;
+  let L = _spWbPolys.get(style);
+  if (!L) { L = []; _spWbPolys.set(style, L); }
+  L.push([x0 - y0, (x0 + y0) * iso, x1 - y0, (x1 + y0) * iso, x1 - y1, (x1 + y1) * iso, x0 - y1, (x0 + y1) * iso]);
+}
+function _spWbSheen(t, ts, iso) {
+  if (t.band < 2 || typeof waterTileHash !== 'function') return;
+  // same rect as bakeChunkWater's ripple highlight for this tile
+  const dhw = ts, dhh = ts * iso;
+  const rh = waterTileHash(t.i, t.j, 99);
+  const rx = (((rh >> 8) & 0xff) / 255 - 0.5) * dhw * 0.4;
+  const ry = (((rh >> 16) & 0xff) / 255 - 0.5) * dhh * 0.4;
+  const rw = 8 + ((rh >> 24) & 0xf);
+  if (!waterRectInDiamond(rx, ry, rw, 2, dhw, dhh)) return;
+  const cx = (t.i - t.j) * ts, cy = (t.i + t.j + 1) * dhh;
+  (rh & 1 ? _sp.wbSheenA : _sp.wbSheenB).rect(_spSnap(cx + rx - rw * 0.5), _spSnap(cy + ry - 1), Math.max(ART, _spSnap(rw)), ART);
+}
 function _spRenderWaterBlood() {
   const g = _sp.wbG;
-  if (!g || typeof waterBloodTiles === 'undefined' || waterBloodVersion === _sp.wbVer) return;
+  if (!g || typeof waterBloodTiles === 'undefined') return;
+  // per frame: the sheen pulses like the camo ripples (renderPixiWaterOverlay)
+  const tq = Math.floor(gameTime * WATER_STEP_HZ) / WATER_STEP_HZ, pulse = Math.sin(tq * 0.5);
+  const sA = _sp.wbSheenA, sB = _sp.wbSheenB;
+  // stepped, and capped below opaque (a glint, not a stripe)
+  sA.alpha = Math.round(Math.max(0, pulse) * 4) / 4 * 0.6; sA.visible = sA.alpha > 0;
+  sB.alpha = Math.round(Math.max(0, -pulse) * 4) / 4 * 0.6; sB.visible = sB.alpha > 0;
+  if (waterBloodVersion === _sp.wbVer) return;
+  const t0 = performance.now();
   _sp.wbVer = waterBloodVersion;
-  g.clear();
-  if (!waterBloodTiles.size) return;
-  const ts = CFG.TILE_SIZE, hh = ts * CFG.ISO_SCALE;
-  for (let band = 1; band <= 4; band++) {
-    let any = false;
-    for (const t of waterBloodTiles.values()) {
-      if (t.band !== band) continue;
-      const x = (t.i - t.j) * ts, y = (t.i + t.j) * hh;
-      g.moveTo(x, y).lineTo(x + ts, y + hh).lineTo(x, y + 2 * hh).lineTo(x - ts, y + hh).closePath();
-      any = true;
+  g.clear(); sA.clear(); sB.clear();
+  _spWbPolys.clear();
+  // bloody tiles + the clean water tiles around them (their half of the ramp)
+  const ts = CFG.TILE_SIZE, iso = CFG.ISO_SCALE, seen = _spWbSeen;
+  seen.clear();
+  for (const t of waterBloodTiles.values()) {
+    if (t.band <= 0) continue;
+    _spWbTile(t.i, t.j, ts, iso);
+    _spWbSheen(t, ts, iso);
+    for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+      if (!a && !b) continue;
+      const i = t.i + a, j = t.j + b, k = _wbKey(i, j);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      if (_spWbBand(i, j) === 0) _spWbTile(i, j, ts, iso); // a bloody tile draws itself; land never
     }
-    if (any) g.fill(_spPat(SP_WB_DENS[band], SP_WB_COL[band]));
   }
+  for (const [style, L] of _spWbPolys) {
+    for (let q = 0; q < L.length; q++) g.poly(L[q], true);
+    g.fill(_spPat(Math.floor(style / 0x1000000), style % 0x1000000));
+  }
+  sA.fill(SP_WB_SHEEN); sB.fill(SP_WB_SHEEN);
+  _sp.wbStyles = _spWbPolys.size;
+  _sp.wbBuildMs = performance.now() - t0;
 }
 
 // W3: each cloud = a seeded 3-lobe dithered rim + a denser core, both
