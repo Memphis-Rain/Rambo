@@ -3,21 +3,18 @@ import path from 'node:path';
 import { describe, test, expect, beforeEach } from 'vitest';
 import { newRound, ROOT } from '../helpers/load-game.js';
 import { LANDED } from '../milestones.js';
+import { createPadRig, sourceFunction, BTN } from '../helpers/pads.js';
 
 // M10 Xbox controller (docs/SPEC.md M10 C1-C6, "Acceptance (Anna)"). Written against Josh's
 // provisional hooks before js/gamepad.js exists; skipped until M10 is marked landed in
-// tests/milestones.js. A fake standard-mapping pad is served by a stubbed
-// navigator.getGamepads() that returns fresh snapshots on every call, as Chrome does.
+// tests/milestones.js. The fake standard-mapping pads come from tests/helpers/pads.js
+// (getGamepads() returns fresh snapshots on every call, as Chrome does); slot 0 here.
 // main.js isn't loaded (its async init needs a GPU), so a "frame" is what gameLoop does:
 // pollGamepad(), then main.js's update() (extracted, as in fire.test.js) unless paused.
 const todo = !LANDED.M10;
 const DT = 1 / 60;
 const DZ = 0.2;
 const DEG = Math.PI / 180;
-
-// Standard mapping (Xbox labels)
-const BTN = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, BACK: 8, START: 9, L3: 10, R3: 11, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15, HOME: 16 };
-const TRIGGERS = [BTN.LT, BTN.RT];
 
 // ---------------------------------------------------------------------
 // Provisional hooks (Josh, M10). If a name changes when M10 lands, change it here only.
@@ -38,16 +35,7 @@ const hook = {
 // Headless main.js pieces
 // ---------------------------------------------------------------------
 const MAIN_SRC = fs.readFileSync(path.join(ROOT, 'js', 'main.js'), 'utf8');
-function mainFunction(name) {
-  const start = MAIN_SRC.indexOf(`function ${name}(`);
-  if (start < 0) throw new Error(`js/main.js: function ${name}() not found`);
-  let depth = 0;
-  for (let k = MAIN_SRC.indexOf('{', start); k < MAIN_SRC.length; k++) {
-    if (MAIN_SRC[k] === '{') depth++;
-    else if (MAIN_SRC[k] === '}' && --depth === 0) return MAIN_SRC.slice(start, k + 1);
-  }
-  throw new Error(`js/main.js: unbalanced braces in ${name}()`);
-}
+const mainFunction = (name) => sourceFunction(MAIN_SRC, name);
 function withMain(game) {
   const { g: gg, run } = game;
   for (const k of ['app', 'renderer', 'stage', 'worldContainer', 'terrainContainer', 'effectsContainer', 'uiContainer']) {
@@ -69,53 +57,13 @@ initInput();`);
 // ---------------------------------------------------------------------
 // Fake pad + sandbox state (fresh per test)
 // ---------------------------------------------------------------------
-let g, game, update, pads, clock, effects, listeners, started;
+let g, game, update, rig, pads, clock, effects, started;
 
-function makePad(index = 0, { rumble = 'ok' } = {}) {
-  const p = {
-    id: 'Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e Product: 0b13)',
-    index, connected: true, mapping: 'standard', timestamp: clock.ms,
-    axes: [0, 0, 0, 0],
-    buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0, touched: false })),
-  };
-  if (rumble !== 'none') {
-    p.vibrationActuator = {
-      type: 'dual-rumble',
-      playEffect(type, params) {
-        effects.push({ t: clock.ms, type, ...(params || {}) });
-        if (rumble === 'throw') throw new Error('mock: playEffect failed');
-        return Promise.resolve('complete');
-      },
-      reset() { return Promise.resolve('complete'); },
-    };
-  }
-  return p;
-}
-/** A Chrome-like snapshot: new objects per getGamepads() call, same actuator. */
-function snapshot(p) {
-  const s = { id: p.id, index: p.index, connected: p.connected, mapping: p.mapping, timestamp: p.timestamp,
-    axes: p.axes.slice(), buttons: p.buttons.map((b) => ({ ...b })) };
-  if (p.vibrationActuator) s.vibrationActuator = p.vibrationActuator;
-  return s;
-}
-function dispatch(type, ev) {
-  for (const fn of listeners[type] || []) fn(ev);
-}
-function connect(index = 0, opts) {
-  pads[index] = makePad(index, opts);
-  dispatch('gamepadconnected', { type: 'gamepadconnected', gamepad: snapshot(pads[index]) });
-}
-function bump(p) { p.timestamp = Math.max(p.timestamp + 0.001, clock.ms); }
+const dispatch = (type, ev) => rig.dispatch(type, ev);
+const connect = (index = 0, opts) => rig.connect(index, opts);
 /** Set button i of pad 0 (true/false or an analog value); triggers report pressed above 0.1 like real pads. */
-function btn(i, v) {
-  const val = v === true ? 1 : v === false ? 0 : v;
-  pads[0].buttons[i] = { pressed: TRIGGERS.includes(i) ? val > 0.1 : val >= 0.5, value: val, touched: val > 0 };
-  bump(pads[0]);
-}
-function axes(lx, ly, rx = 0, ry = 0) {
-  pads[0].axes = [lx, ly, rx, ry];
-  bump(pads[0]);
-}
+const btn = (i, v) => rig.btn(0, i, v);
+const axes = (lx, ly, rx = 0, ry = 0) => rig.axes(0, lx, ly, rx, ry);
 
 /** Advance the wall clock and game time without a frame (for the rumble rate limit). */
 function tick(ms) { clock.ms += ms; g.gameTime += ms / 1000; }
@@ -159,16 +107,12 @@ function findHome() {
 
 beforeEach(() => {
   if (todo) return;
-  pads = [null, null, null, null];
-  clock = { ms: 1000 };
-  effects = [];
-  listeners = {};
+  rig = createPadRig();
+  ({ pads, clock, effects } = rig);
   started = 0;
   game = newRound({
     stubs: {
-      navigator: { getGamepads: () => pads.map((p) => (p ? snapshot(p) : null)), userAgent: 'vitest' },
-      performance: { now: () => clock.ms },
-      addEventListener: (type, fn) => { (listeners[type] ||= []).push(fn); },
+      ...rig.stubs(),
       // main.js functions the pad may call on the title / for the demo (main.js isn't loaded)
       startGame: () => { started++; g.gameStarted = true; },
       resetRound: () => {},
