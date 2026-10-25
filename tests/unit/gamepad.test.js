@@ -708,7 +708,7 @@ describe('M10 title and demo input', () => {
   test.skipIf(todo)('M10: on the title, any button or a stick past the deadzone counts as demo input; a stick inside does not', () => {
     g.gameStarted = false;
     const notes = spy('demoNoteInput');
-    axes(0.15, -0.1, 0.1, 0.18);
+    axes(0.15, -0.1, 0.1, 0.15); // radial 0.18 on both sticks: inside the 0.20 deadzone
     titleFrame(10);
     expect(notes.length, 'sticks inside the deadzone are not input').toBe(0);
     axes(0, 0, 0, 0); titleFrame(1);
@@ -726,6 +726,13 @@ describe('M10 title and demo input', () => {
 // ---------------------------------------------------------------------
 describe('M10 rumble', () => {
   test.skipIf(todo)('M10: padRumble plays dual-rumble with values clamped to [0, 1], at most one effect per 50 ms', () => {
+    tick(100);
+    // Rumble only fires while the pad is the active device (an idle pad doesn't buzz while
+    // someone plays with mouse and keyboard). Connected but untouched = 'kbm'.
+    expect(g.inputDevice).toBe('kbm');
+    expect(hook.rumble(0.5, 0.25, 30), 'idle pad (device kbm): no rumble').toBe(false);
+    btn(0, 1); g.pollGamepad(); btn(0, 0); g.pollGamepad(); // one tap makes the pad active
+    expect(g.inputDevice).toBe('pad');
     tick(100);
     expect(hook.rumble(0.5, 0.25, 30), 'first effect plays').toBe(true);
     expect(effects.length).toBe(1);

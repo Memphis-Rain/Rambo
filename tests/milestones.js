@@ -31,7 +31,7 @@ export const LANDED = {
   F3: false, // burning trees
   F4: false, // demo bot uses the flamethrower
   M9PERF: false,
-  M10: false, // Xbox controller (spec a53b301): gamepad polling, aim, assist, rumble, hot-plug
+  M10: true, // Xbox controller (spec a53b301): gamepad polling, aim, assist, rumble, hot-plug
   CACHEBUST: true, // spec B1: ?v=<BUILD> on every local asset in game.html (npm run stamp) // M9 perf scenario (burning enemies/trees + red pond)
   FU1: true, // follow-ups after the first build (spec 1c81384): R4a DITHER_STRENGTH, D4 wave 10, D5 overlay visible
 };
