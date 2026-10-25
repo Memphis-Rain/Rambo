@@ -1,6 +1,7 @@
 import { test, expect, T } from './fixtures.js';
 import { LANDED } from '../milestones.js';
 import { padMock, padIO, BTN } from './padmock.js';
+import { FIND_M9_SPOT } from '../perf/m9-load.mjs';
 
 // M11 local 2-player co-op in the browser (docs/SPEC.md M11, "Acceptance (Anna)"). Two mocked
 // standard-mapping pads (tests/e2e/padmock.js: slots 0 and 1, hot-plug, a rumble spy per pad)
@@ -361,6 +362,42 @@ test('K2.2: chained disconnect pauses: after a double drop P1 re-claims, the P2 
   await frames(page, 20);
   expect(await game.eval(() => ({ paused, dc: padState().disconnectPaused })), 'a key clears every pause; none comes back').toEqual({ paused: false, dc: false });
 });
+
+// ---------------------------------------------------------------------
+// K2.4: at zoom 1 terrain takes the main path exactly (W5 regression: the pond drew as land)
+// ---------------------------------------------------------------------
+for (const mode of ['1P', '2P']) {
+  test(`K2.4 (${mode}): after a camera jump at zoom 1 no placeholder diamond is ever visible`, async ({ game, page }) => {
+    test.skip(!LANDED.K2_4, 'K2.4 not landed');
+    await boot(game, page, { pads: mode === '2P' ? 2 : 0 });
+    if (mode === '2P') await twoPlayers(game, page);
+    else { await game.start(); await game.freezeWaves(); }
+    // A far spot (a fresh, unbaked area)
+    const site = await game.eval(FIND_M9_SPOT);
+    expect(site, 'a dry spot beside a pond').toBeTruthy();
+    // Jump: everyone and the camera at once, then watch every frame
+    const r = await page.evaluate(({ spot, pond }) => new Promise((done) => {
+      for (const p of players) { p.x = spot.x + (p === players[0] ? 0 : 40); p.y = spot.y; p.vx = 0; p.vy = 0; }
+      const s = toScreen(spot.x, spot.y);
+      cam.x = cam.tx = s.x; cam.y = cam.ty = s.y;
+      // pixi-terrain.js keeps the placeholder diamonds in a top-level Map (_chunkPh, K2.1)
+      const map = (() => { try { return (0, eval)('_chunkPh'); } catch { return null; } })();
+      const ph = () => (map ? [...map.values()].filter((gr) => gr.visible !== false && gr.parent).length : 0);
+      const out = { frames: 0, phFrames: 0, maxPh: 0, zooms: new Set() };
+      const f = () => {
+        const n = ph();
+        if (n) { out.phFrames++; out.maxPh = Math.max(out.maxPh, n); }
+        out.zooms.add(camZoom().zoom);
+        if (++out.frames < 60) requestAnimationFrame(f); else done({ ...out, zooms: [...out.zooms] });
+      };
+      requestAnimationFrame(f);
+    }), site);
+    expect(r.zooms, 'zoom stayed exactly 1').toEqual([1]);
+    expect(r.phFrames, `frames with a visible placeholder (max ${r.maxPh})`).toBe(0);
+    // The colour side of the regression (the pond drawn as land) is gated by the W5 kills test
+    // (m9.spec.js), whose tile sampling is proven on main: repeat it x8 on every K2.4 candidate.
+  });
+}
 
 // ---------------------------------------------------------------------
 // K3: shared camera, zoom, leash
