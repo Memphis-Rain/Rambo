@@ -296,6 +296,7 @@ function coopDown(p) {
   p.state = 'down';
   p.hp = 0;
   p.downT = CFG.COOP_DOWN_TIME;
+  p._downTicked = false;
   p.reviveT = 0;
   p.dodging = false; p.reloading = false; p.vx = 0; p.vy = 0; p.walking = false;
   p.bleedT = 0;
@@ -349,6 +350,8 @@ function coopUpdateDown(dt) {
   for (let i = 0; i < players.length; i++) {
     const p = players[i];
     if (!p || p.state !== 'down') continue;
+    if (!(p.downT > 0) && !p._downTicked) p.downT = CFG.COOP_DOWN_TIME; // K2.2: a zero timer can't kill on entry
+    p._downTicked = true;
     p.downT -= dt;
     p.bleedT = (p.bleedT || 0) - dt;
     if (p.bleedT <= 0) { // lying, bleeding

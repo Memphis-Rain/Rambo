@@ -1041,6 +1041,18 @@ function _hudRing(g, pts, lit, on, off) {
 }
 
 const _hudB = { x: 0, y: 0, w: 0, h: 0, waterY: null };
+
+// K2.2 test hook: each player's foot ring as drawn this frame ([] in 1P /
+// before the first 2P frame): { x, y } = its centre in CSS px, visible
+function footRings() {
+  if (!_hud2 || !_hud2.marks) return [];
+  const out = [];
+  for (let i = 0; i < players.length && i < 2; i++) {
+    const f = _hud2.marks[i].foot;
+    out.push({ x: f.x, y: f.y, visible: !!f.visible && _hudCoop.on });
+  }
+  return out;
+}
 // Tags, HELP! and the K5 rings at each player (screen-space, never zoomed)
 function renderHudCoopMarks() {
   const z = cam.z;
@@ -1055,6 +1067,7 @@ function renderHudCoopMarks() {
     const v = worldToView(p.x, p.y, _hudV);
     const x = Math.round(v.x);
     if (p.state === 'down') {
+      m.foot.visible = false; // K2.2: the HELP! ring replaces the foot ring
       const cy = Math.round(v.y - 6 * z); // lying: ring around the body
       const dLit = Math.ceil(clamp(p.downT / CFG.COOP_DOWN_TIME, 0, 1) * 16);
       const col = p.downT > 3 ? 0 : 1;
