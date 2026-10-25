@@ -251,16 +251,22 @@ test('K3a: at zoom 0.7 mouse aim lands within 1 low-res px (T5) and worldToView 
   for (const k of ['dx', 'dy', 'w', 'h']) {
     expect(Math.abs(at07[k] - 0.7 * at1[k]), `${k}: ${at07[k].toFixed(1)} at 0.7 vs ${at1[k].toFixed(1)} at 1`).toBeLessThanOrEqual(s + 1);
   }
-  // T5: the mouse at a CSS point aims at the ground point under it, within 1 low-res px
+  // T5: the mouse at a CSS point aims P1 (kbm) at the ground point under it, within 1 low-res
+  // px. No enemies, so the G13 pick can't swap the ground point for an enemy's centre.
+  await game.eval(() => { enemies.length = 0; });
   for (const [fx, fy] of [[0.3, 0.3], [0.75, 0.6], [0.5, 0.8]]) {
     const pt = await game.eval(([a, b]) => ({ x: Math.round(W * a), y: Math.round(H * b) }), [fx, fy]);
     await page.mouse.move(pt.x, pt.y);
     await game.advance(0.1);
-    const r = await game.eval((h2v) => {
-      const a = aimPointOf(player, { x: 0, y: 0 });
-      return { back: window.__h(h2v)(a.x, a.y) };
-    }, H.w2v);
-    expect(Math.hypot(r.back.x - pt.x, r.back.y - pt.y), `mouse (${pt.x}, ${pt.y})`).toBeLessThanOrEqual(s);
+    const r = await game.eval(([h2v, v2w, q]) => {
+      const back = window.__h(h2v)(mouseWorldX, mouseWorldY), w = window.__h(v2w)(q.x, q.y);
+      return { back, w, mw: { x: mouseWorldX, y: mouseWorldY }, aim: player.aimAngle, want: Math.atan2(mouseWorldY - player.y, mouseWorldX - player.x) };
+    }, [H.w2v, H.v2w, pt]);
+    expect(Math.hypot(r.back.x - pt.x, r.back.y - pt.y), `mouse (${pt.x}, ${pt.y}): worldToView(aim ground point)`).toBeLessThanOrEqual(s);
+    // 1 low-res px is <= s / zoom world units across, (s / zoom) / (2 ISO_SCALE) down
+    expect(Math.abs(r.w.x - r.mw.x), `mouse (${pt.x}, ${pt.y}): viewToWorld x`).toBeLessThanOrEqual(s / 0.7 + 0.5);
+    expect(Math.abs(r.w.y - r.mw.y), `mouse (${pt.x}, ${pt.y}): viewToWorld y`).toBeLessThanOrEqual(s / 0.7 + 0.5);
+    expect(Math.abs(r.aim - r.want), 'P1 aims at it').toBeLessThan(0.05);
   }
   await game.eval((h) => window.__h(h)(null), H.setZoom);
 });
