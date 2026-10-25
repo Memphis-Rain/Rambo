@@ -698,6 +698,8 @@ This is the one new game mode the user asked for, so it is an explicit exception
 - **K7. Attract mode 2P (should-have, after K1–K6).**
   - Every 2nd attract cycle runs **two** CPU players with the M6 bot logic, one per player, with the 2P HUD showing. The aim is to sell the mode.
   - The D6 isolation still holds: after the demo, a real game starts clean, in 1P unless P2 joins.
+  - **The bot revives its partner** (ruling 2026-10-25, to show off K5). When the partner is DOWN, the standing bot moves to within the revive range and holds there until the revive finishes, still aiming and firing at threats. It abandons the revive only if its own HP is under 25%. A demo cycle with a down should usually show a revive, not a bleed-out.
+  - Only idle-started cycles alternate 1P and 2P. A direct `startDemo()` stays 1P, so the D3a kill-rate baseline isn't affected. `startDemo({ coop: true })` forces 2P for tests.
 - **Acceptance (Anna).**
   - Two mocked standard-mapping pads (the M10 mock extended to indices 0 and 1), plus keyboard+mouse.
   - **Unit:**
