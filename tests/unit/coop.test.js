@@ -363,7 +363,7 @@ describe('M11 K2 join and devices', () => {
     const [p1, p2] = H.players();
     const fresh = g.createPlayer();
     expect(Math.hypot(p2.x - p1.x, p2.y - p1.y), 'next to P1').toBeLessThan(120);
-    expect(p2.hp, 'full HP (spec: 100 HP; PLAYER_MAX_HP is 800)').toBe(p2.maxHp);
+    expect(p2.hp, 'full HP: maxHp (spec 496fd74)').toBe(p2.maxHp);
     expect(p2.weapon).toBe(3);
     expect(p2.magAmmo).toBe(g.WEAPONS[3].mag);
     expect(p2.grenades).toBe(fresh.grenades);
@@ -708,36 +708,49 @@ describe('M11 K3 camera, zoom and leash', () => {
     expect(Math.hypot(p2.x - at.x, p2.y - at.y), 'not clamped while zoom > min').toBeGreaterThan(0.8 * C().PLAYER_SPEED * 0.2);
   });
 
-  test.skipIf(todo || !LANDED.K2)('K3b: at COOP_ZOOM_MIN a player running away is clamped; both stay >= 48 low-res px inside the view edges', () => {
-    rig.connect(0); frame(); tap(0, BTN.BACK);
-    const [p1, p2] = H.players();
-    p1.invincible = p2.invincible = 1e9;
-    place(p1, 0, 0); place(p2, 40, -40);
-    rig.axes(0, 1, 0); // P2 runs screen-right for 10 s
-    // Smallest margin to the view edge, low-res px, against the camera target (the midpoint the
-    // leash math assumes) and against the drawn camera (cam.x/y, which eases toward the target).
-    let atMin = 0;
-    const worst = { target: { m: Infinity }, drawn: { m: Infinity } };
-    for (let i = 0; i < 600; i++) {
-      frame();
-      if (H.zoom().zoom > C().COOP_ZOOM_MIN + 1e-6) continue;
-      atMin++;
-      const v = viewLowRes(), z = H.zoom().zoom, ps = g.RETRO.PIXEL_SCALE;
-      for (const p of [p1, p2]) {
-        const s = g.toScreen(p.x, p.y);
-        for (const [k, cx, cy] of [['target', g.cam.tx, g.cam.ty], ['drawn', g.cam.x, g.cam.y]]) {
-          const m = Math.min(v.w / 2 - Math.abs(((s.x - cx) * z) / ps), v.h / 2 - Math.abs(((s.y - cy) * z) / ps));
-          if (m < worst[k].m) worst[k] = { m, frame: i, who: p === p1 ? 'P1' : 'P2' };
+  test.skipIf(todo || !LANDED.K2)('K3b: at COOP_ZOOM_MIN a runner is held at 48 low-res px inside the view, against the camera target and the drawn view (run, sprint, dodge)', () => {
+    for (const mode of ['run', 'sprint', 'dodge']) {
+      setup();
+      rig.connect(0); frame(); tap(0, BTN.BACK);
+      const [p1, p2] = H.players();
+      p1.invincible = p2.invincible = 1e9;
+      place(p1, 0, 0); place(p2, 40, -40);
+      rig.axes(0, 1, 0); // P2 (pad 0 here) runs screen-right for 10 s
+      if (mode === 'sprint') { frame(); tap(0, BTN.L3); }
+      // Smallest margin of either player's feet to the view edge in low-res px, against the camera
+      // target (the midpoint the leash math uses) and the drawn camera (cam.x/y, which eases
+      // toward the target). Spec edec532: >= 48 against both on every frame of own moves.
+      // (No knockback in this run: knockback is exempt.)
+      let atMin = 0, maxSpeed = 0, dodges = 0, wasDodging = false;
+      const worst = { target: { m: Infinity }, drawn: { m: Infinity } };
+      for (let i = 0; i < 600; i++) {
+        if (mode === 'dodge' && i % 40 === 0) { rig.btn(0, BTN.A, true); frame(); rig.btn(0, BTN.A, false); }
+        frame();
+        maxSpeed = Math.max(maxSpeed, Math.hypot(p2.vx, p2.vy));
+        if (p2.dodging && !wasDodging) dodges++;
+        wasDodging = !!p2.dodging;
+        if (H.zoom().zoom > C().COOP_ZOOM_MIN + 1e-6) continue;
+        atMin++;
+        const v = viewLowRes(), z = H.zoom().zoom, ps = g.RETRO.PIXEL_SCALE;
+        for (const p of [p1, p2]) {
+          const s = g.toScreen(p.x, p.y);
+          for (const [k, cx, cy] of [['target', g.cam.tx, g.cam.ty], ['drawn', g.cam.x, g.cam.y]]) {
+            const m = Math.min(v.w / 2 - Math.abs(((s.x - cx) * z) / ps), v.h / 2 - Math.abs(((s.y - cy) * z) / ps));
+            if (m < worst[k].m) worst[k] = { m, frame: i, who: p === p1 ? 'P1' : 'P2' };
+          }
         }
       }
+      rig.axes(0, 0, 0); frame();
+      expect(atMin, `${mode}: frames at max zoom-out`).toBeGreaterThan(100);
+      expect(worst.target.m, `${mode}: margin vs the camera target ${JSON.stringify(worst.target)}`).toBeGreaterThanOrEqual(C().COOP_LEASH_PX - 0.01);
+      expect(worst.target.m, `${mode}: held at the leash, not short of it`).toBeLessThan(C().COOP_LEASH_PX + 0.5);
+      expect(worst.drawn.m, `${mode}: feet vs the drawn view ${JSON.stringify(worst.drawn)}`).toBeGreaterThanOrEqual(C().COOP_LEASH_PX - 0.01);
+      if (mode === 'sprint') expect(maxSpeed, 'sprint was on').toBeGreaterThan(C().PLAYER_SPEED * 1.1);
+      if (mode === 'dodge') expect(dodges, 'dodged repeatedly').toBeGreaterThanOrEqual(5);
+      const d0 = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      rig.axes(0, -1, 0); frame(20); rig.axes(0, 0, 0);
+      expect(Math.hypot(p2.x - p1.x, p2.y - p1.y), `${mode}: moving back is free`).toBeLessThan(d0 - 20);
     }
-    rig.axes(0, 0, 0);
-    expect(atMin, 'frames at max zoom-out').toBeGreaterThan(100);
-    expect(worst.target.m, `margin vs the camera target: ${JSON.stringify(worst.target)}`).toBeGreaterThanOrEqual(C().COOP_LEASH_PX - 0.01);
-    expect(worst.drawn.m, `margin vs the drawn (eased) camera: ${JSON.stringify(worst.drawn)}`).toBeGreaterThanOrEqual(C().COOP_LEASH_PX - 0.01);
-    const d0 = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-    rig.axes(0, -1, 0); frame(20); rig.axes(0, 0, 0);
-    expect(Math.hypot(p2.x - p1.x, p2.y - p1.y), 'moving back is free').toBeLessThan(d0 - 20);
   });
 
   test.skipIf(todo)('K3: shake stays global and capped at SHAKE_MAX, whatever the zoom', () => {
@@ -840,7 +853,7 @@ describe('M11 K5 down, revive and team second wind', () => {
     g.waveActive = false; g.waveTimer = 0;
     frame(2);
     expect(p2.state).toBe('up');
-    expect(p2.hp, 'full HP (spec: 100 HP; PLAYER_MAX_HP is 800)').toBe(p2.maxHp);
+    expect(p2.hp, 'full HP: maxHp (spec 496fd74)').toBe(p2.maxHp);
     expect(Math.hypot(p2.x - p1.x, p2.y - p1.y)).toBeLessThan(120);
   });
 
@@ -1028,6 +1041,25 @@ describe('M11 K6 rules in 2P', () => {
     expect(g.score - s0).toBe(p2.score);
     expect(p2.combo).toBe(1);
     expect(p1.combo || 0).toBe(0);
+  });
+
+  test.skipIf(todo)("K6: the shockwave charge is per player: only that player's own kills fill it", () => {
+    const [p1, p2] = twoUp();
+    place(p1, 0, 0); place(p2, 0, 400);
+    p1.specialCharge = 0; p2.specialCharge = 0;
+    for (let k = 0; k < 3; k++) {
+      dummy(p2.x + 60, p2.y, { hp: 1 });
+      shot(p2.x + 20, p2.y, 900, 0, { by: 1 });
+      seconds(0.3);
+    }
+    expect(p2.kills).toBe(3);
+    expect(p2.specialCharge, 'P2 kills fill P2').toBe(Math.min(3, C().SPECIAL_MAX_CHARGE));
+    expect(p1.specialCharge, 'not P1').toBe(0);
+    dummy(p1.x + 60, p1.y, { hp: 1 });
+    shot(p1.x + 20, p1.y, 900, 0, { by: 0 });
+    seconds(0.3);
+    expect(p1.specialCharge, 'P1 kill fills P1').toBe(1);
+    expect(p2.specialCharge, 'P2 unchanged').toBe(Math.min(3, C().SPECIAL_MAX_CHARGE));
   });
 
   test.skipIf(todo)('K6: unlocks use the team total: two scores each below a threshold that add up to it spawn its boss', () => {
